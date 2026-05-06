@@ -1,0 +1,46 @@
+{
+  "name": "domain-analysis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c black,white \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "npm --workspace @domain-analysis/api run dev",
+    "dev:web": "npm --workspace @domain-analysis/web run dev",
+    "build": "npm run build:shared && npm run build:db && npm run build:worker && npm run build:api && npm run build:web",
+    "build:api": "npm --workspace @domain-analysis/api run build",
+    "build:web": "npm --workspace @domain-analysis/web run build",
+    "build:shared": "npm --workspace @domain-analysis/shared run build",
+    "build:db": "npm --workspace @domain-analysis/db run build",
+    "build:worker": "npm --workspace @domain-analysis/worker run build",
+    "test": "vitest run",
+    "typecheck": "npm run typecheck:shared && npm run typecheck:db && npm run typecheck:worker && npm run typecheck:api && npm run typecheck:web",
+    "typecheck:api": "npm --workspace @domain-analysis/api run typecheck",
+    "typecheck:web": "npm --workspace @domain-analysis/web run typecheck",
+    "typecheck:shared": "npm --workspace @domain-analysis/shared run typecheck",
+    "typecheck:db": "npm --workspace @domain-analysis/db run typecheck",
+    "typecheck:worker": "npm --workspace @domain-analysis/worker run typecheck"
+  },
+  "devDependencies": {
+    "@rollup/rollup-darwin-x64": "^4.60.3",
+    "@types/node": "^20.12.12",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "ajv": "^8.17.1",
+    "autoprefixer": "^10.4.19",
+    "concurrently": "^9.2.1",
+    "drizzle-kit": "^0.23.0",
+    "postcss": "^8.4.38",
+    "process-warning": "^3.0.0",
+    "tailwindcss": "^3.4.4",
+    "tsx": "^4.15.7",
+    "typescript": "^5.5.2",
+    "vite": "^5.3.1",
+    "vitest": "^1.6.0"
+  }
+}
