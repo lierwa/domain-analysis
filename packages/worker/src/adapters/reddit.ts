@@ -1,4 +1,5 @@
-import { HttpCrawler } from "crawlee";
+import { HttpCrawler, PlaywrightCrawler, Request } from "crawlee";
+import { officialApiFetchSignal } from "../envTimeouts";
 import {
   buildKeywordQuery,
   conservativeHttpCrawlerOptions,
@@ -33,11 +34,75 @@ interface RedditTokenResponse {
   access_token?: string;
 }
 
-export function createRedditAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {
+/**
+ * WHY: 无 API Key 时默认走真实浏览器上下文拉 JSON，降低机房出口被 Reddit 直接挡在 TLS/HTTP 层外的概率。
+ * TRADE-OFF: 需安装浏览器二进制（`npx playwright install chromium`）；仍可用 REDDIT_COLLECTION_MODE=public_json 强制纯 HTTP。
+ */
+export function createRedditAdapter(
+  env: NodeJS.ProcessEnv = process.env,
+  sourceCrawlerType?: "cheerio" | "playwright"
+): CollectionAdapter {
   if (env.REDDIT_COLLECTION_MODE === "official_api") {
     return createRedditOfficialApiAdapter(env);
   }
-  return createRedditPublicJsonAdapter(env);
+  if (env.REDDIT_COLLECTION_MODE === "public_json" || sourceCrawlerType === "cheerio") {
+    return createRedditPublicJsonAdapter(env);
+  }
+  return createRedditPlaywrightInPageFetchAdapter(env);
+}
+
+/** 在已登录页面上下文中 fetch search.json，复用浏览器 TLS/指纹；比裸 got 更接近「用户打开网页」链路。 */
+export function createRedditPlaywrightInPageFetchAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {
+  return {
+    async collect(query) {
+      const items: CollectedRawContent[] = [];
+      let crawlError: Error | null = null;
+      const searchJsonUrl = buildPublicSearchUrl(query.includeKeywords, query.excludeKeywords, query.limitPerRun);
+
+      const crawler = new PlaywrightCrawler({
+        ...conservativeHttpCrawlerOptions,
+        maxRequestsPerCrawl: 1,
+        maxRequestRetries: 0,
+        navigationTimeoutSecs: 60,
+        requestHandlerTimeoutSecs: 120,
+        launchContext: {
+          launchOptions: {
+            headless: env.REDDIT_PLAYWRIGHT_HEADLESS !== "false"
+          }
+        },
+        requestHandler: async ({ page, request }) => {
+          const targetUrl = (request.userData as { searchJsonUrl?: string }).searchJsonUrl;
+          if (!targetUrl) {
+            throw new Error("reddit_playwright_missing_search_url");
+          }
+          await page.goto("https://www.reddit.com/", { waitUntil: "domcontentloaded", timeout: 45_000 });
+          const jsonText = await page.evaluate(async (u: string) => {
+            const res = await fetch(u, { credentials: "include", cache: "no-store" });
+            const text = await res.text();
+            if (!res.ok) {
+              throw new Error(`reddit_browser_fetch_${res.status}`);
+            }
+            return text;
+          }, targetUrl);
+          const payload = JSON.parse(jsonText) as RedditListingResponse;
+          items.push(...normalizeRedditListing(payload, query.excludeKeywords, query.limitPerRun));
+        },
+        failedRequestHandler: async (_ctx, error) => {
+          crawlError = error instanceof Error ? error : new Error(String(error));
+        }
+      });
+
+      await crawler.run([
+        new Request({
+          url: "https://www.reddit.com/",
+          uniqueKey: `reddit-pw-${searchJsonUrl}`,
+          userData: { searchJsonUrl: searchJsonUrl.toString() }
+        })
+      ]);
+      if (crawlError) throw crawlError;
+      return items.slice(0, query.limitPerRun);
+    }
+  };
 }
 
 export function createRedditPublicJsonAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {
@@ -49,6 +114,9 @@ export function createRedditPublicJsonAdapter(env: NodeJS.ProcessEnv = process.e
       const crawler = new HttpCrawler({
         ...conservativeHttpCrawlerOptions,
         maxRequestsPerCrawl: 1,
+        // WHY: 官方文档约定 HTTP 须在 navigationTimeoutSecs 内完成；未设置时 Reddit 端易出现长时间无响应，任务永远 running。
+        // 参考: https://crawlee.dev/js/api/http-crawler/interface/HttpCrawlerOptions#navigationTimeoutSecs
+        navigationTimeoutSecs: 55,
         requestHandlerTimeoutSecs: 30,
         preNavigationHooks: [
           async (_context, gotOptions) => {
@@ -94,7 +162,9 @@ export function createRedditOfficialApiAdapter(env: NodeJS.ProcessEnv = process.
       url.searchParams.set("sort", "new");
       url.searchParams.set("type", "link");
 
+      const signal = officialApiFetchSignal(env);
       const response = await fetch(url, {
+        ...(signal ? { signal } : {}),
         headers: {
           Authorization: `Bearer ${token}`,
           "User-Agent": getRequiredEnv(env, "REDDIT_USER_AGENT")
@@ -161,8 +231,10 @@ function normalizeRedditListing(
 async function getAccessToken(env: NodeJS.ProcessEnv) {
   const clientId = getRequiredEnv(env, "REDDIT_CLIENT_ID");
   const clientSecret = getRequiredEnv(env, "REDDIT_CLIENT_SECRET");
+  const signal = officialApiFetchSignal(env);
   const response = await fetch("https://www.reddit.com/api/v1/access_token", {
     method: "POST",
+    ...(signal ? { signal } : {}),
     headers: {
       Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
       "Content-Type": "application/x-www-form-urlencoded",

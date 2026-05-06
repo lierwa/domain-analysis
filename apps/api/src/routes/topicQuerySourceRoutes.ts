@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   createQueryRepository,
+  createRawContentRepository,
   createSourceRepository,
   createTopicRepository,
   type AppDb
@@ -33,9 +34,14 @@ const updateQuerySchema = createQuerySchema.partial().extend({
   status: z.enum(topicStatuses).optional()
 });
 
-const updateSourceSchema = z.object({
-  enabled: z.boolean()
-});
+const updateSourceSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    crawlerType: z.enum(["cheerio", "playwright"]).optional()
+  })
+  .refine((body) => body.enabled !== undefined || body.crawlerType !== undefined, {
+    message: "at_least_one_of_enabled_crawlerType"
+  });
 
 const createSourceSchema = z.object({
   platform: z.enum(platforms),
@@ -49,6 +55,7 @@ const createSourceSchema = z.object({
 export async function registerTopicQuerySourceRoutes(app: FastifyInstance, db: AppDb) {
   const topicRepository = createTopicRepository(db);
   const queryRepository = createQueryRepository(db);
+  const rawContentRepository = createRawContentRepository(db);
   const sourceRepository = createSourceRepository(db);
 
   app.addHook("onSend", async (request, reply) => {
@@ -83,6 +90,14 @@ export async function registerTopicQuerySourceRoutes(app: FastifyInstance, db: A
     // TRADE-OFF: 不完全 RESTful，但能避开代理/网关对 PATCH/DELETE 的限制。
     await topicRepository.remove(request.params.id);
     return reply.send({ ok: true });
+  });
+
+  app.get<{ Params: { topicId: string } }>("/api/topics/:topicId/raw-contents", async (request, reply) => {
+    const topic = await topicRepository.getById(request.params.topicId);
+    if (!topic) {
+      return reply.status(404).send({ error: "topic_not_found" });
+    }
+    return { items: await rawContentRepository.listByTopic(request.params.topicId) };
   });
 
   app.get<{ Params: { topicId: string } }>("/api/topics/:topicId/queries", async (request) => ({
@@ -137,7 +152,7 @@ export async function registerTopicQuerySourceRoutes(app: FastifyInstance, db: A
       return reply.status(400).send({ error: "invalid_platform" });
     }
 
-    const item = await sourceRepository.updateEnabled(platformResult.data, input.enabled);
+    const item = await sourceRepository.updateByPlatform(platformResult.data, input);
     return item ? { item } : reply.status(404).send({ error: "source_not_found" });
   });
 }

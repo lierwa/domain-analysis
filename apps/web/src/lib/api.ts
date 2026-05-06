@@ -187,10 +187,12 @@ export async function createSource(input: CreateSourceInput): Promise<Source> {
   return data.item;
 }
 
-export async function updateSource(platform: Platform, enabled: boolean): Promise<Source> {
+export type SourceUpdateInput = { enabled?: boolean; crawlerType?: Source["crawlerType"] };
+
+export async function updateSource(platform: Platform, input: SourceUpdateInput): Promise<Source> {
   const data = await request<{ item: Source }>(`/api/sources/${platform}/update`, {
     method: "POST",
-    body: JSON.stringify({ enabled })
+    body: JSON.stringify(input)
   });
   return data.item;
 }
@@ -224,6 +226,11 @@ export async function fetchRawContents(): Promise<RawContent[]> {
   return data.items;
 }
 
+export async function fetchRawContentsByTopic(topicId: string): Promise<RawContent[]> {
+  const data = await request<{ items: RawContent[] }>(`/api/topics/${topicId}/raw-contents`);
+  return data.items;
+}
+
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   const method = init.method ?? "GET";
   const headers =
@@ -240,9 +247,22 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
+    const message = await parseApiErrorMessage(response);
+    throw new Error(message);
   }
 
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+async function parseApiErrorMessage(response: Response): Promise<string> {
+  try {
+    const data = (await response.clone().json()) as { error?: string; message?: string };
+    if (data?.error === "topic_not_found") return "topic_not_found";
+    if (typeof data?.error === "string") return data.error;
+    if (typeof data?.message === "string") return data.message;
+  } catch {
+    /* ignore non-JSON error bodies */
+  }
+  return `API request failed: ${response.status}`;
 }

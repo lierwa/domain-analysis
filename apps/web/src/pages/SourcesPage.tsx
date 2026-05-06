@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchSources, updateSource, type Platform, type Source } from "../lib/api";
+import { fetchSources, updateSource, type Platform, type Source, type SourceUpdateInput } from "../lib/api";
 import { humanizeStatus } from "../lib/format";
 import { PageHeader } from "./PageHeader";
 
 const sourceCopy: Partial<Record<Platform, { mode: string; note: string }>> = {
   reddit: {
-    mode: "Public JSON",
-    note: "No secret required by default. Runs slowly against public Reddit JSON pages."
+    mode: "Playwright (default) or HTTP JSON",
+    note: "Default uses a real browser context to fetch search results (no Reddit API key). Switch to HTTP JSON only for debugging or very constrained environments."
   },
   x: {
     mode: "Nitter RSS",
@@ -30,8 +30,7 @@ export function SourcesPage() {
   const queryClient = useQueryClient();
   const sourcesQuery = useQuery({ queryKey: ["sources"], queryFn: fetchSources });
   const updateMutation = useMutation({
-    mutationFn: ({ platform, enabled }: { platform: Platform; enabled: boolean }) =>
-      updateSource(platform, enabled),
+    mutationFn: (input: { platform: Platform } & SourceUpdateInput) => updateSource(input.platform, input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sources"] })
   });
 
@@ -50,6 +49,11 @@ export function SourcesPage() {
             source={source}
             saving={updateMutation.isPending}
             onToggle={(enabled) => updateMutation.mutate({ platform: source.platform, enabled })}
+            onCrawlerTypeChange={
+              source.platform === "reddit"
+                ? (crawlerType) => updateMutation.mutate({ platform: source.platform, crawlerType })
+                : undefined
+            }
           />
         ))}
       </div>
@@ -60,11 +64,13 @@ export function SourcesPage() {
 function SourceCard({
   source,
   saving,
-  onToggle
+  onToggle,
+  onCrawlerTypeChange
 }: {
   source: Source;
   saving: boolean;
   onToggle: (enabled: boolean) => void;
+  onCrawlerTypeChange?: (crawlerType: Source["crawlerType"]) => void;
 }) {
   const copy = sourceCopy[source.platform];
   const implemented = source.platform === "reddit" || source.platform === "x";
@@ -92,6 +98,22 @@ function SourceCard({
         <Fact label="Login" value={source.requiresLogin ? "Required" : "Not required"} />
         <Fact label="Status" value={implemented ? (source.enabled ? "Ready" : "Paused") : "Coming later"} />
       </div>
+      {source.platform === "reddit" && onCrawlerTypeChange ? (
+        <label className="mt-3 block text-sm">
+          <span className="text-xs uppercase text-muted">Reddit collection engine</span>
+          <select
+            className="mt-1 w-full rounded border border-line bg-surface px-2 py-1.5 text-sm"
+            value={source.crawlerType}
+            disabled={saving}
+            onChange={(event) =>
+              onCrawlerTypeChange(event.target.value as Source["crawlerType"])
+            }
+          >
+            <option value="playwright">Playwright (browser context)</option>
+            <option value="cheerio">HTTP only (public JSON, fragile)</option>
+          </select>
+        </label>
+      ) : null}
     </article>
   );
 }

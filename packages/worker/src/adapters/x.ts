@@ -1,4 +1,5 @@
 import { CheerioCrawler } from "crawlee";
+import { officialApiFetchSignal } from "../envTimeouts";
 import {
   conservativeHttpCrawlerOptions,
   hasExcludedKeyword,
@@ -39,6 +40,7 @@ export function createXNitterRssAdapter(env: NodeJS.ProcessEnv = process.env): C
       const crawler = new CheerioCrawler({
         ...conservativeHttpCrawlerOptions,
         maxRequestsPerCrawl: 1,
+        navigationTimeoutSecs: 55,
         requestHandlerTimeoutSecs: 45,
         requestHandler: async ({ $, request }) => {
           $("item").each((_index, element) => {
@@ -96,7 +98,9 @@ export function createXOfficialApiAdapter(env: NodeJS.ProcessEnv = process.env):
       url.searchParams.set("expansions", "author_id");
       url.searchParams.set("user.fields", "name,username");
 
+      const signal = officialApiFetchSignal(env);
       const response = await fetch(url, {
+        ...(signal ? { signal } : {}),
         headers: {
           Authorization: `Bearer ${getRequiredEnv(env, "X_BEARER_TOKEN")}`
         }

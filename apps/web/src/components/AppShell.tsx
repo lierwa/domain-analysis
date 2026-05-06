@@ -27,10 +27,12 @@ const navItems = [
 interface AppShellProps {
   activePage: string;
   onPageChange: (page: string) => void;
+  /** 主流程步骤条（E2），渲染在正文上方 */
+  flowSlot?: ReactNode;
   children: ReactNode;
 }
 
-export function AppShell({ activePage, onPageChange, children }: AppShellProps) {
+export function AppShell({ activePage, onPageChange, flowSlot, children }: AppShellProps) {
   return (
     <div className="min-h-screen bg-surface text-ink">
       <header className="sticky top-0 z-20 border-b border-line bg-surface/95 px-4 py-3 backdrop-blur md:hidden">
@@ -86,7 +88,10 @@ export function AppShell({ activePage, onPageChange, children }: AppShellProps) 
             })}
           </nav>
         </aside>
-        <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 lg:px-8">{children}</main>
+        <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 lg:px-8">
+          {flowSlot}
+          {children}
+        </main>
       </div>
     </div>
   );

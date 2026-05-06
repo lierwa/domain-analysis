@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { Platform, TaskStatus, TopicStatus } from "@domain-analysis/shared";
 import type { AppDb } from "./client";
 import { crawlTasks, queries, rawContents, sources, topics } from "./schema";
@@ -88,7 +88,7 @@ export interface CreateRawContentInput {
 }
 
 const defaultSources: CreateSourceInput[] = [
-  { platform: "reddit", name: "Reddit", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 100 },
+  { platform: "reddit", name: "Reddit", requiresLogin: false, crawlerType: "playwright", defaultLimit: 100 },
   { platform: "x", name: "X / Twitter", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 25 },
   { platform: "youtube", name: "YouTube", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 50 },
   { platform: "pinterest", name: "Pinterest", requiresLogin: true, crawlerType: "playwright", defaultLimit: 50 },
@@ -115,6 +115,11 @@ export function createTopicRepository(db: AppDb) {
     async list() {
       const rows = await db.select().from(topics);
       return rows.map(mapTopic);
+    },
+
+    async getById(id: string) {
+      const [row] = await db.select().from(topics).where(eq(topics.id, id));
+      return row ? mapTopic(row) : null;
     },
 
     async update(id: string, input: UpdateTopicInput) {
@@ -242,10 +247,20 @@ export function createSourceRepository(db: AppDb) {
       return row ? mapSource(row) : null;
     },
 
-    async updateEnabled(platform: Platform, enabled: boolean) {
+    async updateByPlatform(
+      platform: Platform,
+      input: { enabled?: boolean; crawlerType?: "cheerio" | "playwright" }
+    ) {
+      if (input.enabled === undefined && input.crawlerType === undefined) {
+        return this.getByPlatform(platform);
+      }
       const [row] = await db
         .update(sources)
-        .set({ enabled, updatedAt: new Date().toISOString() })
+        .set({
+          ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+          ...(input.crawlerType !== undefined ? { crawlerType: input.crawlerType } : {}),
+          updatedAt: new Date().toISOString()
+        })
         .where(eq(sources.platform, platform))
         .returning();
       return row ? mapSource(row) : null;
@@ -357,6 +372,19 @@ export function createRawContentRepository(db: AppDb) {
 
     async list() {
       const rows = await db.select().from(rawContents).orderBy(desc(rawContents.capturedAt));
+      return rows.map(mapRawContent);
+    },
+
+    /**
+     * WHY: Topic 级原始库是阶段 1 主路径；必须只暴露当前 Topic，避免与全库 `/api/raw-contents` 混淆。
+     * TRADE-OFF: 排序用 SQL COALESCE 对齐 CONTEXT「发表时间优先、缺省退回抓取时间」；合并行（B3）留在后续竖切。
+     */
+    async listByTopic(topicId: string) {
+      const rows = await db
+        .select()
+        .from(rawContents)
+        .where(eq(rawContents.topicId, topicId))
+        .orderBy(desc(sql`COALESCE(${rawContents.publishedAt}, ${rawContents.capturedAt})`));
       return rows.map(mapRawContent);
     }
   };

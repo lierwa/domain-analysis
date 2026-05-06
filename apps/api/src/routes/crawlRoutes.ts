@@ -30,10 +30,8 @@ export async function registerCrawlRoutes(app: FastifyInstance, db: AppDb) {
   app.post<{ Params: { id: string } }>("/api/crawl-tasks/:id/delete", async (request, reply) => {
     const task = (await taskRepository.list()).find((item) => item.id === request.params.id);
     if (!task) return reply.status(404).send({ error: "crawl_task_not_found" });
-    if (task.status === "pending" || task.status === "running") {
-      return reply.status(400).send({ error: "cannot_delete_running_task" });
-    }
-
+    // WHY: 进程内队列可能挂死或丢回调，任务会永远停在 running；必须允许从 DB 移除以免界面无法自救。
+    // TRADE-OFF: 若 worker 稍后仍完成，update 命中 0 行；仍可能写入 raw_contents（与已删 task 无 FK 时无一致性破坏）。
     await taskRepository.remove(task.id);
     return reply.send({ ok: true });
   });
@@ -68,7 +66,18 @@ export async function registerCrawlRoutes(app: FastifyInstance, db: AppDb) {
         (item.status === "pending" || item.status === "running")
     );
     if (existingTask) {
-      return reply.status(202).send({ item: existingTask });
+      const staleMs = Number(process.env.CRAWL_STALE_RUNNING_MS ?? 180_000);
+      const startedAt = existingTask.startedAt ?? existingTask.createdAt;
+      const ageMs = Date.now() - Date.parse(startedAt);
+      const isStale =
+        Number.isFinite(staleMs) && staleMs > 0 && Number.isFinite(ageMs) && ageMs > staleMs;
+      if (isStale) {
+        // WHY: 进程内队列无法取消已入队的 collect；仅改 DB 为 failed 时，晚到的 .then 仍可能把旧任务写回 success。
+        // TRADE-OFF: 删行会丢失该次 run 的记录，但能解除「永远 running / 无法再次触发」的死锁。
+        await taskRepository.remove(existingTask.id);
+      } else {
+        return reply.status(202).send({ item: existingTask });
+      }
     }
 
     const task = await taskRepository.create({
@@ -87,6 +96,7 @@ export async function registerCrawlRoutes(app: FastifyInstance, db: AppDb) {
         kind: "crawl",
         payload: {
           platform: input.platform,
+          sourceCrawlerType: input.platform === "reddit" ? source.crawlerType : undefined,
           query: {
             name: query.name,
             includeKeywords: query.includeKeywords,

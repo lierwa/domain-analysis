@@ -26,7 +26,6 @@
     "typecheck:worker": "npm --workspace @domain-analysis/worker run typecheck"
   },
   "devDependencies": {
-    "@rollup/rollup-darwin-x64": "^4.60.3",
     "@types/node": "^20.12.12",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",

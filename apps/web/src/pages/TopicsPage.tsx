@@ -4,7 +4,13 @@ import { createTopic, deleteTopic, fetchQueries, fetchTopics, updateTopic, type 
 import { formatDateTime, humanizeStatus } from "../lib/format";
 import { PageHeader } from "./PageHeader";
 
-export function TopicsPage() {
+export function TopicsPage({
+  workspaceTopicId,
+  onWorkspaceTopicChange
+}: {
+  workspaceTopicId: string;
+  onWorkspaceTopicChange: (topicId: string) => void;
+}) {
   const queryClient = useQueryClient();
   const topicsQuery = useQuery({ queryKey: ["topics"], queryFn: fetchTopics });
   const queryLookups = useQueries({
@@ -16,7 +22,10 @@ export function TopicsPage() {
   });
   const createMutation = useMutation({
     mutationFn: createTopic,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["topics"] })
+    onSuccess: (topic) => {
+      queryClient.invalidateQueries({ queryKey: ["topics"] });
+      onWorkspaceTopicChange(topic.id);
+    }
   });
   const updateMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: Topic["status"] }) => updateTopic(id, { status }),
@@ -116,6 +125,17 @@ export function TopicsPage() {
                     <Fact label="Next Step" value={queryCountForTopic(queryLookups, topic.id) ? "Run a crawl" : "Create a query"} />
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
+                    {workspaceTopicId !== topic.id ? (
+                      <button
+                        type="button"
+                        onClick={() => onWorkspaceTopicChange(topic.id)}
+                        className="rounded border border-line px-3 py-1.5 text-xs"
+                      >
+                        Use as working topic
+                      </button>
+                    ) : (
+                      <span className="rounded border border-ink px-3 py-1.5 text-xs">Current working topic</span>
+                    )}
                     <button
                       type="button"
                       onClick={() =>

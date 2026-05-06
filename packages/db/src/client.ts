@@ -4,12 +4,25 @@ import { createClient } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "./schema";
 
+/** 每条 createDb 连接对应一个 client，供 Vitest/Windows 在删库前显式 close，避免 EBUSY。 */
+const libsqlClients = new WeakMap<object, ReturnType<typeof createClient>>();
+
 export function createDb(databaseUrl = process.env.DATABASE_URL ?? "file:data/domain-analysis.sqlite") {
   const client = createClient({ url: databaseUrl });
-  return drizzle(client, { schema });
+  const db = drizzle(client, { schema });
+  libsqlClients.set(db, client);
+  return db;
 }
 
 export type AppDb = ReturnType<typeof createDb>;
+
+/** WHY: 临时文件 SQLite 在连接未释放时 unlink 会 EBUSY；测试与进程退出前应释放。 */
+export function closeDb(db: AppDb): void {
+  const client = libsqlClients.get(db);
+  if (client) {
+    client.close();
+  }
+}
 
 export async function initializeDatabase(
   databaseUrl = process.env.DATABASE_URL ?? "file:data/domain-analysis.sqlite"
@@ -17,6 +30,7 @@ export async function initializeDatabase(
   await ensureSqliteDirectory(databaseUrl);
   const client = createClient({ url: databaseUrl });
 
+  try {
   // WHY: MVP 使用 SQLite 单文件部署，不引入独立迁移服务；启动时建表能降低 2核2G 服务器的运维复杂度。
   // TRADE-OFF: 后续多人协作和复杂迁移增加后，应切换到 drizzle-kit 生成的显式 migration。
   await client.executeMultiple(`
@@ -170,6 +184,9 @@ export async function initializeDatabase(
   `);
 
   await ensureSourcesDefaultLimitColumn(client);
+  } finally {
+    client.close();
+  }
 }
 
 async function ensureSqliteDirectory(databaseUrl: string) {

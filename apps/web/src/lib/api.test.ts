@@ -8,6 +8,7 @@ import {
   fetchCrawlTasks,
   fetchQueries,
   fetchRawContents,
+  fetchRawContentsByTopic,
   fetchSources,
   fetchTopics,
   runCrawl,
@@ -62,7 +63,7 @@ describe("web api client", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(updateSource("reddit", false)).resolves.toMatchObject({
+    await expect(updateSource("reddit", { enabled: false })).resolves.toMatchObject({
       platform: "reddit",
       enabled: false
     });
@@ -218,5 +219,34 @@ describe("web api client", () => {
     await expect(runCrawl("query_1", "reddit")).resolves.toMatchObject({ id: "task_1" });
     await expect(fetchCrawlTasks()).resolves.toEqual([{ id: "task_1", status: "failed" }]);
     await expect(fetchRawContents()).resolves.toEqual([{ id: "raw_1", platform: "reddit" }]);
+  });
+
+  it("loads raw contents for a topic from the topic-scoped API", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: "raw_1", topicId: "topic_1", platform: "reddit" }] })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchRawContentsByTopic("topic_1")).resolves.toEqual([
+      { id: "raw_1", topicId: "topic_1", platform: "reddit" }
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/topics/topic_1/raw-contents",
+      expect.objectContaining({ cache: "no-store" })
+    );
+  });
+
+  it("surfaces topic_not_found from the topic raw-contents API", async () => {
+    const failedResponse = {
+      ok: false,
+      status: 404,
+      clone() {
+        return { json: async () => ({ error: "topic_not_found" }) };
+      }
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(failedResponse));
+
+    await expect(fetchRawContentsByTopic("topic_missing")).rejects.toThrow("topic_not_found");
   });
 });

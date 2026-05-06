@@ -1,6 +1,6 @@
 import cors from "@fastify/cors";
 import Fastify, { type FastifyServerOptions } from "fastify";
-import { createDb, type AppDb } from "@domain-analysis/db";
+import { closeDb, createDb, type AppDb } from "@domain-analysis/db";
 import { registerHealthRoutes } from "./routes/health";
 import { registerModuleRoutes } from "./routes/modules";
 import { registerCrawlRoutes } from "./routes/crawlRoutes";
@@ -14,7 +14,14 @@ export async function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify({
     logger: options.logger ?? true
   });
+  const ownedDb = options.db === undefined;
   const db = options.db ?? createDb();
+
+  if (ownedDb) {
+    app.addHook("onClose", async () => {
+      closeDb(db);
+    });
+  }
 
   await app.register(cors, {
     origin: true

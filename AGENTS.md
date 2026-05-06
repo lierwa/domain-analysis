@@ -167,3 +167,19 @@
 
 - 停止代码生成
 - 进入设计或重构阶段
+
+---
+
+## Agent skills
+
+### Issue tracker
+
+本仓库在 `.scratch/` 下用 Markdown 跟踪任务与 PRD。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+五个 triage 角色使用默认字符串（`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`）。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文：仓库根目录 `CONTEXT.md` 与 `docs/adr/`。详见 `docs/agents/domain.md`。

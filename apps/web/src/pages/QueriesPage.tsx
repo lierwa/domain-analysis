@@ -16,10 +16,15 @@ import { PageHeader } from "./PageHeader";
 
 const platformOptions: Platform[] = ["reddit", "x", "youtube", "pinterest", "web"];
 
-export function QueriesPage() {
+export function QueriesPage({
+  topicId,
+  onTopicIdChange
+}: {
+  topicId: string;
+  onTopicIdChange: (id: string) => void;
+}) {
   const queryClient = useQueryClient();
   const topicsQuery = useQuery({ queryKey: ["topics"], queryFn: fetchTopics });
-  const [topicId, setTopicId] = useState("");
   const [crawlNotice, setCrawlNotice] = useState<string | null>(null);
   const activeTopicId = topicId || topicsQuery.data?.[0]?.id || "";
   const queriesQuery = useQuery({
@@ -46,7 +51,7 @@ export function QueriesPage() {
     onSuccess: (task) => {
       setCrawlNotice(`Crawl task ${task.status}: ${task.id}. Open Tasks to track progress.`);
       queryClient.invalidateQueries({ queryKey: ["crawl-tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["raw-contents"] });
+      queryClient.invalidateQueries({ queryKey: ["raw-contents", task.topicId] });
     },
     onError: (error) => {
       setCrawlNotice(error instanceof Error ? error.message : "Failed to start crawl task");
@@ -92,7 +97,7 @@ export function QueriesPage() {
           <span className="mb-1 block text-xs font-medium text-muted">Topic</span>
           <select
             value={activeTopicId}
-            onChange={(event) => setTopicId(event.target.value)}
+            onChange={(event) => onTopicIdChange(event.target.value)}
             className="w-full rounded border border-line bg-surface px-3 py-2 text-sm"
           >
             {topicsQuery.data?.map((topic) => (

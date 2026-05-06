@@ -24,7 +24,7 @@ const statusTone: Record<CrawlTask["status"], string> = {
   parse_failed: "border-line text-muted"
 };
 
-export function TasksPage() {
+export function TasksPage({ onViewRawContent }: { onViewRawContent: (topicId: string) => void }) {
   const queryClient = useQueryClient();
   const tasksQuery = useQuery({
     queryKey: ["crawl-tasks"],
@@ -72,7 +72,7 @@ export function TasksPage() {
       <div className="mb-4 flex justify-end">
         <button
           type="button"
-          disabled={clearMutation.isPending || !tasksQuery.data?.some((task) => canDeleteTask(task))}
+          disabled={clearMutation.isPending || !hasClearableFinishedTasks(tasksQuery.data ?? [])}
           onClick={() => clearMutation.mutate()}
           className="rounded border border-line px-3 py-2 text-sm disabled:opacity-40"
         >
@@ -94,6 +94,7 @@ export function TasksPage() {
               sourceName={sourceById.get(task.sourceId)?.name}
               deleting={deleteMutation.isPending}
               onDelete={() => deleteMutation.mutate(task.id)}
+              onViewRawContent={onViewRawContent}
             />
           ))}
         </div>
@@ -107,13 +108,15 @@ function TaskRow({
   query,
   sourceName,
   deleting,
-  onDelete
+  onDelete,
+  onViewRawContent
 }: {
   task: CrawlTask;
   query?: Query;
   sourceName?: string;
   deleting: boolean;
   onDelete: () => void;
+  onViewRawContent: (topicId: string) => void;
 }) {
   const resultText =
     task.status === "success"
@@ -147,21 +150,42 @@ function TaskRow({
       <div>
         <div className="text-xs font-medium uppercase text-muted">What this means</div>
         <p className="mt-2 text-sm leading-6 text-muted">{taskMessage(task)}</p>
-        <button
-          type="button"
-          disabled={!canDeleteTask(task) || deleting}
-          onClick={onDelete}
-          className="mt-3 rounded border border-line px-3 py-1.5 text-xs disabled:opacity-40"
-        >
-          Delete run
-        </button>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={deleting}
+            onClick={onDelete}
+            className="rounded border border-line px-3 py-1.5 text-xs disabled:opacity-40"
+          >
+            Delete run
+          </button>
+          {task.status === "success" && task.validCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => onViewRawContent(task.topicId)}
+              className="rounded border border-ink bg-ink px-3 py-1.5 text-xs text-surface"
+            >
+              View raw posts for this topic
+            </button>
+          ) : null}
+        </div>
       </div>
     </article>
   );
 }
 
-function canDeleteTask(task: CrawlTask) {
-  return task.status !== "pending" && task.status !== "running";
+/** 与「单条删除」分离：仅统计可批量清理的终态任务（与 API clear-finished 一致）。 */
+function hasClearableFinishedTasks(tasks: CrawlTask[]) {
+  const finished: CrawlTask["status"][] = [
+    "success",
+    "failed",
+    "no_content",
+    "paused",
+    "login_required",
+    "rate_limited",
+    "parse_failed"
+  ];
+  return tasks.some((task) => finished.includes(task.status));
 }
 
 function Metric({ label, value }: { label: string; value: number }) {
@@ -197,7 +221,9 @@ function taskMessage(task: CrawlTask) {
     return "The run completed. Open Content to review saved posts.";
   }
   if (task.status === "no_content") return task.errorMessage ?? "The source returned no matching public posts.";
-  if (task.status === "running") return "The crawler is running in the background. This page refreshes automatically.";
+  if (task.status === "running") {
+    return "The crawler is running in the background. This page refreshes automatically. If a run stays here too long, you can delete it to clear the list; a stuck worker may still write content without this row.";
+  }
   if (task.status === "rate_limited") return "The source refused this run. Wait before retrying or lower the query limit.";
   if (task.status === "login_required") return "The source requires login. This app does not automate account login yet.";
   if (task.status === "parse_failed") return "The page format changed or returned unexpected content.";
