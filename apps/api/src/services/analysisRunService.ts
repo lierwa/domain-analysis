@@ -29,6 +29,8 @@ export function createAnalysisRunService(db: AppDb) {
     async createRun(input: {
       projectId?: string;
       projectName?: string;
+      collectionPlanId?: string;
+      runTrigger?: "manual" | "scheduled";
       goal: string;
       includeKeywords: string[];
       excludeKeywords: string[];
@@ -53,6 +55,8 @@ export function createAnalysisRunService(db: AppDb) {
 
       const run = await runRepo.create({
         projectId,
+        collectionPlanId: input.collectionPlanId,
+        runTrigger: input.runTrigger ?? "manual",
         name: runName,
         goal: input.goal,
         includeKeywords: input.includeKeywords,

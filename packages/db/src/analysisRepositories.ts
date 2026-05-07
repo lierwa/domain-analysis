@@ -21,6 +21,8 @@ export interface CreateAnalysisProjectInput {
 
 export interface CreateAnalysisRunInput {
   projectId: string;
+  collectionPlanId?: string;
+  runTrigger?: "manual" | "scheduled";
   name: string;
   goal: string;
   includeKeywords: string[];
@@ -110,8 +112,10 @@ export function createAnalysisRunRepository(db: AppDb) {
         .values({
           id: createId("run"),
           projectId: input.projectId,
+          collectionPlanId: input.collectionPlanId,
           name: input.name,
           status: "draft",
+          runTrigger: input.runTrigger ?? "manual",
           includeKeywords: input.includeKeywords,
           excludeKeywords: input.excludeKeywords,
           platform: "reddit",
@@ -289,8 +293,10 @@ function mapRun(row: AnalysisRunRow) {
   return {
     id: row.id,
     projectId: row.projectId,
+    collectionPlanId: row.collectionPlanId ?? undefined,
     name: row.name,
     status: row.status as AnalysisRunStatus,
+    runTrigger: row.runTrigger as "manual" | "scheduled",
     includeKeywords: (row.includeKeywords as string[]) ?? [],
     excludeKeywords: (row.excludeKeywords as string[]) ?? [],
     platform: row.platform as "reddit",
