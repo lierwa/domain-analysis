@@ -49,11 +49,35 @@ export async function initializeDatabase(
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE TABLE IF NOT EXISTS analysis_runs (
+    CREATE TABLE IF NOT EXISTS collection_plans (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL REFERENCES analysis_projects(id),
       name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      platform TEXT NOT NULL DEFAULT 'reddit',
+      include_keywords TEXT NOT NULL,
+      exclude_keywords TEXT NOT NULL,
+      language TEXT NOT NULL,
+      market TEXT NOT NULL,
+      cadence TEXT NOT NULL DEFAULT 'daily',
+      batch_limit INTEGER NOT NULL DEFAULT 100,
+      max_runs_per_day INTEGER NOT NULL DEFAULT 4,
+      last_run_at TEXT,
+      next_run_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS collection_plans_project_idx ON collection_plans(project_id);
+    CREATE INDEX IF NOT EXISTS collection_plans_status_next_run_idx ON collection_plans(status, next_run_at);
+
+    CREATE TABLE IF NOT EXISTS analysis_runs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES analysis_projects(id),
+      collection_plan_id TEXT REFERENCES collection_plans(id),
+      name TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'draft',
+      run_trigger TEXT NOT NULL DEFAULT 'manual',
       include_keywords TEXT NOT NULL,
       exclude_keywords TEXT NOT NULL,
       platform TEXT NOT NULL DEFAULT 'reddit',
@@ -76,6 +100,7 @@ export async function initializeDatabase(
     CREATE TABLE IF NOT EXISTS crawl_tasks (
       id TEXT PRIMARY KEY,
       analysis_run_id TEXT NOT NULL REFERENCES analysis_runs(id),
+      collection_plan_id TEXT REFERENCES collection_plans(id),
       source_id TEXT NOT NULL REFERENCES sources(id),
       status TEXT NOT NULL DEFAULT 'pending',
       target_count INTEGER NOT NULL DEFAULT 100,
@@ -85,6 +110,7 @@ export async function initializeDatabase(
       error_message TEXT,
       started_at TEXT,
       finished_at TEXT,
+      scheduled_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );

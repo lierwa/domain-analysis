@@ -33,6 +33,34 @@ export const analysisProjects = sqliteTable("analysis_projects", {
   ...timestamps
 });
 
+// WHY: collection_plans 是长期后台采集配置；analysis_runs 只是某次执行结果，不能承载调度策略。
+export const collectionPlans = sqliteTable(
+  "collection_plans",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => analysisProjects.id),
+    name: text("name").notNull(),
+    status: text("status").notNull().default("active"),
+    platform: text("platform").notNull().default("reddit"),
+    includeKeywords: text("include_keywords", { mode: "json" }).notNull(),
+    excludeKeywords: text("exclude_keywords", { mode: "json" }).notNull(),
+    language: text("language").notNull(),
+    market: text("market").notNull(),
+    cadence: text("cadence").notNull().default("daily"),
+    batchLimit: integer("batch_limit").notNull().default(100),
+    maxRunsPerDay: integer("max_runs_per_day").notNull().default(4),
+    lastRunAt: text("last_run_at"),
+    nextRunAt: text("next_run_at"),
+    ...timestamps
+  },
+  (table) => ({
+    projectIdx: index("collection_plans_project_idx").on(table.projectId),
+    statusNextRunIdx: index("collection_plans_status_next_run_idx").on(table.status, table.nextRunAt)
+  })
+);
+
 // WHY: analysis_runs 封装单次分析全周期（配置→采集→清洗→分析→报告），是内容/洞察/报告的根上下文。
 export const analysisRuns = sqliteTable(
   "analysis_runs",
@@ -41,8 +69,10 @@ export const analysisRuns = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => analysisProjects.id),
+    collectionPlanId: text("collection_plan_id").references(() => collectionPlans.id),
     name: text("name").notNull(),
     status: text("status").notNull().default("draft"),
+    runTrigger: text("run_trigger").notNull().default("manual"),
     includeKeywords: text("include_keywords", { mode: "json" }).notNull(),
     excludeKeywords: text("exclude_keywords", { mode: "json" }).notNull(),
     platform: text("platform").notNull().default("reddit"),
@@ -71,6 +101,7 @@ export const crawlTasks = sqliteTable(
     analysisRunId: text("analysis_run_id")
       .notNull()
       .references(() => analysisRuns.id),
+    collectionPlanId: text("collection_plan_id").references(() => collectionPlans.id),
     sourceId: text("source_id")
       .notNull()
       .references(() => sources.id),
@@ -82,6 +113,7 @@ export const crawlTasks = sqliteTable(
     errorMessage: text("error_message"),
     startedAt: text("started_at"),
     finishedAt: text("finished_at"),
+    scheduledAt: text("scheduled_at"),
     ...timestamps
   },
   (table) => ({
