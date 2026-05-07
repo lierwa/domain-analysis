@@ -1,4 +1,3 @@
-export const topicStatuses = ["active", "paused", "archived"] as const;
 export const taskStatuses = [
   "pending",
   "running",
@@ -10,20 +9,27 @@ export const taskStatuses = [
   "rate_limited",
   "parse_failed"
 ] as const;
-export const platforms = ["reddit", "x", "youtube", "pinterest", "web"] as const;
-export const sentiments = ["positive", "neutral", "negative", "mixed"] as const;
-export const reportTypes = [
-  "topic_trend",
-  "keyword_analysis",
-  "platform_content",
-  "high_value_digest",
-  "opportunity"
-] as const;
-export const crawlFrequencies = ["manual", "hourly", "daily", "weekly"] as const;
+export const platforms = ["reddit", "x", "youtube", "tiktok", "pinterest", "web"] as const;
 
-export type TopicStatus = (typeof topicStatuses)[number];
+// WHY: analysis run 状态机完整描述一次分析的生命周期，避免前后端各自定义导致不一致。
+export const analysisRunStatuses = [
+  "draft",
+  "collecting",
+  "collection_failed",
+  "content_ready",
+  "analyzing",
+  "analysis_failed",
+  "insight_ready",
+  "reporting",
+  "report_ready"
+] as const;
+
+// WHY: report 类型与 run_summary 优先，AI 生成型报告作为后续增强，不在 MVP 假装实现。
+export const analysisReportTypes = ["run_summary", "content_opportunities", "keyword_analysis"] as const;
+export const projectStatuses = ["active", "paused", "archived"] as const;
+
 export type TaskStatus = (typeof taskStatuses)[number];
 export type Platform = (typeof platforms)[number];
-export type Sentiment = (typeof sentiments)[number];
-export type ReportType = (typeof reportTypes)[number];
-export type CrawlFrequency = (typeof crawlFrequencies)[number];
+export type AnalysisRunStatus = (typeof analysisRunStatuses)[number];
+export type AnalysisReportType = (typeof analysisReportTypes)[number];
+export type ProjectStatus = (typeof projectStatuses)[number];

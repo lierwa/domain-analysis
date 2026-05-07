@@ -36,3 +36,8 @@ button,
 a {
   -webkit-tap-highlight-color: transparent;
 }
+
+/* WHY: 统一表单输入框样式，避免各页面重复定义 border/bg/padding/outline。 */
+.input-base {
+  @apply rounded border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-ink;
+}

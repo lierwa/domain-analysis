@@ -8,9 +8,10 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n api,web -c black,white \"npm run dev:api\" \"npm run dev:web\"",
+    "dev": "concurrently -n api,web -c black,white \"npm run dev:api\" \"npm run dev:web:ready\"",
     "dev:api": "npm --workspace @domain-analysis/api run dev",
     "dev:web": "npm --workspace @domain-analysis/web run dev",
+    "dev:web:ready": "wait-on http-get://${API_HOST:-127.0.0.1}:${API_PORT:-4000}/health && npm run dev:web",
     "build": "npm run build:shared && npm run build:db && npm run build:worker && npm run build:api && npm run build:web",
     "build:api": "npm --workspace @domain-analysis/api run build",
     "build:web": "npm --workspace @domain-analysis/web run build",
@@ -41,6 +42,7 @@
     "tsx": "^4.15.7",
     "typescript": "^5.5.2",
     "vite": "^5.3.1",
-    "vitest": "^1.6.0"
+    "vitest": "^1.6.0",
+    "wait-on": "^9.0.5"
   }
 }

@@ -19,8 +19,9 @@ describe("api server", () => {
     const app = await buildServer({ logger: false });
     const response = await app.inject({
       method: "POST",
-      url: "/api/topics/topic_missing/delete",
-      headers: { "content-type": "application/json" }
+      url: "/api/analysis-runs",
+      headers: { "content-type": "application/json" },
+      payload: { goal: "missing keywords" }
     });
 
     expect(response.statusCode).toBe(400);

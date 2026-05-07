@@ -1,60 +1,75 @@
-export interface ApiModule {
-  key: string;
-  label: string;
-  description: string;
-}
+// WHY: API client 只暴露 analysis run/project/content/report 接口，避免 UI 依赖工程内部概念。
 
-export interface Topic {
+export type Platform = "reddit" | "x" | "youtube" | "tiktok" | "pinterest" | "web";
+
+export type AnalysisRunStatus =
+  | "draft"
+  | "collecting"
+  | "collection_failed"
+  | "content_ready"
+  | "analyzing"
+  | "analysis_failed"
+  | "insight_ready"
+  | "reporting"
+  | "report_ready";
+
+export type ProjectStatus = "active" | "paused" | "archived";
+export type AnalysisReportType = "run_summary" | "content_opportunities" | "keyword_analysis";
+
+export interface AnalysisProject {
   id: string;
   name: string;
-  description?: string;
+  goal: string;
   language: string;
   market: string;
-  status: "active" | "paused" | "archived";
+  defaultPlatform: "reddit";
+  defaultLimit: number;
+  status: ProjectStatus;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface Query {
+export interface AnalysisRun {
   id: string;
-  topicId: string;
+  projectId: string;
   name: string;
+  status: AnalysisRunStatus;
   includeKeywords: string[];
   excludeKeywords: string[];
-  platforms: Platform[];
-  language: string;
-  frequency: "manual" | "hourly" | "daily" | "weekly";
-  limitPerRun: number;
-  status: "active" | "paused" | "archived";
+  platform: "reddit";
+  limit: number;
+  collectedCount: number;
+  validCount: number;
+  duplicateCount: number;
+  analyzedCount: number;
+  reportId?: string;
+  errorMessage?: string;
+  startedAt?: string;
+  finishedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface Source {
+export interface RunContent {
   id: string;
+  analysisRunId: string;
+  crawlTaskId?: string;
   platform: Platform;
-  name: string;
-  enabled: boolean;
-  requiresLogin: boolean;
-  crawlerType: "cheerio" | "playwright";
-  defaultLimit: number;
+  authorName?: string;
+  authorHandle?: string;
+  url: string;
+  text: string;
+  matchedKeywords: string[];
+  metricsJson: Record<string, unknown> | null;
+  publishedAt?: string;
+  capturedAt: string;
 }
 
-export interface CrawlTask {
+export interface RunCrawlTask {
   id: string;
-  topicId: string;
-  queryId: string;
+  analysisRunId?: string;
   sourceId: string;
-  status:
-    | "pending"
-    | "running"
-    | "success"
-    | "failed"
-    | "no_content"
-    | "paused"
-    | "login_required"
-    | "rate_limited"
-    | "parse_failed";
+  status: string;
   targetCount: number;
   collectedCount: number;
   validCount: number;
@@ -66,162 +81,183 @@ export interface CrawlTask {
   updatedAt: string;
 }
 
-export interface RawContent {
+export interface RunReport {
   id: string;
-  platform: Platform;
-  sourceId: string;
-  queryId: string;
-  topicId: string;
-  externalId?: string;
-  url: string;
-  authorName?: string;
-  authorHandle?: string;
-  text: string;
-  metricsJson: Record<string, unknown> | null;
-  publishedAt?: string;
-  capturedAt: string;
+  projectId?: string;
+  analysisRunId?: string;
+  title: string;
+  type: AnalysisReportType;
+  status: "draft" | "ready" | "failed";
+  contentMarkdown: string;
+  contentJson?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export type Platform = "reddit" | "x" | "youtube" | "pinterest" | "web";
+export interface PageParams {
+  page: number;
+  pageSize: number;
+}
 
-export interface CreateTopicInput {
-  name: string;
-  description?: string;
+export interface PageMeta extends PageParams {
+  total: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+}
+
+export interface PaginatedResponse<TItem> {
+  items: TItem[];
+  page: PageMeta;
+}
+
+export interface CreateAnalysisRunInput {
+  projectId?: string;
+  projectName?: string;
+  goal: string;
+  includeKeywords: string[];
+  excludeKeywords?: string[];
   language: string;
   market: string;
+  limit?: number;
 }
 
-export type UpdateTopicInput = Partial<CreateTopicInput> & {
-  status?: Topic["status"];
-};
+// ─── Analysis Projects ────────────────────────────────────────────────────────
 
-export interface CreateQueryInput {
+export async function fetchAnalysisProjects(
+  params: PageParams = { page: 1, pageSize: 20 }
+): Promise<PaginatedResponse<AnalysisProject>> {
+  return request<PaginatedResponse<AnalysisProject>>(`/api/analysis-projects${toQueryString(params)}`);
+}
+
+export async function fetchAnalysisProject(id: string): Promise<AnalysisProject> {
+  const data = await request<{ item: AnalysisProject }>(`/api/analysis-projects/${id}`);
+  return data.item;
+}
+
+export async function createAnalysisProject(input: {
   name: string;
-  includeKeywords: string[];
-  excludeKeywords: string[];
-  platforms: Platform[];
+  goal: string;
   language: string;
-  frequency: "manual" | "hourly" | "daily" | "weekly";
-  limitPerRun: number;
-}
-
-export interface CreateSourceInput {
-  platform: Platform;
-  name: string;
-  enabled: boolean;
-  requiresLogin: boolean;
-  crawlerType: "cheerio" | "playwright";
-  defaultLimit: number;
-}
-
-export type UpdateQueryInput = Partial<CreateQueryInput> & {
-  status?: Query["status"];
-};
-
-export async function fetchModules(): Promise<ApiModule[]> {
-  const data = await request<{ modules: ApiModule[] }>("/api/modules");
-  return data.modules;
-}
-
-export async function fetchTopics(): Promise<Topic[]> {
-  const data = await request<{ items: Topic[] }>("/api/topics");
-  return data.items;
-}
-
-export async function createTopic(input: CreateTopicInput): Promise<Topic> {
-  const data = await request<{ item: Topic }>("/api/topics", {
+  market: string;
+  defaultLimit?: number;
+}): Promise<AnalysisProject> {
+  const data = await request<{ item: AnalysisProject }>("/api/analysis-projects", {
     method: "POST",
     body: JSON.stringify(input)
   });
   return data.item;
 }
 
-export async function updateTopic(id: string, input: UpdateTopicInput): Promise<Topic> {
-  const data = await request<{ item: Topic }>(`/api/topics/${id}/update`, {
-    method: "POST",
-    body: JSON.stringify(input)
-  });
-  return data.item;
-}
-
-export async function deleteTopic(id: string): Promise<void> {
-  await request<void>(`/api/topics/${id}/delete`, { method: "POST" });
-}
-
-export async function fetchQueries(topicId: string): Promise<Query[]> {
-  if (!topicId) return [];
-  const data = await request<{ items: Query[] }>(`/api/topics/${topicId}/queries`);
-  return data.items;
-}
-
-export async function createQuery(topicId: string, input: CreateQueryInput): Promise<Query> {
-  const data = await request<{ item: Query }>(`/api/topics/${topicId}/queries`, {
-    method: "POST",
-    body: JSON.stringify(input)
-  });
-  return data.item;
-}
-
-export async function updateQuery(id: string, input: UpdateQueryInput): Promise<Query> {
-  const data = await request<{ item: Query }>(`/api/queries/${id}/update`, {
-    method: "POST",
-    body: JSON.stringify(input)
-  });
-  return data.item;
-}
-
-export async function deleteQuery(id: string): Promise<void> {
-  await request<void>(`/api/queries/${id}/delete`, { method: "POST" });
-}
-
-export async function fetchSources(): Promise<Source[]> {
-  const data = await request<{ items: Source[] }>("/api/sources");
-  return data.items;
-}
-
-export async function createSource(input: CreateSourceInput): Promise<Source> {
-  const data = await request<{ item: Source }>("/api/sources", {
-    method: "POST",
-    body: JSON.stringify(input)
-  });
-  return data.item;
-}
-
-export async function updateSource(platform: Platform, enabled: boolean): Promise<Source> {
-  const data = await request<{ item: Source }>(`/api/sources/${platform}/update`, {
-    method: "POST",
-    body: JSON.stringify({ enabled })
-  });
-  return data.item;
-}
-
-export async function fetchCrawlTasks(): Promise<CrawlTask[]> {
-  const data = await request<{ items: CrawlTask[] }>("/api/crawl-tasks");
-  return data.items;
-}
-
-export async function deleteCrawlTask(id: string): Promise<void> {
-  await request<void>(`/api/crawl-tasks/${id}/delete`, { method: "POST" });
-}
-
-export async function clearFinishedCrawlTasks(): Promise<number> {
-  const data = await request<{ deletedCount: number }>("/api/crawl-tasks/clear-finished", {
+export async function archiveAnalysisProject(id: string): Promise<AnalysisProject> {
+  const data = await request<{ item: AnalysisProject }>(`/api/analysis-projects/${id}/archive`, {
     method: "POST"
   });
-  return data.deletedCount;
+  return data.item;
 }
 
-export async function runCrawl(queryId: string, platform: "reddit" | "x"): Promise<CrawlTask> {
-  const data = await request<{ item: CrawlTask }>(`/api/queries/${queryId}/crawl`, {
+// ─── Analysis Runs ────────────────────────────────────────────────────────────
+
+export async function fetchAnalysisRuns(
+  params: PageParams & { projectId?: string; status?: string } = { page: 1, pageSize: 20 }
+): Promise<PaginatedResponse<AnalysisRun>> {
+  const { projectId, status, ...pageParams } = params;
+  const qs = new URLSearchParams({
+    page: String(pageParams.page),
+    pageSize: String(pageParams.pageSize)
+  });
+  if (projectId) qs.set("projectId", projectId);
+  if (status) qs.set("status", status);
+  return request<PaginatedResponse<AnalysisRun>>(`/api/analysis-runs?${qs.toString()}`);
+}
+
+export async function fetchAnalysisRun(id: string): Promise<AnalysisRun> {
+  const data = await request<{ item: AnalysisRun }>(`/api/analysis-runs/${id}`);
+  return data.item;
+}
+
+export async function createAnalysisRun(input: CreateAnalysisRunInput): Promise<AnalysisRun> {
+  const data = await request<{ item: AnalysisRun }>("/api/analysis-runs", {
     method: "POST",
-    body: JSON.stringify({ platform })
+    body: JSON.stringify(input)
   });
   return data.item;
 }
 
-export async function fetchRawContents(): Promise<RawContent[]> {
-  const data = await request<{ items: RawContent[] }>("/api/raw-contents");
+export async function startAnalysisRun(id: string): Promise<AnalysisRun> {
+  const data = await request<{ item: AnalysisRun }>(`/api/analysis-runs/${id}/start`, {
+    method: "POST"
+  });
+  return data.item;
+}
+
+export async function retryAnalysisRun(id: string): Promise<AnalysisRun> {
+  const data = await request<{ item: AnalysisRun }>(`/api/analysis-runs/${id}/retry`, {
+    method: "POST"
+  });
+  return data.item;
+}
+
+export async function deleteAnalysisRun(id: string): Promise<void> {
+  await request<void>(`/api/analysis-runs/${id}/delete`, { method: "POST" });
+}
+
+// ─── Run Contents ─────────────────────────────────────────────────────────────
+
+export async function fetchRunContents(
+  runId: string,
+  params: PageParams & { search?: string; author?: string; publishedFrom?: string; publishedTo?: string } = {
+    page: 1,
+    pageSize: 20
+  }
+): Promise<PaginatedResponse<RunContent>> {
+  const { search, author, publishedFrom, publishedTo, ...pageParams } = params;
+  const qs = new URLSearchParams({
+    page: String(pageParams.page),
+    pageSize: String(pageParams.pageSize)
+  });
+  if (search) qs.set("search", search);
+  if (author) qs.set("author", author);
+  if (publishedFrom) qs.set("publishedFrom", publishedFrom);
+  if (publishedTo) qs.set("publishedTo", publishedTo);
+  return request<PaginatedResponse<RunContent>>(`/api/analysis-runs/${runId}/contents?${qs.toString()}`);
+}
+
+export async function fetchRunCrawlTasks(runId: string): Promise<RunCrawlTask[]> {
+  const data = await request<{ items: RunCrawlTask[] }>(`/api/analysis-runs/${runId}/crawl-tasks`);
   return data.items;
+}
+
+// ─── Reports ──────────────────────────────────────────────────────────────────
+
+export async function generateRunReport(runId: string): Promise<RunReport> {
+  const data = await request<{ item: RunReport }>(`/api/analysis-runs/${runId}/report`, {
+    method: "POST"
+  });
+  return data.item;
+}
+
+export async function fetchReports(
+  params: PageParams & { projectId?: string } = { page: 1, pageSize: 20 }
+): Promise<PaginatedResponse<RunReport>> {
+  const { projectId, ...pageParams } = params;
+  const qs = new URLSearchParams({
+    page: String(pageParams.page),
+    pageSize: String(pageParams.pageSize)
+  });
+  if (projectId) qs.set("projectId", projectId);
+  return request<PaginatedResponse<RunReport>>(`/api/reports?${qs.toString()}`);
+}
+
+export async function fetchReport(id: string): Promise<RunReport> {
+  const data = await request<{ item: RunReport }>(`/api/reports/${id}`);
+  return data.item;
+}
+
+// ─── 内部工具 ──────────────────────────────────────────────────────────────────
+
+function toQueryString(params: PageParams) {
+  return `?page=${params.page}&pageSize=${params.pageSize}`;
 }
 
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
@@ -229,10 +265,8 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   const headers =
     init.body === undefined
       ? { ...init.headers }
-      : {
-          "Content-Type": "application/json",
-          ...init.headers
-        };
+      : { "Content-Type": "application/json", ...init.headers };
+
   const response = await fetch(url, {
     cache: method === "GET" ? "no-store" : undefined,
     headers,

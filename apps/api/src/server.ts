@@ -3,8 +3,9 @@ import Fastify, { type FastifyServerOptions } from "fastify";
 import { createDb, type AppDb } from "@domain-analysis/db";
 import { registerHealthRoutes } from "./routes/health";
 import { registerModuleRoutes } from "./routes/modules";
-import { registerCrawlRoutes } from "./routes/crawlRoutes";
-import { registerTopicQuerySourceRoutes } from "./routes/topicQuerySourceRoutes";
+import { registerAnalysisRoutes } from "./routes/analysisRoutes";
+
+// WHY: 业务流程由 analysisRoutes + analysisRunService 统一编排，避免再暴露工程对象 API。
 
 export interface BuildServerOptions extends FastifyServerOptions {
   db?: AppDb;
@@ -22,8 +23,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
 
   await registerHealthRoutes(app);
   await registerModuleRoutes(app);
-  await registerTopicQuerySourceRoutes(app, db);
-  await registerCrawlRoutes(app, db);
+  await registerAnalysisRoutes(app, db);
 
   app.setErrorHandler((error, _request, reply) => {
     app.log.error(error);

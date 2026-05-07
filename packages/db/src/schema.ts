@@ -6,36 +6,7 @@ const timestamps = {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
 };
 
-export const topics = sqliteTable("topics", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  description: text("description"),
-  language: text("language").notNull(),
-  market: text("market").notNull(),
-  status: text("status").notNull().default("active"),
-  ...timestamps
-});
-
-export const queries = sqliteTable(
-  "queries",
-  {
-    id: text("id").primaryKey(),
-    topicId: text("topic_id").notNull().references(() => topics.id),
-    name: text("name").notNull(),
-    includeKeywords: text("include_keywords", { mode: "json" }).notNull(),
-    excludeKeywords: text("exclude_keywords", { mode: "json" }).notNull(),
-    platforms: text("platforms", { mode: "json" }).notNull(),
-    language: text("language").notNull(),
-    frequency: text("frequency").notNull().default("manual"),
-    limitPerRun: integer("limit_per_run").notNull().default(100),
-    status: text("status").notNull().default("active"),
-    ...timestamps
-  },
-  (table) => ({
-    topicIdx: index("queries_topic_idx").on(table.topicId)
-  })
-);
-
+// WHY: sources 是平台元数据基础，不是旧 UI 兼容层；当前流程只启动 Reddit，schema 保留未来多平台扩展空间。
 export const sources = sqliteTable("sources", {
   id: text("id").primaryKey(),
   platform: text("platform").notNull(),
@@ -49,13 +20,60 @@ export const sources = sqliteTable("sources", {
   ...timestamps
 });
 
+// WHY: analysis_projects 是业务实体，替代工程概念 topics，goal 字段支撑 AI 分析上下文。
+export const analysisProjects = sqliteTable("analysis_projects", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  goal: text("goal").notNull(),
+  language: text("language").notNull(),
+  market: text("market").notNull(),
+  defaultPlatform: text("default_platform").notNull().default("reddit"),
+  defaultLimit: integer("default_limit").notNull().default(100),
+  status: text("status").notNull().default("active"),
+  ...timestamps
+});
+
+// WHY: analysis_runs 封装单次分析全周期（配置→采集→清洗→分析→报告），是内容/洞察/报告的根上下文。
+export const analysisRuns = sqliteTable(
+  "analysis_runs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => analysisProjects.id),
+    name: text("name").notNull(),
+    status: text("status").notNull().default("draft"),
+    includeKeywords: text("include_keywords", { mode: "json" }).notNull(),
+    excludeKeywords: text("exclude_keywords", { mode: "json" }).notNull(),
+    platform: text("platform").notNull().default("reddit"),
+    limit: integer("run_limit").notNull().default(100),
+    collectedCount: integer("collected_count").notNull().default(0),
+    validCount: integer("valid_count").notNull().default(0),
+    duplicateCount: integer("duplicate_count").notNull().default(0),
+    analyzedCount: integer("analyzed_count").notNull().default(0),
+    reportId: text("report_id"),
+    errorMessage: text("error_message"),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    ...timestamps
+  },
+  (table) => ({
+    projectIdx: index("analysis_runs_project_idx").on(table.projectId),
+    statusIdx: index("analysis_runs_status_idx").on(table.status)
+  })
+);
+
+// WHY: crawl_tasks 是 analysis run 的内部运行日志，所有新任务必须挂到具体 run。
 export const crawlTasks = sqliteTable(
   "crawl_tasks",
   {
     id: text("id").primaryKey(),
-    topicId: text("topic_id").notNull().references(() => topics.id),
-    queryId: text("query_id").notNull().references(() => queries.id),
-    sourceId: text("source_id").notNull().references(() => sources.id),
+    analysisRunId: text("analysis_run_id")
+      .notNull()
+      .references(() => analysisRuns.id),
+    sourceId: text("source_id")
+      .notNull()
+      .references(() => sources.id),
     status: text("status").notNull().default("pending"),
     targetCount: integer("target_count").notNull().default(100),
     collectedCount: integer("collected_count").notNull().default(0),
@@ -68,18 +86,29 @@ export const crawlTasks = sqliteTable(
   },
   (table) => ({
     statusIdx: index("crawl_tasks_status_idx").on(table.status),
-    topicIdx: index("crawl_tasks_topic_idx").on(table.topicId)
+    runIdx: index("crawl_tasks_run_idx").on(table.analysisRunId)
   })
 );
 
+// WHY: raw_contents 必须带 project/run/task 上下文，避免再次出现全局混杂内容库。
 export const rawContents = sqliteTable(
   "raw_contents",
   {
     id: text("id").primaryKey(),
     platform: text("platform").notNull(),
-    sourceId: text("source_id").notNull().references(() => sources.id),
-    queryId: text("query_id").notNull().references(() => queries.id),
-    topicId: text("topic_id").notNull().references(() => topics.id),
+    sourceId: text("source_id")
+      .notNull()
+      .references(() => sources.id),
+    analysisProjectId: text("analysis_project_id")
+      .notNull()
+      .references(() => analysisProjects.id),
+    analysisRunId: text("analysis_run_id")
+      .notNull()
+      .references(() => analysisRuns.id),
+    crawlTaskId: text("crawl_task_id")
+      .notNull()
+      .references(() => crawlTasks.id),
+    matchedKeywords: text("matched_keywords", { mode: "json" }).notNull(),
     externalId: text("external_id"),
     url: text("url").notNull(),
     authorName: text("author_name"),
@@ -95,14 +124,17 @@ export const rawContents = sqliteTable(
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`)
   },
   (table) => ({
-    topicIdx: index("raw_contents_topic_idx").on(table.topicId),
+    runIdx: index("raw_contents_run_idx").on(table.analysisRunId),
     externalIdx: index("raw_contents_external_idx").on(table.platform, table.externalId)
   })
 );
 
 export const cleanedContents = sqliteTable("cleaned_contents", {
   id: text("id").primaryKey(),
-  rawContentId: text("raw_content_id").notNull().references(() => rawContents.id),
+  rawContentId: text("raw_content_id")
+    .notNull()
+    .references(() => rawContents.id),
+  analysisRunId: text("analysis_run_id").references(() => analysisRuns.id),
   normalizedText: text("normalized_text").notNull(),
   language: text("language").notNull(),
   isDuplicate: integer("is_duplicate", { mode: "boolean" }).notNull().default(false),
@@ -116,7 +148,10 @@ export const cleanedContents = sqliteTable("cleaned_contents", {
 
 export const analyzedContents = sqliteTable("analyzed_contents", {
   id: text("id").primaryKey(),
-  rawContentId: text("raw_content_id").notNull().references(() => rawContents.id),
+  rawContentId: text("raw_content_id")
+    .notNull()
+    .references(() => rawContents.id),
+  analysisRunId: text("analysis_run_id").references(() => analysisRuns.id),
   summary: text("summary").notNull(),
   contentType: text("content_type").notNull(),
   topics: text("topics", { mode: "json" }).notNull(),
@@ -125,40 +160,31 @@ export const analyzedContents = sqliteTable("analyzed_contents", {
   sentiment: text("sentiment").notNull(),
   insightScore: integer("insight_score").notNull().default(0),
   opportunityScore: integer("opportunity_score").notNull().default(0),
+  contentOpportunity: text("content_opportunity"),
   reason: text("reason").notNull(),
   modelName: text("model_name").notNull(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`)
 });
 
-export const trendSnapshots = sqliteTable("trend_snapshots", {
-  id: text("id").primaryKey(),
-  topicId: text("topic_id").notNull().references(() => topics.id),
-  dateRangeStart: text("date_range_start").notNull(),
-  dateRangeEnd: text("date_range_end").notNull(),
-  volumeTotal: integer("volume_total").notNull().default(0),
-  volumeByPlatform: text("volume_by_platform", { mode: "json" }).notNull(),
-  sentimentDistribution: text("sentiment_distribution", { mode: "json" }).notNull(),
-  topTopics: text("top_topics", { mode: "json" }).notNull(),
-  topKeywords: text("top_keywords", { mode: "json" }).notNull(),
-  topContents: text("top_contents", { mode: "json" }).notNull(),
-  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`)
-});
-
+// WHY: reports 只绑定 analysis run，不再保留 topic/date-range 兼容字段。
 export const reports = sqliteTable(
   "reports",
   {
     id: text("id").primaryKey(),
-    topicId: text("topic_id").notNull().references(() => topics.id),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => analysisProjects.id),
+    analysisRunId: text("analysis_run_id")
+      .notNull()
+      .references(() => analysisRuns.id),
     title: text("title").notNull(),
     type: text("type").notNull(),
-    dateRangeStart: text("date_range_start").notNull(),
-    dateRangeEnd: text("date_range_end").notNull(),
-    contentMarkdown: text("content_markdown").notNull(),
+    contentMarkdown: text("content_markdown").notNull().default(""),
     contentJson: text("content_json", { mode: "json" }),
     status: text("status").notNull().default("draft"),
     ...timestamps
   },
   (table) => ({
-    topicIdx: index("reports_topic_idx").on(table.topicId)
+    runIdx: index("reports_run_idx").on(table.analysisRunId)
   })
 );

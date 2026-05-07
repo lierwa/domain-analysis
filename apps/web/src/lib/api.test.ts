@@ -1,222 +1,325 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createQuery,
-  createSource,
-  createTopic,
-  deleteQuery,
-  deleteTopic,
-  fetchCrawlTasks,
-  fetchQueries,
-  fetchRawContents,
-  fetchSources,
-  fetchTopics,
-  runCrawl,
-  updateQuery,
-  updateTopic,
-  updateSource
+  archiveAnalysisProject,
+  createAnalysisProject,
+  createAnalysisRun,
+  deleteAnalysisRun,
+  fetchAnalysisProject,
+  fetchAnalysisProjects,
+  fetchAnalysisRun,
+  fetchAnalysisRuns,
+  fetchReport,
+  fetchReports,
+  fetchRunContents,
+  fetchRunCrawlTasks,
+  generateRunReport,
+  retryAnalysisRun,
+  startAnalysisRun
 } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("web api client", () => {
-  it("creates a topic through the API", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ item: { id: "topic_1", name: "AI Search Trends" } })
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const topic = await createTopic({
-      name: "AI Search Trends",
-      language: "en",
-      market: "US"
-    });
-
-    expect(topic).toMatchObject({ id: "topic_1", name: "AI Search Trends" });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/topics",
-      expect.objectContaining({ method: "POST" })
-    );
-  });
-
-  it("loads topic queries from the API", async () => {
+describe("analysis project API client", () => {
+  it("creates an analysis project", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ items: [{ id: "query_1", includeKeywords: ["ai search"] }] })
+        json: async () => ({ item: { id: "proj_1", name: "AI Search", goal: "understand UX" } })
       })
     );
 
-    await expect(fetchQueries("topic_1")).resolves.toEqual([
-      { id: "query_1", includeKeywords: ["ai search"] }
-    ]);
-  });
-
-  it("toggles a source through the API", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ item: { platform: "reddit", enabled: false } })
+    const project = await createAnalysisProject({
+      name: "AI Search",
+      goal: "understand UX",
+      language: "en",
+      market: "US"
     });
-    vi.stubGlobal("fetch", fetchMock);
 
-    await expect(updateSource("reddit", false)).resolves.toMatchObject({
-      platform: "reddit",
-      enabled: false
-    });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/sources/reddit/update",
+    expect(project).toMatchObject({ id: "proj_1", name: "AI Search" });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-projects",
       expect.objectContaining({ method: "POST" })
     );
   });
 
-  it("creates or updates a source through the API", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ item: { platform: "web", name: "Web Search", enabled: true } })
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      createSource({
-        platform: "web",
-        name: "Web Search",
-        enabled: true,
-        requiresLogin: false,
-        crawlerType: "cheerio",
-        defaultLimit: 100
-      })
-    ).resolves.toMatchObject({ platform: "web", name: "Web Search" });
-  });
-
-  it("loads topics and sources from the API", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
+  it("fetches analysis projects with pagination", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ items: [{ id: "topic_1", name: "AI Search Trends" }] })
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ items: [{ platform: "web", enabled: true }] })
-      });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(fetchTopics()).resolves.toEqual([{ id: "topic_1", name: "AI Search Trends" }]);
-    await expect(fetchSources()).resolves.toEqual([{ platform: "web", enabled: true }]);
-  });
-
-  it("creates a query through the topic-scoped API", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ item: { id: "query_1", topicId: "topic_1" } })
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      createQuery("topic_1", {
-        name: "AI search",
-        includeKeywords: ["ai search"],
-        excludeKeywords: [],
-        platforms: ["reddit"],
-        language: "en",
-        frequency: "manual",
-        limitPerRun: 50
-      })
-    ).resolves.toMatchObject({ id: "query_1", topicId: "topic_1" });
-  });
-
-  it("updates and deletes topics", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ item: { id: "topic_1", status: "paused" } })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(updateTopic("topic_1", { status: "paused" })).resolves.toMatchObject({
-      status: "paused"
-    });
-    await expect(deleteTopic("topic_1")).resolves.toBeUndefined();
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "/api/topics/topic_1/update",
-      expect.objectContaining({ method: "POST" })
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "/api/topics/topic_1/delete",
-      expect.objectContaining({
-        method: "POST",
-        headers: {}
+        json: async () => ({
+          items: [{ id: "proj_1" }],
+          page: { page: 1, pageSize: 20, total: 1, totalPages: 1, hasNextPage: false, hasPreviousPage: false }
+        })
       })
     );
-  });
 
-  it("updates and deletes queries", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ item: { id: "query_1", status: "paused" } })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(updateQuery("query_1", { status: "paused" })).resolves.toMatchObject({
-      status: "paused"
-    });
-    await expect(deleteQuery("query_1")).resolves.toBeUndefined();
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "/api/queries/query_1/update",
-      expect.objectContaining({ method: "POST" })
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "/api/queries/query_1/delete",
-      expect.objectContaining({ method: "POST" })
-    );
-  });
-
-  it("marks GET requests as no-store to avoid proxy cache", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ items: [] })
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await fetchTopics();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/topics",
+    const result = await fetchAnalysisProjects({ page: 1, pageSize: 20 });
+    expect(result.items).toHaveLength(1);
+    expect(result.page.total).toBe(1);
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-projects?page=1&pageSize=20",
       expect.objectContaining({ cache: "no-store" })
     );
   });
 
-  it("runs crawl jobs and loads persisted crawl data", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
+  it("fetches a single project by id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ item: { id: "task_1", status: "failed" } })
+        json: async () => ({ item: { id: "proj_1", goal: "test goal" } })
       })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ items: [{ id: "task_1", status: "failed" }] })
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ items: [{ id: "raw_1", platform: "reddit" }] })
-      });
-    vi.stubGlobal("fetch", fetchMock);
+    );
 
-    await expect(runCrawl("query_1", "reddit")).resolves.toMatchObject({ id: "task_1" });
-    await expect(fetchCrawlTasks()).resolves.toEqual([{ id: "task_1", status: "failed" }]);
-    await expect(fetchRawContents()).resolves.toEqual([{ id: "raw_1", platform: "reddit" }]);
+    const project = await fetchAnalysisProject("proj_1");
+    expect(project).toMatchObject({ id: "proj_1" });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-projects/proj_1",
+      expect.objectContaining({ cache: "no-store" })
+    );
+  });
+
+  it("archives a project", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ item: { id: "proj_1", status: "archived" } })
+      })
+    );
+
+    const project = await archiveAnalysisProject("proj_1");
+    expect(project.status).toBe("archived");
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-projects/proj_1/archive",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+});
+
+describe("analysis run API client", () => {
+  it("creates an analysis run", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ item: { id: "run_1", status: "draft" } })
+      })
+    );
+
+    const run = await createAnalysisRun({
+      goal: "understand AI search UX",
+      includeKeywords: ["AI search"],
+      language: "en",
+      market: "US"
+    });
+
+    expect(run).toMatchObject({ id: "run_1", status: "draft" });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-runs",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("starts an analysis run and returns 202", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 202,
+        json: async () => ({ item: { id: "run_1", status: "collecting" } })
+      })
+    );
+
+    const run = await startAnalysisRun("run_1");
+    expect(run.status).toBe("collecting");
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-runs/run_1/start",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("retries a failed run", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ item: { id: "run_1", status: "collecting" } })
+      })
+    );
+
+    const run = await retryAnalysisRun("run_1");
+    expect(run.status).toBe("collecting");
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-runs/run_1/retry",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("fetches run list with filters", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          items: [{ id: "run_1" }],
+          page: { page: 1, pageSize: 20, total: 1, totalPages: 1, hasNextPage: false, hasPreviousPage: false }
+        })
+      })
+    );
+
+    const result = await fetchAnalysisRuns({ page: 1, pageSize: 20, status: "content_ready" });
+    expect(result.items).toHaveLength(1);
+    const url = String(vi.mocked(fetch).mock.calls[0]?.[0]);
+    expect(url).toContain("status=content_ready");
+  });
+
+  it("fetches a single run by id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ item: { id: "run_1", status: "content_ready" } })
+      })
+    );
+
+    const run = await fetchAnalysisRun("run_1");
+    expect(run.id).toBe("run_1");
+  });
+
+  it("deletes a run", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) })
+    );
+
+    await expect(deleteAnalysisRun("run_1")).resolves.toBeUndefined();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-runs/run_1/delete",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("GET requests use no-store cache", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          items: [],
+          page: { page: 1, pageSize: 20, total: 0, totalPages: 1, hasNextPage: false, hasPreviousPage: false }
+        })
+      })
+    );
+
+    await fetchAnalysisRuns({ page: 1, pageSize: 20 });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cache: "no-store" })
+    );
+  });
+});
+
+describe("run contents API client", () => {
+  it("fetches run contents scoped to a run id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          items: [{ id: "raw_1", analysisRunId: "run_1", text: "hello world" }],
+          page: { page: 1, pageSize: 20, total: 1, totalPages: 1, hasNextPage: false, hasPreviousPage: false }
+        })
+      })
+    );
+
+    const result = await fetchRunContents("run_1", { page: 1, pageSize: 20 });
+    expect(result.items[0]).toMatchObject({ analysisRunId: "run_1" });
+    const url = String(vi.mocked(fetch).mock.calls[0]?.[0]);
+    expect(url).toContain("/api/analysis-runs/run_1/contents");
+    expect(url).toContain("page=1");
+  });
+
+  it("passes search filter to content query", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ items: [], page: { page: 1, pageSize: 20, total: 0, totalPages: 1, hasNextPage: false, hasPreviousPage: false } })
+      })
+    );
+
+    await fetchRunContents("run_1", { page: 1, pageSize: 20, search: "AI search" });
+    const url = String(vi.mocked(fetch).mock.calls[0]?.[0]);
+    expect(url).toContain("search=AI+search");
+  });
+
+  it("fetches run crawl tasks", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ items: [{ id: "task_1", status: "success" }] })
+      })
+    );
+
+    const tasks = await fetchRunCrawlTasks("run_1");
+    expect(tasks[0]).toMatchObject({ id: "task_1" });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-runs/run_1/crawl-tasks",
+      expect.any(Object)
+    );
+  });
+});
+
+describe("reports API client", () => {
+  it("generates a report for a run", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ item: { id: "report_1", status: "ready", contentMarkdown: "# Report" } })
+      })
+    );
+
+    const report = await generateRunReport("run_1");
+    expect(report).toMatchObject({ id: "report_1", status: "ready" });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-runs/run_1/report",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("fetches reports with pagination", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          items: [{ id: "report_1", title: "My Report" }],
+          page: { page: 1, pageSize: 20, total: 1, totalPages: 1, hasNextPage: false, hasPreviousPage: false }
+        })
+      })
+    );
+
+    const result = await fetchReports({ page: 1, pageSize: 20 });
+    expect(result.items).toHaveLength(1);
+  });
+
+  it("fetches a single report by id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ item: { id: "report_1", contentMarkdown: "# Title\n\ncontent" } })
+      })
+    );
+
+    const report = await fetchReport("report_1");
+    expect(report.id).toBe("report_1");
   });
 });

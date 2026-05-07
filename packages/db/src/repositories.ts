@@ -1,49 +1,22 @@
-import { and, desc, eq } from "drizzle-orm";
-import type { Platform, TaskStatus, TopicStatus } from "@domain-analysis/shared";
+import { and, count, desc, eq, gte, like, lte } from "drizzle-orm";
+import type { Platform, TaskStatus } from "@domain-analysis/shared";
 import type { AppDb } from "./client";
-import { crawlTasks, queries, rawContents, sources, topics } from "./schema";
+import { crawlTasks, rawContents, sources } from "./schema";
 
-type TopicRow = typeof topics.$inferSelect;
-type QueryRow = typeof queries.$inferSelect;
 type SourceRow = typeof sources.$inferSelect;
 type CrawlTaskRow = typeof crawlTasks.$inferSelect;
 type RawContentRow = typeof rawContents.$inferSelect;
 
-export interface CreateTopicInput {
-  name: string;
-  description?: string;
-  language: string;
-  market: string;
+export interface PageInput {
+  page: number;
+  pageSize: number;
 }
 
-export interface UpdateTopicInput {
-  name?: string;
-  description?: string;
-  language?: string;
-  market?: string;
-  status?: TopicStatus;
-}
-
-export interface CreateQueryInput {
-  topicId: string;
-  name: string;
-  includeKeywords: string[];
-  excludeKeywords: string[];
-  platforms: Platform[];
-  language: string;
-  frequency: "manual" | "hourly" | "daily" | "weekly";
-  limitPerRun: number;
-}
-
-export interface UpdateQueryInput {
-  name?: string;
-  includeKeywords?: string[];
-  excludeKeywords?: string[];
-  platforms?: Platform[];
-  language?: string;
-  frequency?: "manual" | "hourly" | "daily" | "weekly";
-  limitPerRun?: number;
-  status?: TopicStatus;
+export interface PageMeta extends PageInput {
+  total: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
 }
 
 export interface CreateSourceInput {
@@ -56,8 +29,7 @@ export interface CreateSourceInput {
 }
 
 export interface CreateCrawlTaskInput {
-  topicId: string;
-  queryId: string;
+  analysisRunId: string;
   sourceId: string;
   targetCount: number;
 }
@@ -74,9 +46,11 @@ export interface UpdateCrawlTaskInput {
 
 export interface CreateRawContentInput {
   platform: Platform;
+  analysisProjectId: string;
+  analysisRunId: string;
+  crawlTaskId: string;
+  matchedKeywords: string[];
   sourceId: string;
-  queryId: string;
-  topicId: string;
   externalId?: string;
   url: string;
   authorName?: string;
@@ -91,95 +65,10 @@ const defaultSources: CreateSourceInput[] = [
   { platform: "reddit", name: "Reddit", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 100 },
   { platform: "x", name: "X / Twitter", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 25 },
   { platform: "youtube", name: "YouTube", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 50 },
+  { platform: "tiktok", name: "TikTok", requiresLogin: true, crawlerType: "playwright", defaultLimit: 50 },
   { platform: "pinterest", name: "Pinterest", requiresLogin: true, crawlerType: "playwright", defaultLimit: 50 },
   { platform: "web", name: "Web Pages", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 100 }
 ];
-
-export function createTopicRepository(db: AppDb) {
-  return {
-    async create(input: CreateTopicInput) {
-      const [row] = await db
-        .insert(topics)
-        .values({
-          id: createId("topic"),
-          name: input.name,
-          description: input.description,
-          language: input.language,
-          market: input.market,
-          status: "active"
-        })
-        .returning();
-      return mapTopic(requireRow(row, "topic_create_failed"));
-    },
-
-    async list() {
-      const rows = await db.select().from(topics);
-      return rows.map(mapTopic);
-    },
-
-    async update(id: string, input: UpdateTopicInput) {
-      const [row] = await db
-        .update(topics)
-        .set({ ...input, updatedAt: new Date().toISOString() })
-        .where(eq(topics.id, id))
-        .returning();
-      return row ? mapTopic(row) : null;
-    },
-
-    async remove(id: string) {
-      // WHY: Topic 是 Query 的父级；删除 Topic 时先清理 Query，避免 SQLite 外键约束导致 500。
-      // TRADE-OFF: 这是阶段 1 的硬删除策略，后续有任务和内容后应改为软删除/归档。
-      await db.delete(queries).where(eq(queries.topicId, id));
-      await db.delete(topics).where(eq(topics.id, id));
-    }
-  };
-}
-
-export function createQueryRepository(db: AppDb) {
-  return {
-    async create(input: CreateQueryInput) {
-      const [row] = await db
-        .insert(queries)
-        .values({
-          id: createId("query"),
-          topicId: input.topicId,
-          name: input.name,
-          includeKeywords: input.includeKeywords,
-          excludeKeywords: input.excludeKeywords,
-          platforms: input.platforms,
-          language: input.language,
-          frequency: input.frequency,
-          limitPerRun: input.limitPerRun,
-          status: "active"
-        })
-        .returning();
-      return mapQuery(requireRow(row, "query_create_failed"));
-    },
-
-    async listByTopic(topicId: string) {
-      const rows = await db.select().from(queries).where(eq(queries.topicId, topicId));
-      return rows.map(mapQuery);
-    },
-
-    async getById(id: string) {
-      const [row] = await db.select().from(queries).where(eq(queries.id, id));
-      return row ? mapQuery(row) : null;
-    },
-
-    async update(id: string, input: UpdateQueryInput) {
-      const [row] = await db
-        .update(queries)
-        .set({ ...input, updatedAt: new Date().toISOString() })
-        .where(eq(queries.id, id))
-        .returning();
-      return row ? mapQuery(row) : null;
-    },
-
-    async remove(id: string) {
-      await db.delete(queries).where(eq(queries.id, id));
-    }
-  };
-}
 
 export function createSourceRepository(db: AppDb) {
   return {
@@ -260,8 +149,7 @@ export function createCrawlTaskRepository(db: AppDb) {
         .insert(crawlTasks)
         .values({
           id: createId("task"),
-          topicId: input.topicId,
-          queryId: input.queryId,
+          analysisRunId: input.analysisRunId,
           sourceId: input.sourceId,
           targetCount: input.targetCount,
           status: "pending"
@@ -273,6 +161,24 @@ export function createCrawlTaskRepository(db: AppDb) {
     async list() {
       const rows = await db.select().from(crawlTasks).orderBy(desc(crawlTasks.createdAt));
       return rows.map(mapCrawlTask);
+    },
+
+    async listPage(input: PageInput) {
+      const [countRow] = await db.select({ total: count() }).from(crawlTasks);
+      const total = countRow?.total ?? 0;
+      const rows = await db
+        .select()
+        .from(crawlTasks)
+        .orderBy(desc(crawlTasks.createdAt))
+        .limit(input.pageSize)
+        .offset(toOffset(input));
+
+      // WHY: 长列表必须在数据库层分页，避免任务历史增长后首屏请求和渲染成本线性膨胀。
+      // TRADE-OFF: limit/offset 对当前 SQLite MVP 足够简单；大数据量再切 keyset pagination。
+      return {
+        items: rows.map(mapCrawlTask),
+        page: createPageMeta(input, total)
+      };
     },
 
     async update(id: string, input: UpdateCrawlTaskInput) {
@@ -334,9 +240,11 @@ export function createRawContentRepository(db: AppDb) {
           .values({
             id: createId("raw"),
             platform: input.platform,
+            analysisProjectId: input.analysisProjectId,
+            analysisRunId: input.analysisRunId,
+            crawlTaskId: input.crawlTaskId,
+            matchedKeywords: input.matchedKeywords,
             sourceId: input.sourceId,
-            queryId: input.queryId,
-            topicId: input.topicId,
             externalId: input.externalId,
             url: input.url,
             authorName: input.authorName,
@@ -358,8 +266,60 @@ export function createRawContentRepository(db: AppDb) {
     async list() {
       const rows = await db.select().from(rawContents).orderBy(desc(rawContents.capturedAt));
       return rows.map(mapRawContent);
+    },
+
+    async listPage(input: PageInput) {
+      const [countRow] = await db.select({ total: count() }).from(rawContents);
+      const total = countRow?.total ?? 0;
+      const rows = await db
+        .select()
+        .from(rawContents)
+        .orderBy(desc(rawContents.capturedAt))
+        .limit(input.pageSize)
+        .offset(toOffset(input));
+
+      // WHY: 内容库会快速增长，API 只返回当前页可保持移动端和桌面端一致的响应速度。
+      // TRADE-OFF: 先保持简单的 offset 分页；等筛选和排序条件增多后再引入游标策略。
+      return {
+        items: rows.map(mapRawContent),
+        page: createPageMeta(input, total)
+      };
+    },
+
+    // WHY: run 上下文查询必须隔离，不允许跨 run 混用内容，保证分析可追溯。
+    async listByRunPage(runId: string, input: PageInput, filters: RunContentFilters = {}) {
+      const conditions = buildRunContentConditions(runId, filters);
+      const [countRow] = await db
+        .select({ total: count() })
+        .from(rawContents)
+        .where(conditions);
+      const total = countRow?.total ?? 0;
+      const rows = await db
+        .select()
+        .from(rawContents)
+        .where(conditions)
+        .orderBy(desc(rawContents.capturedAt))
+        .limit(input.pageSize)
+        .offset(toOffset(input));
+      return { items: rows.map(mapRawContent), page: createPageMeta(input, total) };
     }
   };
+}
+
+export interface RunContentFilters {
+  search?: string;
+  author?: string;
+  publishedFrom?: string;
+  publishedTo?: string;
+}
+
+function buildRunContentConditions(runId: string, filters: RunContentFilters) {
+  const conditions = [eq(rawContents.analysisRunId, runId)];
+  if (filters.author) conditions.push(like(rawContents.authorHandle, `%${filters.author}%`));
+  if (filters.search) conditions.push(like(rawContents.text, `%${filters.search}%`));
+  if (filters.publishedFrom) conditions.push(gte(rawContents.publishedAt, filters.publishedFrom));
+  if (filters.publishedTo) conditions.push(lte(rawContents.publishedAt, filters.publishedTo));
+  return and(...conditions);
 }
 
 function createId(prefix: string) {
@@ -373,34 +333,30 @@ function requireRow<TRow>(row: TRow | undefined, message: string): TRow {
   return row;
 }
 
-function mapTopic(row: TopicRow) {
+function toOffset(input: PageInput) {
+  return (input.page - 1) * input.pageSize;
+}
+
+function createPageMeta(input: PageInput, total: number): PageMeta {
+  const totalPages = Math.max(1, Math.ceil(total / input.pageSize));
   return {
-    id: row.id,
-    name: row.name,
-    description: row.description ?? undefined,
-    language: row.language,
-    market: row.market,
-    status: row.status as TopicStatus,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt
+    page: input.page,
+    pageSize: input.pageSize,
+    total,
+    totalPages,
+    hasNextPage: input.page < totalPages,
+    hasPreviousPage: input.page > 1
   };
 }
 
-function mapQuery(row: QueryRow) {
-  return {
-    id: row.id,
-    topicId: row.topicId,
-    name: row.name,
-    includeKeywords: row.includeKeywords as string[],
-    excludeKeywords: row.excludeKeywords as string[],
-    platforms: row.platforms as Platform[],
-    language: row.language,
-    frequency: row.frequency,
-    limitPerRun: row.limitPerRun,
-    status: row.status as TopicStatus,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt
-  };
+function normalizeDateTime(value: string | null | undefined) {
+  if (!value) return undefined;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    return new Date(`${value.replace(" ", "T")}Z`).toISOString();
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? value : new Date(timestamp).toISOString();
 }
 
 function mapSource(row: SourceRow) {
@@ -412,16 +368,15 @@ function mapSource(row: SourceRow) {
     requiresLogin: row.requiresLogin,
     crawlerType: row.crawlerType as "cheerio" | "playwright",
     defaultLimit: row.defaultLimit,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt
+    createdAt: normalizeDateTime(row.createdAt) ?? row.createdAt,
+    updatedAt: normalizeDateTime(row.updatedAt) ?? row.updatedAt
   };
 }
 
 function mapCrawlTask(row: CrawlTaskRow) {
   return {
     id: row.id,
-    topicId: row.topicId,
-    queryId: row.queryId,
+    analysisRunId: row.analysisRunId,
     sourceId: row.sourceId,
     status: row.status as TaskStatus,
     targetCount: row.targetCount,
@@ -429,10 +384,10 @@ function mapCrawlTask(row: CrawlTaskRow) {
     validCount: row.validCount,
     duplicateCount: row.duplicateCount,
     errorMessage: row.errorMessage ?? undefined,
-    startedAt: row.startedAt ?? undefined,
-    finishedAt: row.finishedAt ?? undefined,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt
+    startedAt: normalizeDateTime(row.startedAt),
+    finishedAt: normalizeDateTime(row.finishedAt),
+    createdAt: normalizeDateTime(row.createdAt) ?? row.createdAt,
+    updatedAt: normalizeDateTime(row.updatedAt) ?? row.updatedAt
   };
 }
 
@@ -440,18 +395,20 @@ function mapRawContent(row: RawContentRow) {
   return {
     id: row.id,
     platform: row.platform as Platform,
+    analysisProjectId: row.analysisProjectId,
+    analysisRunId: row.analysisRunId,
+    crawlTaskId: row.crawlTaskId,
+    matchedKeywords: row.matchedKeywords as string[],
     sourceId: row.sourceId,
-    queryId: row.queryId,
-    topicId: row.topicId,
     externalId: row.externalId ?? undefined,
     url: row.url,
     authorName: row.authorName ?? undefined,
     authorHandle: row.authorHandle ?? undefined,
     text: row.text,
     metricsJson: row.metricsJson as Record<string, unknown> | null,
-    publishedAt: row.publishedAt ?? undefined,
-    capturedAt: row.capturedAt,
+    publishedAt: normalizeDateTime(row.publishedAt),
+    capturedAt: normalizeDateTime(row.capturedAt) ?? row.capturedAt,
     rawJson: row.rawJson as Record<string, unknown> | null,
-    createdAt: row.createdAt
+    createdAt: normalizeDateTime(row.createdAt) ?? row.createdAt
   };
 }
