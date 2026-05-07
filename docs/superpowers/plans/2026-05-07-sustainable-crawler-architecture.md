@@ -1226,16 +1226,19 @@ git commit -m "feat: show collection plans in workspace"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-05-07-sustainable-crawler-architecture.md`
 
-- [ ] **Step 1: Run full verification**
+- [x] **Step 1: Run full verification**
 
 Run: `npm test`  
 Expected: PASS.
+Actual: PASS, 12 test files and 52 tests passed.
 
 Run: `npm run typecheck`  
 Expected: PASS.
+Actual: PASS across shared, db, worker, api, and web workspaces.
 
 Run: `npm run build`  
 Expected: PASS.
+Actual: PASS, including Vite production build.
 
 - [ ] **Step 2: Manual smoke test**
 
@@ -1253,7 +1256,7 @@ Expected:
 - `GET /api/projects/:projectId/collection-plans` returns the plan.
 - Scheduler core tests prove due plans can produce scheduled runs.
 
-- [ ] **Step 3: Rollout constraints**
+- [x] **Step 3: Rollout constraints**
 
 Record these constraints in the PR description:
 
@@ -1263,7 +1266,7 @@ Record these constraints in the PR description:
 - Browser runtime is only a safe boundary for future Playwright adapters.
 - Redis/BullMQ should be evaluated after this DB-backed scheduler proves the product flow.
 
-- [ ] **Step 4: Commit final doc updates**
+- [x] **Step 4: Commit final doc updates**
 
 ```bash
 git add docs/superpowers/plans/2026-05-07-sustainable-crawler-architecture.md
