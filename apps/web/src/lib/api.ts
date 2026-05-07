@@ -15,6 +15,7 @@ export type AnalysisRunStatus =
 
 export type ProjectStatus = "active" | "paused" | "archived";
 export type AnalysisReportType = "run_summary" | "content_opportunities" | "keyword_analysis";
+export type CollectionCadence = "manual" | "hourly" | "daily" | "weekly";
 
 export interface AnalysisProject {
   id: string;
@@ -46,6 +47,25 @@ export interface AnalysisRun {
   errorMessage?: string;
   startedAt?: string;
   finishedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CollectionPlan {
+  id: string;
+  projectId: string;
+  name: string;
+  status: ProjectStatus;
+  platform: "reddit";
+  includeKeywords: string[];
+  excludeKeywords: string[];
+  language: string;
+  market: string;
+  cadence: CollectionCadence;
+  batchLimit: number;
+  maxRunsPerDay: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -122,6 +142,18 @@ export interface CreateAnalysisRunInput {
   limit?: number;
 }
 
+export interface CreateCollectionPlanInput {
+  projectId: string;
+  name: string;
+  includeKeywords: string[];
+  excludeKeywords: string[];
+  language: string;
+  market: string;
+  cadence: CollectionCadence;
+  batchLimit: number;
+  maxRunsPerDay: number;
+}
+
 // ─── Analysis Projects ────────────────────────────────────────────────────────
 
 export async function fetchAnalysisProjects(
@@ -154,6 +186,19 @@ export async function archiveAnalysisProject(id: string): Promise<AnalysisProjec
     method: "POST"
   });
   return data.item;
+}
+
+// ─── Collection Plans ─────────────────────────────────────────────────────────
+
+export async function fetchProjectCollectionPlans(projectId: string) {
+  return request<CollectionPlan[]>(`/api/projects/${projectId}/collection-plans`);
+}
+
+export async function createCollectionPlan(input: CreateCollectionPlanInput) {
+  return request<CollectionPlan>("/api/collection-plans", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
 }
 
 // ─── Analysis Runs ────────────────────────────────────────────────────────────
@@ -256,8 +301,17 @@ export async function fetchReport(id: string): Promise<RunReport> {
 
 // ─── 内部工具 ──────────────────────────────────────────────────────────────────
 
+export function buildQueryString(params: Record<string, string | number | boolean | undefined>) {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) qs.set(key, String(value));
+  }
+  const query = qs.toString();
+  return query ? `?${query}` : "";
+}
+
 function toQueryString(params: PageParams) {
-  return `?page=${params.page}&pageSize=${params.pageSize}`;
+  return buildQueryString({ page: params.page, pageSize: params.pageSize });
 }
 
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {

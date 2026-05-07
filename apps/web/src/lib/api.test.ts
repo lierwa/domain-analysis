@@ -14,11 +14,18 @@ import {
   fetchRunCrawlTasks,
   generateRunReport,
   retryAnalysisRun,
-  startAnalysisRun
+  startAnalysisRun,
+  buildQueryString
 } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("collection plan api helpers", () => {
+  it("keeps empty query strings empty", () => {
+    expect(buildQueryString({})).toBe("");
+  });
 });
 
 describe("analysis project API client", () => {

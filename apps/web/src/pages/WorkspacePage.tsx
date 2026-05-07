@@ -10,6 +10,7 @@ import {
   type CreateAnalysisRunInput
 } from "../lib/api";
 import { formatRelativeTime } from "../lib/format";
+import { CollectionPlansPanel } from "./CollectionPlansPanel";
 import { RunDetail } from "./RunDetail";
 
 const PAGE_SIZE = 20;
@@ -87,7 +88,10 @@ export function WorkspacePage() {
           />
         )}
         {!showForm && selectedRun && (
-          <RunDetail run={selectedRun} onRefresh={() => queryClient.invalidateQueries({ queryKey: ["analysis-runs"] })} />
+          <div className="flex flex-col gap-4">
+            <RunDetail run={selectedRun} onRefresh={() => queryClient.invalidateQueries({ queryKey: ["analysis-runs"] })} />
+            <CollectionPlansPanel projectId={selectedRun.projectId} />
+          </div>
         )}
         {!showForm && !selectedRun && hasRuns && (
           <div className="flex h-full items-center justify-center text-sm text-muted">
