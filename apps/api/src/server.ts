@@ -22,7 +22,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   });
 
   await registerHealthRoutes(app);
-  await registerModuleRoutes(app);
+  await registerModuleRoutes(app, db);
   await registerAnalysisRoutes(app, db);
 
   app.setErrorHandler((error, _request, reply) => {
