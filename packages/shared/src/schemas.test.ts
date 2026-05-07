@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   analysisProjectSchema,
   analysisRunSchema,
+  createCollectionPlanInputSchema,
   createAnalysisRunInputSchema,
   runContentSchema,
   sourceSchema
@@ -93,5 +94,36 @@ describe("analysis domain schemas", () => {
     });
 
     expect(result.analysisRunId).toBe("run_1");
+  });
+});
+
+describe("createCollectionPlanInputSchema", () => {
+  it("defaults conservative collection options", () => {
+    const input = createCollectionPlanInputSchema.parse({
+      projectId: "proj_1",
+      name: "AI search monitoring",
+      includeKeywords: ["AI search"],
+      language: "en",
+      market: "US"
+    });
+
+    expect(input.platform).toBe("reddit");
+    expect(input.excludeKeywords).toEqual([]);
+    expect(input.cadence).toBe("daily");
+    expect(input.batchLimit).toBe(100);
+    expect(input.maxRunsPerDay).toBe(4);
+  });
+
+  it("rejects unsupported cadence", () => {
+    expect(() =>
+      createCollectionPlanInputSchema.parse({
+        projectId: "proj_1",
+        name: "Bad cadence",
+        includeKeywords: ["AI search"],
+        language: "en",
+        market: "US",
+        cadence: "every_second"
+      })
+    ).toThrow();
   });
 });

@@ -28,8 +28,16 @@ export const analysisRunStatuses = [
 export const analysisReportTypes = ["run_summary", "content_opportunities", "keyword_analysis"] as const;
 export const projectStatuses = ["active", "paused", "archived"] as const;
 
+// WHY: collection plan 表达长期后台采集意图，避免把一次 analysis run 当成定时任务配置。
+export const collectionPlanStatuses = ["active", "paused", "archived"] as const;
+export const collectionCadences = ["manual", "hourly", "daily", "weekly"] as const;
+export const collectionRunTriggers = ["manual", "scheduled"] as const;
+
 export type TaskStatus = (typeof taskStatuses)[number];
 export type Platform = (typeof platforms)[number];
 export type AnalysisRunStatus = (typeof analysisRunStatuses)[number];
 export type AnalysisReportType = (typeof analysisReportTypes)[number];
 export type ProjectStatus = (typeof projectStatuses)[number];
+export type CollectionPlanStatus = (typeof collectionPlanStatuses)[number];
+export type CollectionCadence = (typeof collectionCadences)[number];
+export type CollectionRunTrigger = (typeof collectionRunTriggers)[number];

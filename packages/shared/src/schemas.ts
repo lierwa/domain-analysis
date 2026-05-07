@@ -2,6 +2,9 @@ import { z } from "zod";
 import {
   analysisReportTypes,
   analysisRunStatuses,
+  collectionCadences,
+  collectionPlanStatuses,
+  collectionRunTriggers,
   platforms,
   projectStatuses,
   taskStatuses
@@ -55,6 +58,40 @@ export const analysisProjectSchema = z.object({
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema
 });
+
+export const collectionPlanSchema = z.object({
+  id: idSchema,
+  projectId: idSchema,
+  name: z.string().min(1).max(160),
+  status: z.enum(collectionPlanStatuses),
+  platform: z.literal("reddit"),
+  includeKeywords: z.array(z.string().min(1)).min(1),
+  excludeKeywords: z.array(z.string().min(1)),
+  language: z.string().min(2).max(12),
+  market: z.string().min(2).max(64),
+  cadence: z.enum(collectionCadences),
+  batchLimit: z.number().int().min(1).max(500),
+  maxRunsPerDay: z.number().int().min(1).max(24),
+  lastRunAt: isoDateSchema.optional(),
+  nextRunAt: isoDateSchema.optional(),
+  createdAt: isoDateSchema,
+  updatedAt: isoDateSchema
+});
+
+export const createCollectionPlanInputSchema = z.object({
+  projectId: idSchema,
+  name: z.string().min(1).max(160),
+  platform: z.literal("reddit").default("reddit"),
+  includeKeywords: z.array(z.string().min(1)).min(1),
+  excludeKeywords: z.array(z.string().min(1)).default([]),
+  language: z.string().min(2).max(12),
+  market: z.string().min(2).max(64),
+  cadence: z.enum(collectionCadences).default("daily"),
+  batchLimit: z.number().int().min(1).max(500).default(100),
+  maxRunsPerDay: z.number().int().min(1).max(24).default(4)
+});
+
+export const collectionRunTriggerSchema = z.enum(collectionRunTriggers);
 
 export const analysisRunSchema = z.object({
   id: idSchema,
@@ -119,6 +156,9 @@ export const createAnalysisRunInputSchema = z.object({
 });
 
 export type AnalysisProjectDto = z.infer<typeof analysisProjectSchema>;
+export type CollectionPlanDto = z.infer<typeof collectionPlanSchema>;
+export type CreateCollectionPlanInput = z.infer<typeof createCollectionPlanInputSchema>;
+export type CollectionRunTriggerDto = z.infer<typeof collectionRunTriggerSchema>;
 export type AnalysisRunDto = z.infer<typeof analysisRunSchema>;
 export type RunContentDto = z.infer<typeof runContentSchema>;
 export type RunReportDto = z.infer<typeof runReportSchema>;
