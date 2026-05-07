@@ -34,6 +34,10 @@ export function createCollectionPlanService(db: AppDb) {
       return planRepo.listByProject(projectId);
     },
 
+    async listDuePlans(nowIso: string, limit: number) {
+      return planRepo.listDue(nowIso, limit);
+    },
+
     async pausePlan(id: string) {
       return planRepo.update(id, { status: "paused" });
     },
