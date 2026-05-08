@@ -1,7 +1,6 @@
 import type { Platform } from "@domain-analysis/shared";
-import { createRedditAdapter } from "./adapters/reddit";
 import type { CollectedRawContent, CollectionQuery } from "./adapters/types";
-import { createXAdapter } from "./adapters/x";
+import { createBrowserCollectionAdapter } from "./adapters/browserRegistry";
 
 export type JobKind = "crawl" | "clean" | "analyze" | "report";
 
@@ -38,7 +37,7 @@ export async function runJob(job: WorkerJob): Promise<JobResult> {
 
 async function runCrawlJob(job: WorkerJob): Promise<JobResult> {
   const payload = parseCrawlPayload(job.payload);
-  const adapter = payload.platform === "reddit" ? createRedditAdapter() : createXAdapter();
+  const adapter = createBrowserCollectionAdapter(payload.platform);
   const items = await adapter.collect(payload.query);
 
   return {
@@ -58,7 +57,7 @@ function finishJob(job: WorkerJob, message: string): JobResult {
 }
 
 function parseCrawlPayload(payload: Record<string, unknown>): CrawlJobPayload {
-  if (payload.platform !== "reddit" && payload.platform !== "x") {
+  if (payload.platform !== "reddit" && payload.platform !== "x" && payload.platform !== "youtube") {
     throw new Error("unsupported_crawl_platform");
   }
 

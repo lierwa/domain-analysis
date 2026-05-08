@@ -1,5 +1,6 @@
 import { and, asc, eq, lte } from "drizzle-orm";
-import type { CollectionCadence, CollectionPlanStatus, Platform } from "@domain-analysis/shared";
+import { randomUUID } from "node:crypto";
+import type { BrowserMode, CollectionCadence, CollectionPlanStatus, Platform } from "@domain-analysis/shared";
 import type { AppDb } from "./client";
 import { collectionPlans } from "./schema";
 
@@ -7,6 +8,10 @@ export interface CreateCollectionPlanInput {
   projectId: string;
   name: string;
   platform: "reddit";
+  platforms?: Platform[];
+  browserMode?: BrowserMode;
+  maxScrollsPerPlatform?: number;
+  maxItemsPerPlatform?: number;
   includeKeywords: string[];
   excludeKeywords: string[];
   language: string;
@@ -34,6 +39,10 @@ export function createCollectionPlanRepository(db: AppDb) {
           name: input.name,
           status: "active",
           platform: input.platform,
+          platforms: input.platforms ?? ["reddit"],
+          browserMode: input.browserMode ?? "local_profile",
+          maxScrollsPerPlatform: input.maxScrollsPerPlatform ?? 5,
+          maxItemsPerPlatform: input.maxItemsPerPlatform ?? input.batchLimit,
           includeKeywords: input.includeKeywords,
           excludeKeywords: input.excludeKeywords,
           language: input.language,
@@ -92,7 +101,7 @@ export function computeNextRunAt(from: Date, cadence: CollectionCadence): string
 }
 
 function createId(prefix: string) {
-  return `${prefix}_${crypto.randomUUID()}`;
+  return `${prefix}_${randomUUID()}`;
 }
 
 function requireRow<TRow>(row: TRow | undefined, message: string): TRow {
@@ -107,6 +116,10 @@ function mapPlan(row: typeof collectionPlans.$inferSelect) {
     name: row.name,
     status: row.status as CollectionPlanStatus,
     platform: row.platform as Platform,
+    platforms: ((row.platforms as Platform[] | null) ?? [row.platform as Platform]).filter(Boolean),
+    browserMode: row.browserMode as BrowserMode,
+    maxScrollsPerPlatform: row.maxScrollsPerPlatform,
+    maxItemsPerPlatform: row.maxItemsPerPlatform,
     includeKeywords: row.includeKeywords as string[],
     excludeKeywords: row.excludeKeywords as string[],
     language: row.language,

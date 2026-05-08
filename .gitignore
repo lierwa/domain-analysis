@@ -5,6 +5,8 @@ dist/
 *.log
 data/*
 !data/.gitkeep
+packages/worker/data/*
+!packages/worker/data/.gitkeep
 coverage/
 .vite/
 storage/

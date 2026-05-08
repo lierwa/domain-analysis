@@ -2,9 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createAnalysisProjectRepository } from "./analysisRepositories";
-import { createDb, initializeDatabase } from "./client";
-import { createCollectionPlanRepository } from "./collectionPlanRepository";
+import {
+  createAnalysisProjectRepository,
+  createCollectionPlanRepository,
+  createDb,
+  initializeDatabase
+} from "./index";
 
 let tempDir: string;
 let databaseUrl: string;

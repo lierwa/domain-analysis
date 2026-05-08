@@ -6,10 +6,12 @@ export const taskStatuses = [
   "no_content",
   "paused",
   "login_required",
+  "blocked",
   "rate_limited",
   "parse_failed"
 ] as const;
 export const platforms = ["reddit", "x", "youtube", "tiktok", "pinterest", "web"] as const;
+export const browserModes = ["headless", "headful", "local_profile"] as const;
 
 // WHY: analysis run 状态机完整描述一次分析的生命周期，避免前后端各自定义导致不一致。
 export const analysisRunStatuses = [
@@ -35,6 +37,7 @@ export const collectionRunTriggers = ["manual", "scheduled"] as const;
 
 export type TaskStatus = (typeof taskStatuses)[number];
 export type Platform = (typeof platforms)[number];
+export type BrowserMode = (typeof browserModes)[number];
 export type AnalysisRunStatus = (typeof analysisRunStatuses)[number];
 export type AnalysisReportType = (typeof analysisReportTypes)[number];
 export type ProjectStatus = (typeof projectStatuses)[number];

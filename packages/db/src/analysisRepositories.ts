@@ -1,5 +1,13 @@
-import { count, desc, eq } from "drizzle-orm";
-import type { AnalysisReportType, AnalysisRunStatus, ProjectStatus } from "@domain-analysis/shared";
+import { randomUUID } from "node:crypto";
+import { and, count, desc, eq, inArray } from "drizzle-orm";
+import type {
+  AnalysisReportType,
+  AnalysisRunStatus,
+  BrowserMode,
+  Platform,
+  ProjectStatus,
+  TaskStatus
+} from "@domain-analysis/shared";
 import type { AppDb } from "./client";
 import type { PageInput, PageMeta } from "./repositories";
 import { analysisProjects, analysisRuns, crawlTasks, reports } from "./schema";
@@ -30,6 +38,10 @@ export interface CreateAnalysisRunInput {
   language: string;
   market: string;
   limit: number;
+  platforms?: Platform[];
+  browserMode?: BrowserMode;
+  maxScrollsPerPlatform?: number;
+  maxItemsPerPlatform?: number;
 }
 
 export interface UpdateAnalysisRunInput {
@@ -119,6 +131,10 @@ export function createAnalysisRunRepository(db: AppDb) {
           includeKeywords: input.includeKeywords,
           excludeKeywords: input.excludeKeywords,
           platform: "reddit",
+          platforms: input.platforms ?? ["reddit"],
+          browserMode: input.browserMode ?? "local_profile",
+          maxScrollsPerPlatform: input.maxScrollsPerPlatform ?? 5,
+          maxItemsPerPlatform: input.maxItemsPerPlatform ?? input.limit,
           limit: input.limit,
           collectedCount: 0,
           validCount: 0,
@@ -184,6 +200,19 @@ export function createAnalysisRunRepository(db: AppDb) {
         .where(eq(crawlTasks.analysisRunId, runId))
         .orderBy(desc(crawlTasks.createdAt));
       return rows.map(mapCrawlTask);
+    },
+
+    async listStaleCollecting(cutoffIso: string) {
+      const rows = await db
+        .select()
+        .from(analysisRuns)
+        .where(and(eq(analysisRuns.status, "collecting"), inArray(analysisRuns.status, ["collecting"])));
+      return rows
+        .filter((row) => {
+          const startedAt = normalizeDateTime(row.startedAt);
+          return startedAt ? startedAt <= cutoffIso : false;
+        })
+        .map(mapRun);
     }
   };
 }
@@ -237,7 +266,7 @@ export function createRunReportRepository(db: AppDb) {
 // ─── 内部工具函数 ──────────────────────────────────────────────────────────────
 
 function createId(prefix: string) {
-  return `${prefix}_${crypto.randomUUID()}`;
+  return `${prefix}_${randomUUID()}`;
 }
 
 function requireRow<TRow>(row: TRow | undefined, message: string): TRow {
@@ -300,6 +329,10 @@ function mapRun(row: AnalysisRunRow) {
     includeKeywords: (row.includeKeywords as string[]) ?? [],
     excludeKeywords: (row.excludeKeywords as string[]) ?? [],
     platform: row.platform as "reddit",
+    platforms: ((row.platforms as Platform[] | null) ?? [row.platform as Platform]).filter(Boolean),
+    browserMode: row.browserMode as BrowserMode,
+    maxScrollsPerPlatform: row.maxScrollsPerPlatform,
+    maxItemsPerPlatform: row.maxItemsPerPlatform,
     limit: row.limit,
     collectedCount: row.collectedCount,
     validCount: row.validCount,
@@ -317,14 +350,20 @@ function mapRun(row: AnalysisRunRow) {
 function mapCrawlTask(row: CrawlTaskRow) {
   return {
     id: row.id,
-    analysisRunId: row.analysisRunId ?? undefined,
+    analysisRunId: row.analysisRunId,
     sourceId: row.sourceId,
-    status: row.status,
+    platform: row.platform as Platform,
+    status: row.status as TaskStatus,
     targetCount: row.targetCount,
     collectedCount: row.collectedCount,
     validCount: row.validCount,
     duplicateCount: row.duplicateCount,
     errorMessage: row.errorMessage ?? undefined,
+    pagesCollected: row.pagesCollected,
+    lastCursor: row.lastCursor ?? undefined,
+    stopReason: row.stopReason ?? undefined,
+    lastRequestAt: normalizeDateTime(row.lastRequestAt),
+    nextRequestAt: normalizeDateTime(row.nextRequestAt),
     startedAt: normalizeDateTime(row.startedAt),
     finishedAt: normalizeDateTime(row.finishedAt),
     createdAt: normalizeDateTime(row.createdAt) ?? row.createdAt,

@@ -16,6 +16,7 @@ export type AnalysisRunStatus =
 export type ProjectStatus = "active" | "paused" | "archived";
 export type AnalysisReportType = "run_summary" | "content_opportunities" | "keyword_analysis";
 export type CollectionCadence = "manual" | "hourly" | "daily" | "weekly";
+export type BrowserMode = "headless" | "headful" | "local_profile";
 
 export interface AnalysisProject {
   id: string;
@@ -30,6 +31,18 @@ export interface AnalysisProject {
   updatedAt: string;
 }
 
+export interface Source {
+  id: string;
+  platform: Platform;
+  name: string;
+  enabled: boolean;
+  requiresLogin: boolean;
+  crawlerType: "cheerio" | "playwright";
+  defaultLimit: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AnalysisRun {
   id: string;
   projectId: string;
@@ -38,6 +51,10 @@ export interface AnalysisRun {
   includeKeywords: string[];
   excludeKeywords: string[];
   platform: "reddit";
+  platforms: Platform[];
+  browserMode: BrowserMode;
+  maxScrollsPerPlatform: number;
+  maxItemsPerPlatform: number;
   limit: number;
   collectedCount: number;
   validCount: number;
@@ -57,6 +74,10 @@ export interface CollectionPlan {
   name: string;
   status: ProjectStatus;
   platform: "reddit";
+  platforms: Platform[];
+  browserMode: BrowserMode;
+  maxScrollsPerPlatform: number;
+  maxItemsPerPlatform: number;
   includeKeywords: string[];
   excludeKeywords: string[];
   language: string;
@@ -89,12 +110,26 @@ export interface RunCrawlTask {
   id: string;
   analysisRunId?: string;
   sourceId: string;
+  platform: Platform;
   status: string;
   targetCount: number;
   collectedCount: number;
   validCount: number;
   duplicateCount: number;
   errorMessage?: string;
+  pagesCollected: number;
+  lastCursor?: string;
+  stopReason?:
+    | "target_reached"
+    | "exhausted"
+    | "rate_limited"
+    | "login_required"
+    | "blocked"
+    | "parse_failed"
+    | "error"
+    | "cancelled";
+  lastRequestAt?: string;
+  nextRequestAt?: string;
   startedAt?: string;
   finishedAt?: string;
   createdAt: string;
@@ -140,6 +175,10 @@ export interface CreateAnalysisRunInput {
   language: string;
   market: string;
   limit?: number;
+  platforms?: Platform[];
+  browserMode?: BrowserMode;
+  maxScrollsPerPlatform?: number;
+  maxItemsPerPlatform?: number;
 }
 
 export interface CreateCollectionPlanInput {
@@ -152,9 +191,18 @@ export interface CreateCollectionPlanInput {
   cadence: CollectionCadence;
   batchLimit: number;
   maxRunsPerDay: number;
+  platforms: Platform[];
+  browserMode: BrowserMode;
+  maxScrollsPerPlatform: number;
+  maxItemsPerPlatform: number;
 }
 
 // ─── Analysis Projects ────────────────────────────────────────────────────────
+
+export async function fetchSources(): Promise<Source[]> {
+  const data = await request<{ items: Source[] }>("/api/sources");
+  return data.items;
+}
 
 export async function fetchAnalysisProjects(
   params: PageParams = { page: 1, pageSize: 20 }

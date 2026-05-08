@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   analysisReportTypes,
   analysisRunStatuses,
+  browserModes,
   collectionCadences,
   collectionPlanStatuses,
   collectionRunTriggers,
@@ -12,6 +13,16 @@ import {
 
 const isoDateSchema = z.string().datetime();
 const idSchema = z.string().min(1);
+const crawlStopReasonSchema = z.enum([
+  "target_reached",
+  "exhausted",
+  "rate_limited",
+  "login_required",
+  "blocked",
+  "parse_failed",
+  "error",
+  "cancelled"
+]);
 
 // WHY: source 是平台元数据基础，未来可扩展多平台；当前采集 service 只启动 Reddit。
 export const sourceSchema = z.object({
@@ -30,12 +41,18 @@ export const crawlTaskSchema = z.object({
   id: idSchema,
   analysisRunId: idSchema,
   sourceId: idSchema,
+  platform: z.enum(platforms).default("reddit"),
   status: z.enum(taskStatuses),
   targetCount: z.number().int().min(1),
   collectedCount: z.number().int().min(0),
   validCount: z.number().int().min(0),
   duplicateCount: z.number().int().min(0),
   errorMessage: z.string().optional(),
+  pagesCollected: z.number().int().min(0).default(0),
+  lastCursor: z.string().optional(),
+  stopReason: crawlStopReasonSchema.optional(),
+  lastRequestAt: isoDateSchema.optional(),
+  nextRequestAt: isoDateSchema.optional(),
   startedAt: isoDateSchema.optional(),
   finishedAt: isoDateSchema.optional(),
   createdAt: isoDateSchema,
@@ -65,6 +82,10 @@ export const collectionPlanSchema = z.object({
   name: z.string().min(1).max(160),
   status: z.enum(collectionPlanStatuses),
   platform: z.literal("reddit"),
+  platforms: z.array(z.enum(platforms)).min(1).default(["reddit"]),
+  browserMode: z.enum(browserModes).default("local_profile"),
+  maxScrollsPerPlatform: z.number().int().min(1).max(50).default(5),
+  maxItemsPerPlatform: z.number().int().min(1).max(500).default(50),
   includeKeywords: z.array(z.string().min(1)).min(1),
   excludeKeywords: z.array(z.string().min(1)),
   language: z.string().min(2).max(12),
@@ -82,6 +103,10 @@ export const createCollectionPlanInputSchema = z.object({
   projectId: idSchema,
   name: z.string().min(1).max(160),
   platform: z.literal("reddit").default("reddit"),
+  platforms: z.array(z.enum(platforms)).min(1).default(["reddit", "youtube", "x"]),
+  browserMode: z.enum(browserModes).default("local_profile"),
+  maxScrollsPerPlatform: z.number().int().min(1).max(50).default(5),
+  maxItemsPerPlatform: z.number().int().min(1).max(500).default(50),
   includeKeywords: z.array(z.string().min(1)).min(1),
   excludeKeywords: z.array(z.string().min(1)).default([]),
   language: z.string().min(2).max(12),
@@ -101,6 +126,10 @@ export const analysisRunSchema = z.object({
   includeKeywords: z.array(z.string().min(1)),
   excludeKeywords: z.array(z.string().min(1)),
   platform: z.literal("reddit"),
+  platforms: z.array(z.enum(platforms)).min(1).default(["reddit"]),
+  browserMode: z.enum(browserModes).default("local_profile"),
+  maxScrollsPerPlatform: z.number().int().min(1).max(50).default(5),
+  maxItemsPerPlatform: z.number().int().min(1).max(500).default(50),
   limit: z.number().int().min(1).max(500),
   collectedCount: z.number().int().min(0),
   validCount: z.number().int().min(0),
@@ -152,7 +181,13 @@ export const createAnalysisRunInputSchema = z.object({
   excludeKeywords: z.array(z.string().min(1)).default([]),
   language: z.string().min(2).max(12),
   market: z.string().min(2).max(64),
+  // WHY: Reddit v2 adapter 会按 100/页慢速分页，500 表示累计目标，不是单次请求数量。
   limit: z.number().int().min(1).max(500).default(100)
+    .describe("Legacy per-run target. Browser crawlers use maxItemsPerPlatform for each platform."),
+  platforms: z.array(z.enum(platforms)).min(1).default(["reddit", "youtube", "x"]),
+  browserMode: z.enum(browserModes).default("local_profile"),
+  maxScrollsPerPlatform: z.number().int().min(1).max(50).default(5),
+  maxItemsPerPlatform: z.number().int().min(1).max(500).default(50)
 });
 
 export type AnalysisProjectDto = z.infer<typeof analysisProjectSchema>;

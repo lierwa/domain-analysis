@@ -29,7 +29,10 @@ export function CollectionPlansPanel({ projectId }: { projectId: string }) {
             <span className="rounded-full bg-panel px-2 py-0.5 text-xs">{plan.status}</span>
           </div>
           <p className="mt-2 text-xs text-muted">
-            {plan.platform} · {plan.cadence} · {plan.batchLimit} per batch
+            {(plan.platforms?.length ? plan.platforms : [plan.platform]).join(", ")} · {plan.cadence} · {plan.batchLimit} per batch
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            Browser: {plan.browserMode} · {plan.maxScrollsPerPlatform} scrolls · {plan.maxItemsPerPlatform} items/platform
           </p>
           <p className="mt-1 text-xs text-muted">
             Next run: {plan.nextRunAt ? formatDateTime(plan.nextRunAt) : "manual only"}

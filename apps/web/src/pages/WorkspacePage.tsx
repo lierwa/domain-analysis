@@ -7,13 +7,22 @@ import {
   fetchAnalysisRuns,
   startAnalysisRun,
   type AnalysisRun,
-  type CreateAnalysisRunInput
+  type CreateAnalysisRunInput,
+  type Platform
 } from "../lib/api";
 import { formatRelativeTime } from "../lib/format";
 import { CollectionPlansPanel } from "./CollectionPlansPanel";
 import { RunDetail } from "./RunDetail";
 
 const PAGE_SIZE = 20;
+
+// WHY: 只有这些状态的 run 才需要持续轮询，其他状态已是终态或静态，轮询无意义且浪费资源。
+const ACTIVE_RUN_STATUSES = new Set(["collecting", "analyzing", "reporting"]);
+const browserPlatforms: Array<{ value: Platform; label: string }> = [
+  { value: "reddit", label: "Reddit" },
+  { value: "youtube", label: "YouTube" },
+  { value: "x", label: "X" }
+];
 
 export function WorkspacePage() {
   const [page, setPage] = useState(1);
@@ -24,7 +33,12 @@ export function WorkspacePage() {
   const runsQuery = useQuery({
     queryKey: ["analysis-runs", page],
     queryFn: () => fetchAnalysisRuns({ page, pageSize: PAGE_SIZE }),
-    refetchInterval: 5000 // WHY: 采集过程中 status 会变，自动轮询保持列表最新。
+    // WHY: 只有当列表中存在活跃 run 时才轮询；全部为终态时停止，避免 2 核 2G 环境空转。
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? [];
+      const hasActive = items.some((r) => ACTIVE_RUN_STATUSES.has(r.status));
+      return hasActive ? 5000 : false;
+    }
   });
 
   const selectedRun = runsQuery.data?.items.find((r) => r.id === selectedRunId);
@@ -172,7 +186,11 @@ function StartAnalysisForm({
     excludeKeywords: [],
     language: "en",
     market: "US",
-    limit: 100
+    limit: 100,
+    platforms: ["reddit", "youtube", "x"],
+    browserMode: "local_profile",
+    maxScrollsPerPlatform: 5,
+    maxItemsPerPlatform: 50
   });
   const [keywordsInput, setKeywordsInput] = useState("");
   const [excludeInput, setExcludeInput] = useState("");
@@ -187,6 +205,7 @@ function StartAnalysisForm({
       .map((k) => k.trim())
       .filter(Boolean);
     if (includeKeywords.length === 0) return;
+    if (!form.platforms?.length) return;
 
     const excludeKeywords = excludeInput
       .split(",")
@@ -203,9 +222,7 @@ function StartAnalysisForm({
   return (
     <div className="mx-auto max-w-xl">
       <h2 className="mb-1 text-lg font-semibold">Start a social intelligence analysis</h2>
-      <p className="mb-6 text-sm text-muted">
-        Collect public Reddit posts and generate an analysis report.
-      </p>
+      <p className="mb-6 text-sm text-muted">Collect public browser-visible content across Reddit, YouTube, and X.</p>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-5">
         <Field label="Analysis goal" required>
@@ -240,6 +257,36 @@ function StartAnalysisForm({
           />
         </Field>
 
+        <Field label="Platforms" required>
+          <div className="grid grid-cols-3 gap-2">
+            {browserPlatforms.map((platform) => {
+              const checked = form.platforms?.includes(platform.value) ?? false;
+              return (
+                <label
+                  key={platform.value}
+                  className={`flex items-center gap-2 rounded border px-3 py-2 text-sm ${
+                    checked ? "border-ink bg-panel" : "border-line"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(event) => {
+                      setForm((current) => {
+                        const next = new Set(current.platforms ?? []);
+                        if (event.target.checked) next.add(platform.value);
+                        else next.delete(platform.value);
+                        return { ...current, platforms: Array.from(next) };
+                      });
+                    }}
+                  />
+                  {platform.label}
+                </label>
+              );
+            })}
+          </div>
+        </Field>
+
         <div className="grid grid-cols-3 gap-4">
           <Field label="Language">
             <input
@@ -257,13 +304,45 @@ function StartAnalysisForm({
               className="input-base w-full"
             />
           </Field>
-          <Field label="Reddit limit">
+          <Field label="Items / platform" hint="Browser crawler target per selected platform">
             <input
               type="number"
               min={1}
               max={500}
-              value={form.limit}
-              onChange={(e) => setForm((f) => ({ ...f, limit: Number(e.target.value) }))}
+              value={form.maxItemsPerPlatform}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  maxItemsPerPlatform: Math.min(500, Number(e.target.value)),
+                  limit: Math.min(500, Number(e.target.value))
+                }))
+              }
+              className="input-base w-full"
+            />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Browser mode">
+            <select
+              value={form.browserMode}
+              onChange={(e) => setForm((f) => ({ ...f, browserMode: e.target.value as CreateAnalysisRunInput["browserMode"] }))}
+              className="input-base w-full"
+            >
+              <option value="local_profile">Local profile</option>
+              <option value="headful">Headful</option>
+              <option value="headless">Headless</option>
+            </select>
+          </Field>
+          <Field label="Max scrolls">
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={form.maxScrollsPerPlatform}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, maxScrollsPerPlatform: Math.min(50, Number(e.target.value)) }))
+              }
               className="input-base w-full"
             />
           </Field>
@@ -299,10 +378,12 @@ function StartAnalysisForm({
 function Field({
   label,
   required,
+  hint,
   children
 }: {
   label: string;
   required?: boolean;
+  hint?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -312,6 +393,7 @@ function Field({
         {required && <span className="ml-0.5 text-red-500">*</span>}
       </span>
       {children}
+      {hint && <span className="text-xs text-muted">{hint}</span>}
     </label>
   );
 }

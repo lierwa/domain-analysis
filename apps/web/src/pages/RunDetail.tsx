@@ -53,7 +53,7 @@ export function RunDetail({ run, onRefresh }: RunDetailProps) {
       {/* Stage content */}
       <div className="mt-2">
         {stage === "setup" && <SetupTab run={run} />}
-        {stage === "collection" && <CollectionTab runId={run.id} />}
+        {stage === "collection" && <CollectionTab runId={run.id} runStatus={run.status} />}
         {stage === "content" && <RunContentPanel runId={run.id} />}
         {stage === "insights" && <InsightsTab />}
         {stage === "report" && <ReportTab run={run} onRefresh={handleRefresh} />}
@@ -135,13 +135,31 @@ function SetupTab({ run }: { run: AnalysisRun }) {
   );
 }
 
+// WHY: 把机器错误码映射为用户可读文案，减少开发日志刷屏和用户困惑。
+const CRAWL_ERROR_MESSAGES: Record<string, string> = {
+  reddit_public_rate_limited_403:
+    "Reddit rate limited this request (403). Please wait a few minutes before retrying.",
+  reddit_public_rate_limited_429:
+    "Reddit rate limited this request (429 Too Many Requests). Please retry later.",
+  reddit_source_unavailable:
+    "Reddit source is currently disabled. Check source configuration.",
+  run_not_found: "Analysis run not found. It may have been deleted.",
+  unknown_crawl_error: "An unexpected error occurred during collection. Check server logs."
+};
+
+function humanizeCrawlError(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  return CRAWL_ERROR_MESSAGES[raw] ?? raw;
+}
+
 // ─── Collection Tab ───────────────────────────────────────────────────────────
 
-function CollectionTab({ runId }: { runId: string }) {
+function CollectionTab({ runId, runStatus }: { runId: string; runStatus: AnalysisRun["status"] }) {
   const tasksQuery = useQuery({
     queryKey: ["run-crawl-tasks", runId],
     queryFn: () => fetchRunCrawlTasks(runId),
-    refetchInterval: 3000
+    // WHY: 只有 collecting 阶段才需要轮询 crawl tasks；失败或完成后停止无意义请求。
+    refetchInterval: runStatus === "collecting" ? 3000 : false
   });
 
   if (tasksQuery.isLoading) return <p className="text-sm text-muted">Loading…</p>;
@@ -154,16 +172,30 @@ function CollectionTab({ runId }: { runId: string }) {
       {tasksQuery.data.map((task) => (
         <div key={task.id} className="rounded-lg border border-line p-4">
           <div className="flex items-center justify-between">
-            <span className="font-mono text-xs text-muted">#{shortId(task.id)}</span>
+            <div className="flex items-center gap-2">
+              <span className="rounded bg-panel px-2 py-0.5 text-xs font-medium uppercase">{task.platform}</span>
+              <span className="font-mono text-xs text-muted">#{shortId(task.id)}</span>
+            </div>
             <StatusPill status={task.status} />
           </div>
-          <div className="mt-3 grid grid-cols-3 gap-3 text-center text-sm">
+          <div className="mt-3 grid grid-cols-3 gap-3 text-center text-sm md:grid-cols-5">
             <Metric label="Target" value={task.targetCount} />
             <Metric label="Collected" value={task.collectedCount} />
             <Metric label="Valid" value={task.validCount} />
+            <Metric label="Pages" value={task.pagesCollected ?? 0} />
+            <Metric label="Dupes" value={task.duplicateCount} />
           </div>
+          {(task.stopReason || task.nextRequestAt) && (
+            <div className="mt-3 rounded bg-panel px-3 py-2 text-xs text-muted">
+              {task.stopReason && <span>Stop reason: {humanizeStopReason(task.stopReason)}</span>}
+              {task.stopReason && task.nextRequestAt && <span> · </span>}
+              {task.nextRequestAt && <span>Next request: {formatDateTime(task.nextRequestAt)}</span>}
+            </div>
+          )}
           {task.errorMessage && (
-            <p className="mt-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{task.errorMessage}</p>
+            <p className="mt-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">
+              {humanizeCrawlError(task.errorMessage)}
+            </p>
           )}
           {task.startedAt && (
             <p className="mt-2 text-xs text-muted">Started {formatDateTime(task.startedAt)}</p>
@@ -172,6 +204,20 @@ function CollectionTab({ runId }: { runId: string }) {
       ))}
     </div>
   );
+}
+
+function humanizeStopReason(reason: string) {
+  const labels: Record<string, string> = {
+    target_reached: "Target reached",
+    exhausted: "No more Reddit pages",
+    rate_limited: "Rate limited",
+    login_required: "Login required",
+    blocked: "Blocked by platform",
+    parse_failed: "Parse failed",
+    error: "Crawler error",
+    cancelled: "Cancelled"
+  };
+  return labels[reason] ?? reason;
 }
 
 function StatusPill({ status }: { status: string }) {
@@ -185,7 +231,9 @@ function StatusPill({ status }: { status: string }) {
             ? "bg-green-100 text-green-700"
             : status === "no_content"
               ? "bg-yellow-100 text-yellow-700"
-              : "bg-red-100 text-red-700"
+              : status === "login_required" || status === "blocked"
+                ? "bg-orange-100 text-orange-700"
+                : "bg-red-100 text-red-700"
       }`}
     >
       {status}

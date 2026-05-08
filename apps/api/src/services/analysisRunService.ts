@@ -7,21 +7,29 @@ import {
   createSourceRepository,
   type AppDb
 } from "@domain-analysis/db";
-import type { AnalysisRunStatus } from "@domain-analysis/shared";
-import { TaskQueue } from "@domain-analysis/worker";
-
-const queue = new TaskQueue();
+import type { AnalysisRunStatus, BrowserMode, Platform } from "@domain-analysis/shared";
+import { BullMqCrawlQueue, type CrawlJobQueue } from "@domain-analysis/worker";
 
 // WHY: service 层编排业务流程，route 只做 HTTP 参数解析，repository 只做数据读写。
-// TRADE-OFF: MVP 仍用进程内 TaskQueue；进程重启会丢 running 任务，后续再换持久化队列。
+// TRADE-OFF: API 只入队轻量任务，真实采集由 worker 消费；本地未配置 Redis 时启动采集会给出明确错误。
 
-export function createAnalysisRunService(db: AppDb) {
+export interface AnalysisRunServiceOptions {
+  crawlJobQueue?: CrawlJobQueue;
+}
+
+export function createAnalysisRunService(db: AppDb, options: AnalysisRunServiceOptions = {}) {
   const projectRepo = createAnalysisProjectRepository(db);
   const runRepo = createAnalysisRunRepository(db);
   const sourceRepo = createSourceRepository(db);
   const taskRepo = createCrawlTaskRepository(db);
   const contentRepo = createRawContentRepository(db);
   const reportRepo = createRunReportRepository(db);
+  let crawlJobQueue = options.crawlJobQueue;
+
+  function getCrawlJobQueue() {
+    crawlJobQueue ??= createDefaultCrawlJobQueue();
+    return crawlJobQueue;
+  }
 
   return {
     // ─── 创建 Analysis Run ────────────────────────────────────────────────────
@@ -37,6 +45,10 @@ export function createAnalysisRunService(db: AppDb) {
       language: string;
       market: string;
       limit: number;
+      platforms?: Platform[];
+      browserMode?: BrowserMode;
+      maxScrollsPerPlatform?: number;
+      maxItemsPerPlatform?: number;
     }) {
       let projectId = input.projectId;
 
@@ -63,7 +75,11 @@ export function createAnalysisRunService(db: AppDb) {
         excludeKeywords: input.excludeKeywords,
         language: input.language,
         market: input.market,
-        limit: input.limit
+        limit: input.limit,
+        platforms: input.platforms,
+        browserMode: input.browserMode,
+        maxScrollsPerPlatform: input.maxScrollsPerPlatform,
+        maxItemsPerPlatform: input.maxItemsPerPlatform
       });
 
       return run;
@@ -103,27 +119,35 @@ export function createAnalysisRunService(db: AppDb) {
       }
 
       await sourceRepo.seedDefaults();
-      const source = await sourceRepo.getByPlatform("reddit");
-      if (!source || !source.enabled) {
-        throw Object.assign(new Error("reddit_source_unavailable"), { statusCode: 503 });
+      const jobQueue = getCrawlJobQueue();
+      const platforms = normalizePlatforms(run.platforms);
+      const sources = [];
+      for (const platform of platforms) {
+        const source = await sourceRepo.getByPlatform(platform);
+        if (!source || !source.enabled) {
+          throw Object.assign(new Error(`${platform}_source_unavailable`), { statusCode: 503 });
+        }
+        sources.push(source);
       }
 
       await runRepo.update(runId, {
         status: "collecting" as AnalysisRunStatus,
         startedAt: new Date().toISOString(),
+        finishedAt: null,
         errorMessage: null
       });
 
-      const task = await taskRepo.create({
-        analysisRunId: runId,
-        sourceId: source.id,
-        targetCount: Math.min(run.limit, source.defaultLimit)
-      });
+      for (const source of sources) {
+        const task = await taskRepo.create({
+          analysisRunId: runId,
+          sourceId: source.id,
+          platform: source.platform,
+          targetCount: run.maxItemsPerPlatform ?? run.limit
+        });
 
-      await taskRepo.update(task.id, { status: "running", startedAt: new Date().toISOString() });
-
-      // WHY: 采集异步执行，API 立即返回避免慢抓取阻塞用户界面和健康检查。
-      void startCollection({ runId, taskId: task.id, run, source, taskRepo, contentRepo, runRepo, queue });
+        // WHY: API 只创建 pending task 并入队；running 必须由 worker 消费后写入，避免队列失败造成假运行。
+        await jobQueue.enqueueCrawlJob({ runId, taskId: task.id });
+      }
 
       return runRepo.getById(runId);
     },
@@ -204,91 +228,21 @@ export function createAnalysisRunService(db: AppDb) {
   };
 }
 
-// ─── 采集执行（私有）────────────────────────────────────────────────────────────
-
-async function startCollection({
-  runId,
-  taskId,
-  run,
-  source,
-  taskRepo,
-  contentRepo,
-  runRepo,
-  queue
-}: {
-  runId: string;
-  taskId: string;
-  run: { includeKeywords: string[]; excludeKeywords: string[]; limit: number; projectId: string };
-  source: { id: string; defaultLimit: number };
-  taskRepo: ReturnType<typeof createCrawlTaskRepository>;
-  contentRepo: ReturnType<typeof createRawContentRepository>;
-  runRepo: ReturnType<typeof createAnalysisRunRepository>;
-  queue: TaskQueue;
-}) {
-  try {
-    const result = await queue.add({
-      id: taskId,
-      kind: "crawl",
-      payload: {
-        platform: "reddit",
-        query: {
-          name: run.includeKeywords.join(" "),
-          includeKeywords: run.includeKeywords,
-          excludeKeywords: run.excludeKeywords,
-          language: "en",
-          limitPerRun: Math.min(run.limit, source.defaultLimit)
-        }
-      }
-    });
-
-    const collectedCount = result?.items?.length ?? 0;
-
-    const inserted = await contentRepo.createMany(
-      (result?.items ?? []).map((item) => ({
-        ...item,
-        analysisProjectId: run.projectId,
-        analysisRunId: runId,
-        crawlTaskId: taskId,
-        sourceId: source.id,
-        // WHY: matchedKeywords 记录哪些 includeKeywords 命中，便于 content tab 展示。
-        matchedKeywords: run.includeKeywords.filter((kw) =>
-          item.text.toLowerCase().includes(kw.toLowerCase())
-        )
-      }))
-    );
-
-    await taskRepo.update(taskId, {
-      status: collectedCount === 0 ? "no_content" : "success",
-      collectedCount,
-      validCount: inserted.items.length,
-      duplicateCount: inserted.duplicates,
-      errorMessage:
-        collectedCount === 0
-          ? "No public posts matched this query, or the source returned an empty result."
-          : null,
-      finishedAt: new Date().toISOString()
-    });
-
-    await runRepo.update(runId, {
-      status: "content_ready",
-      collectedCount,
-      validCount: inserted.items.length,
-      duplicateCount: inserted.duplicates,
-      finishedAt: new Date().toISOString()
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown_crawl_error";
-    await taskRepo.update(taskId, {
-      status: "failed",
-      errorMessage: message,
-      finishedAt: new Date().toISOString()
-    });
-    await runRepo.update(runId, {
-      status: "collection_failed",
-      errorMessage: message,
-      finishedAt: new Date().toISOString()
-    });
+function createDefaultCrawlJobQueue(): CrawlJobQueue {
+  const redisUrl = process.env.REDIS_URL;
+  if (!redisUrl) {
+    throw new Error("missing_REDIS_URL_for_crawl_queue");
   }
+  return new BullMqCrawlQueue({ redisUrl });
+}
+
+function normalizePlatforms(platforms: Platform[] | undefined): Platform[] {
+  const allowed = new Set<Platform>(["reddit", "youtube", "x"]);
+  const defaults: Platform[] = ["reddit", "youtube", "x"];
+  const selected = (platforms?.length ? platforms : defaults).filter((platform) =>
+    allowed.has(platform)
+  );
+  return Array.from(new Set(selected));
 }
 
 // WHY: deterministic 报告从采集数据直接生成，不依赖 AI；确保 MVP 有可用输出。

@@ -29,14 +29,7 @@ interface RedditPost {
   created_utc?: number;
 }
 
-interface RedditTokenResponse {
-  access_token?: string;
-}
-
 export function createRedditAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {
-  if (env.REDDIT_COLLECTION_MODE === "official_api") {
-    return createRedditOfficialApiAdapter(env);
-  }
   return createRedditPublicJsonAdapter(env);
 }
 
@@ -79,34 +72,6 @@ export function createRedditPublicJsonAdapter(env: NodeJS.ProcessEnv = process.e
       await crawler.run([url.toString()]);
       if (crawlError) throw crawlError;
       return items.slice(0, query.limitPerRun);
-    }
-  };
-}
-
-export function createRedditOfficialApiAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {
-  return {
-    async collect(query) {
-      const token = await getAccessToken(env);
-      const searchQuery = buildKeywordQuery(query.includeKeywords, query.excludeKeywords);
-      const url = new URL("https://oauth.reddit.com/search");
-      url.searchParams.set("q", searchQuery);
-      url.searchParams.set("limit", String(Math.min(query.limitPerRun, 100)));
-      url.searchParams.set("sort", "new");
-      url.searchParams.set("type", "link");
-
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "User-Agent": getRequiredEnv(env, "REDDIT_USER_AGENT")
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`reddit_search_failed_${response.status}`);
-      }
-
-      const payload = (await response.json()) as RedditListingResponse;
-      return normalizeRedditListing(payload, query.excludeKeywords, query.limitPerRun);
     }
   };
 }
@@ -158,38 +123,6 @@ function normalizeRedditListing(
     }));
 }
 
-async function getAccessToken(env: NodeJS.ProcessEnv) {
-  const clientId = getRequiredEnv(env, "REDDIT_CLIENT_ID");
-  const clientSecret = getRequiredEnv(env, "REDDIT_CLIENT_SECRET");
-  const response = await fetch("https://www.reddit.com/api/v1/access_token", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": getRequiredEnv(env, "REDDIT_USER_AGENT")
-    },
-    body: new URLSearchParams({ grant_type: "client_credentials" })
-  });
-
-  if (!response.ok) {
-    throw new Error(`reddit_oauth_failed_${response.status}`);
-  }
-
-  const payload = (await response.json()) as RedditTokenResponse;
-  if (!payload.access_token) {
-    throw new Error("reddit_oauth_missing_access_token");
-  }
-  return payload.access_token;
-}
-
 function getRedditUserAgent(env: NodeJS.ProcessEnv) {
   return env.REDDIT_USER_AGENT || "domain-analysis/0.1.0 public-json collector";
-}
-
-function getRequiredEnv(env: NodeJS.ProcessEnv, key: string) {
-  const value = env[key];
-  if (!value) {
-    throw new Error(`missing_${key}`);
-  }
-  return value;
 }

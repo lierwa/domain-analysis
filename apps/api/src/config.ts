@@ -1,10 +1,11 @@
 import { z } from "zod";
+import { getDefaultDatabaseUrl } from "@domain-analysis/db";
 
 const configSchema = z.object({
   nodeEnv: z.string().default("development"),
   host: z.string().default("127.0.0.1"),
   port: z.coerce.number().int().min(1).max(65535).default(4000),
-  databaseUrl: z.string().default("file:../../data/domain-analysis.sqlite")
+  databaseUrl: z.string().default(getDefaultDatabaseUrl())
 });
 
 export type AppConfig = z.infer<typeof configSchema>;

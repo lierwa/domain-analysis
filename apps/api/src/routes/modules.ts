@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { AppDb } from "@domain-analysis/db";
+import { createSourceRepository, type AppDb } from "@domain-analysis/db";
 import { registerCollectionPlanRoutes } from "./collectionPlanRoutes";
 
 const modules = [
@@ -10,9 +10,16 @@ const modules = [
 ];
 
 export async function registerModuleRoutes(app: FastifyInstance, db: AppDb) {
+  const sourceRepo = createSourceRepository(db);
+
   app.get("/api/modules", async () => ({
     modules
   }));
+
+  app.get("/api/sources", async () => {
+    await sourceRepo.seedDefaults();
+    return { items: await sourceRepo.list() };
+  });
 
   await registerCollectionPlanRoutes(app, db);
 }

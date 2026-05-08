@@ -1,7 +1,7 @@
-import type { BrowserMode } from "../adapters/types";
+import type { BrowserMode } from "@domain-analysis/shared";
 
 export interface BrowserRuntimeConfig {
-  mode: Exclude<BrowserMode, "none">;
+  mode: BrowserMode;
   userDataDir?: string;
   allowChallengeAutomation: false;
 }

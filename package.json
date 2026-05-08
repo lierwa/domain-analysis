@@ -8,8 +8,11 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n api,web -c black,white \"npm run dev:api\" \"npm run dev:web:ready\"",
-    "dev:api": "npm --workspace @domain-analysis/api run dev",
+    "dev": "npm run dev:redis:check && concurrently -n api,worker,web -c black,white,blue \"npm run dev:api\" \"npm run dev:worker\" \"npm run dev:web:ready\"",
+    "dev:redis:check": "node scripts/check-redis.mjs",
+    "dev:redis:stop": "node scripts/stop-redis.mjs",
+    "dev:api": "REDIS_URL=${REDIS_URL:-redis://127.0.0.1:6379} npm --workspace @domain-analysis/api run dev",
+    "dev:worker": "REDIS_URL=${REDIS_URL:-redis://127.0.0.1:6379} npm --workspace @domain-analysis/worker run dev",
     "dev:web": "npm --workspace @domain-analysis/web run dev",
     "dev:web:ready": "wait-on http-get://${API_HOST:-127.0.0.1}:${API_PORT:-4000}/health && npm run dev:web",
     "build": "npm run build:shared && npm run build:db && npm run build:worker && npm run build:api && npm run build:web",

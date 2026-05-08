@@ -1,4 +1,5 @@
-import { and, count, desc, eq, gte, like, lte } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, count, desc, eq, gte, like, lte, or } from "drizzle-orm";
 import type { Platform, TaskStatus } from "@domain-analysis/shared";
 import type { AppDb } from "./client";
 import { crawlTasks, rawContents, sources } from "./schema";
@@ -31,6 +32,7 @@ export interface CreateSourceInput {
 export interface CreateCrawlTaskInput {
   analysisRunId: string;
   sourceId: string;
+  platform?: Platform;
   targetCount: number;
 }
 
@@ -40,6 +42,11 @@ export interface UpdateCrawlTaskInput {
   validCount?: number;
   duplicateCount?: number;
   errorMessage?: string | null;
+  pagesCollected?: number;
+  lastCursor?: string | null;
+  stopReason?: string | null;
+  lastRequestAt?: string | null;
+  nextRequestAt?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
 }
@@ -62,9 +69,9 @@ export interface CreateRawContentInput {
 }
 
 const defaultSources: CreateSourceInput[] = [
-  { platform: "reddit", name: "Reddit", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 100 },
-  { platform: "x", name: "X / Twitter", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 25 },
-  { platform: "youtube", name: "YouTube", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 50 },
+  { platform: "reddit", name: "Reddit", requiresLogin: false, crawlerType: "playwright", defaultLimit: 100 },
+  { platform: "x", name: "X / Twitter", requiresLogin: true, crawlerType: "playwright", defaultLimit: 25 },
+  { platform: "youtube", name: "YouTube", requiresLogin: false, crawlerType: "playwright", defaultLimit: 50 },
   { platform: "tiktok", name: "TikTok", requiresLogin: true, crawlerType: "playwright", defaultLimit: 50 },
   { platform: "pinterest", name: "Pinterest", requiresLogin: true, crawlerType: "playwright", defaultLimit: 50 },
   { platform: "web", name: "Web Pages", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 100 }
@@ -151,6 +158,7 @@ export function createCrawlTaskRepository(db: AppDb) {
           id: createId("task"),
           analysisRunId: input.analysisRunId,
           sourceId: input.sourceId,
+          platform: input.platform ?? "reddit",
           targetCount: input.targetCount,
           status: "pending"
         })
@@ -222,12 +230,30 @@ export function createRawContentRepository(db: AppDb) {
       let duplicates = 0;
 
       for (const input of inputs) {
+        const fingerprint = normalizeContentFingerprint(input.text);
         if (input.externalId) {
           const [existing] = await db
             .select()
             .from(rawContents)
             .where(
               and(eq(rawContents.platform, input.platform), eq(rawContents.externalId, input.externalId))
+            );
+          if (existing) {
+            duplicates += 1;
+            continue;
+          }
+        }
+        if (!input.externalId) {
+          const [existing] = await db
+            .select()
+            .from(rawContents)
+            .where(
+              and(
+                eq(rawContents.platform, input.platform),
+                eq(rawContents.authorHandle, input.authorHandle ?? ""),
+                eq(rawContents.publishedAt, input.publishedAt ?? ""),
+                like(rawContents.text, `%${fingerprint.slice(0, 80)}%`)
+              )
             );
           if (existing) {
             duplicates += 1;
@@ -323,7 +349,7 @@ function buildRunContentConditions(runId: string, filters: RunContentFilters) {
 }
 
 function createId(prefix: string) {
-  return `${prefix}_${crypto.randomUUID()}`;
+  return `${prefix}_${randomUUID()}`;
 }
 
 function requireRow<TRow>(row: TRow | undefined, message: string): TRow {
@@ -378,17 +404,27 @@ function mapCrawlTask(row: CrawlTaskRow) {
     id: row.id,
     analysisRunId: row.analysisRunId,
     sourceId: row.sourceId,
+    platform: row.platform as Platform,
     status: row.status as TaskStatus,
     targetCount: row.targetCount,
     collectedCount: row.collectedCount,
     validCount: row.validCount,
     duplicateCount: row.duplicateCount,
     errorMessage: row.errorMessage ?? undefined,
+    pagesCollected: row.pagesCollected,
+    lastCursor: row.lastCursor ?? undefined,
+    stopReason: row.stopReason ?? undefined,
+    lastRequestAt: normalizeDateTime(row.lastRequestAt),
+    nextRequestAt: normalizeDateTime(row.nextRequestAt),
     startedAt: normalizeDateTime(row.startedAt),
     finishedAt: normalizeDateTime(row.finishedAt),
     createdAt: normalizeDateTime(row.createdAt) ?? row.createdAt,
     updatedAt: normalizeDateTime(row.updatedAt) ?? row.updatedAt
   };
+}
+
+function normalizeContentFingerprint(text: string) {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function mapRawContent(row: RawContentRow) {

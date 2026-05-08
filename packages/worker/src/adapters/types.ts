@@ -1,6 +1,6 @@
-import type { Platform } from "@domain-analysis/shared";
+import type { BrowserMode, Platform } from "@domain-analysis/shared";
 
-export type CollectionMode = "official_api" | "public_json" | "nitter_rss";
+export type CollectionMode = "browser" | "public_json" | "nitter_rss";
 
 export interface CollectionQuery {
   name: string;
@@ -33,7 +33,29 @@ export interface ConservativeCrawlerOptions {
   maxRequestRetries: number;
 }
 
-export type BrowserMode = "none" | "headless" | "local_profile";
+export type CrawlStopReason =
+  | "target_reached"
+  | "exhausted"
+  | "rate_limited"
+  | "login_required"
+  | "blocked"
+  | "parse_failed"
+  | "error";
+
+export interface PaginatedCollectionResult {
+  items: CollectedRawContent[];
+  pagesCollected: number;
+  stopReason: CrawlStopReason;
+  lastCursor?: string;
+  errorMessage?: string;
+}
+
+export interface BrowserCollectionContext {
+  browserMode: BrowserMode;
+  maxScrolls: number;
+  maxItems: number;
+  browserProfilePath?: string;
+}
 
 export interface SourceCollectionPolicy {
   browserMode: BrowserMode;
@@ -45,7 +67,7 @@ export interface SourceCollectionPolicy {
 }
 
 export const defaultConservativeSourcePolicy: SourceCollectionPolicy = {
-  browserMode: "none",
+  browserMode: "local_profile",
   respectRobotsTxt: true,
   maxConcurrency: 1,
   maxRequestsPerMinute: 6,

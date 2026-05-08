@@ -17,7 +17,7 @@ interface AppShellProps {
 
 export function AppShell({ activePage, onPageChange, children }: AppShellProps) {
   return (
-    <div className="min-h-screen bg-surface text-ink">
+    <div className="h-screen overflow-hidden bg-surface text-ink">
       <header className="sticky top-0 z-20 border-b border-line bg-surface/95 px-4 py-3 backdrop-blur md:hidden">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
@@ -39,7 +39,7 @@ export function AppShell({ activePage, onPageChange, children }: AppShellProps) 
         </div>
       </header>
 
-      <div className="mx-auto flex max-w-[1440px]">
+      <div className="mx-auto flex h-[calc(100vh-57px)] max-w-[1440px] md:h-screen">
         <aside className="sticky top-0 hidden h-screen w-56 shrink-0 border-r border-line bg-panel px-3 py-4 md:block">
           <div className="mb-6 flex items-center gap-2 px-2">
             <BookOpenText className="h-5 w-5" aria-hidden="true" />
@@ -71,7 +71,7 @@ export function AppShell({ activePage, onPageChange, children }: AppShellProps) 
             })}
           </nav>
         </aside>
-        <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 lg:px-8">{children}</main>
+        <main className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 lg:px-8">{children}</main>
       </div>
     </div>
   );

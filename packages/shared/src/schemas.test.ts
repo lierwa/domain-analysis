@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   analysisProjectSchema,
   analysisRunSchema,
+  crawlTaskSchema,
   createCollectionPlanInputSchema,
   createAnalysisRunInputSchema,
   runContentSchema,
@@ -37,6 +38,19 @@ describe("analysis domain schemas", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("accepts a 500 item analysis run for paginated Reddit collection", () => {
+    const result = createAnalysisRunInputSchema.parse({
+      goal: "Deep Reddit crawl",
+      includeKeywords: ["AI search"],
+      excludeKeywords: [],
+      language: "en",
+      market: "US",
+      limit: 500
+    });
+
+    expect(result.limit).toBe(500);
   });
 
   it("accepts a source with crawler defaults", () => {
@@ -94,6 +108,30 @@ describe("analysis domain schemas", () => {
     });
 
     expect(result.analysisRunId).toBe("run_1");
+  });
+
+  it("accepts crawl task pagination progress fields", () => {
+    const result = crawlTaskSchema.parse({
+      id: "task_1",
+      analysisRunId: "run_1",
+      sourceId: "source_1",
+      status: "rate_limited",
+      targetCount: 500,
+      collectedCount: 200,
+      validCount: 180,
+      duplicateCount: 20,
+      errorMessage: "reddit_public_rate_limited_429",
+      pagesCollected: 2,
+      lastCursor: "t3_after",
+      stopReason: "rate_limited",
+      lastRequestAt: "2026-05-06T00:00:00.000Z",
+      nextRequestAt: "2026-05-06T00:01:00.000Z",
+      createdAt: "2026-05-06T00:00:00.000Z",
+      updatedAt: "2026-05-06T00:00:00.000Z"
+    });
+
+    expect(result.pagesCollected).toBe(2);
+    expect(result.stopReason).toBe("rate_limited");
   });
 });
 

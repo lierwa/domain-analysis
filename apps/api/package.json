@@ -20,5 +20,8 @@
     "mnemonist": "^0.40.4",
     "process-warning": "^3.0.0",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.1.3"
   }
 }

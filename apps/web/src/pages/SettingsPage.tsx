@@ -1,5 +1,16 @@
+import { useQuery } from "@tanstack/react-query";
+import { fetchSources } from "../lib/api";
+
 // WHY: Settings 只展示真实已配置项，不显示未实现功能的假配置入口。
 export function SettingsPage() {
+  const sourcesQuery = useQuery({
+    queryKey: ["sources"],
+    queryFn: fetchSources
+  });
+  const browserSources = (sourcesQuery.data ?? []).filter((source) =>
+    ["reddit", "youtube", "x"].includes(source.platform)
+  );
+
   return (
     <div className="flex flex-col gap-8">
       <div>
@@ -8,13 +19,28 @@ export function SettingsPage() {
       </div>
 
       <section className="flex flex-col gap-4">
-        <h2 className="text-sm font-semibold">Reddit Collection</h2>
+        <h2 className="text-sm font-semibold">Browser Collection</h2>
         <div className="rounded-xl border border-line p-4">
           <dl className="divide-y divide-line">
-            <SettingRow label="Mode" value="Public JSON API (no login required)" />
-            <SettingRow label="Default limit" value="100 posts per run" />
-            <SettingRow label="Max concurrency" value="1 (conservative, rate-limit friendly)" />
+            <SettingRow label="Mode" value="Crawlee + Playwright browser crawler" />
+            <SettingRow label="Platforms" value="Reddit, YouTube, X" />
+            <SettingRow label="Browser profile" value="BROWSER_PROFILE_PATH for local_profile mode" />
+            <SettingRow label="Default scrolls" value="5 scrolls per platform" />
+            <SettingRow label="Max concurrency" value="1 browser task at a time" />
+            <SettingRow label="Safety boundary" value="No captcha bypass, no paid platform APIs" />
           </dl>
+          {browserSources.length > 0 && (
+            <div className="mt-4 grid gap-2 md:grid-cols-3">
+              {browserSources.map((source) => (
+                <div key={source.id} className="rounded border border-line px-3 py-2">
+                  <p className="text-sm font-medium">{source.name}</p>
+                  <p className="mt-1 text-xs text-muted">
+                    {source.crawlerType} · {source.requiresLogin ? "local login" : "public page"}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 
@@ -32,9 +58,9 @@ export function SettingsPage() {
         <h2 className="text-sm font-semibold">Worker Runtime</h2>
         <div className="rounded-xl border border-line p-4">
           <dl className="divide-y divide-line">
-            <SettingRow label="Queue" value="In-process p-queue (single-node)" />
-            <SettingRow label="Persistence" value="SQLite (local file)" />
-            <SettingRow label="Note" value="Process restart will clear in-progress jobs" />
+            <SettingRow label="Queue" value="BullMQ / Redis crawl queue" />
+            <SettingRow label="Persistence" value="Shared SQLite data/domain-analysis.sqlite" />
+            <SettingRow label="Recovery" value="Stale collecting runs are failed on worker startup" />
           </dl>
         </div>
       </section>

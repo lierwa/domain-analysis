@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createAnalysisProjectRepository,
@@ -36,6 +37,155 @@ describe("initializeDatabase", () => {
   it("is idempotent for the current schema", async () => {
     await expect(initializeDatabase(databaseUrl)).resolves.not.toThrow();
     await expect(initializeDatabase(databaseUrl)).resolves.not.toThrow();
+  });
+
+  it("adds collection plan columns to an existing local schema", async () => {
+    const legacyUrl = `file:${join(tempDir, "legacy.sqlite")}`;
+    const legacyClient = createClient({ url: legacyUrl });
+    await legacyClient.executeMultiple(`
+      CREATE TABLE analysis_projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        language TEXT NOT NULL,
+        market TEXT NOT NULL,
+        default_platform TEXT NOT NULL DEFAULT 'reddit',
+        default_limit INTEGER NOT NULL DEFAULT 100,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE analysis_runs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES analysis_projects(id),
+        name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        include_keywords TEXT NOT NULL,
+        exclude_keywords TEXT NOT NULL,
+        platform TEXT NOT NULL DEFAULT 'reddit',
+        run_limit INTEGER NOT NULL DEFAULT 100,
+        collected_count INTEGER NOT NULL DEFAULT 0,
+        valid_count INTEGER NOT NULL DEFAULT 0,
+        duplicate_count INTEGER NOT NULL DEFAULT 0,
+        analyzed_count INTEGER NOT NULL DEFAULT 0,
+        report_id TEXT,
+        error_message TEXT,
+        started_at TEXT,
+        finished_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      INSERT INTO analysis_projects (id, name, goal, language, market)
+      VALUES ('proj_legacy', 'Legacy', 'g', 'en', 'US');
+      INSERT INTO analysis_runs (
+        id,
+        project_id,
+        name,
+        include_keywords,
+        exclude_keywords
+      )
+      VALUES ('run_legacy', 'proj_legacy', 'Legacy Run', '["kw"]', '[]');
+    `);
+
+    await initializeDatabase(legacyUrl);
+    const runs = createAnalysisRunRepository(createDb(legacyUrl));
+    const page = await runs.listPage({ page: 1, pageSize: 20 });
+
+    expect(page.items[0]).toMatchObject({
+      id: "run_legacy",
+      collectionPlanId: undefined,
+      runTrigger: "manual"
+    });
+  });
+
+  it("adds crawl pagination columns to an existing local schema", async () => {
+    const legacyUrl = `file:${join(tempDir, "legacy-crawl.sqlite")}`;
+    const legacyClient = createClient({ url: legacyUrl });
+    await legacyClient.executeMultiple(`
+      CREATE TABLE analysis_projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        language TEXT NOT NULL,
+        market TEXT NOT NULL,
+        default_platform TEXT NOT NULL DEFAULT 'reddit',
+        default_limit INTEGER NOT NULL DEFAULT 100,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE analysis_runs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES analysis_projects(id),
+        name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        include_keywords TEXT NOT NULL,
+        exclude_keywords TEXT NOT NULL,
+        platform TEXT NOT NULL DEFAULT 'reddit',
+        run_limit INTEGER NOT NULL DEFAULT 100,
+        collected_count INTEGER NOT NULL DEFAULT 0,
+        valid_count INTEGER NOT NULL DEFAULT 0,
+        duplicate_count INTEGER NOT NULL DEFAULT 0,
+        analyzed_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE sources (
+        id TEXT PRIMARY KEY,
+        platform TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        requires_login INTEGER NOT NULL DEFAULT 0,
+        crawler_type TEXT NOT NULL DEFAULT 'cheerio',
+        default_limit INTEGER NOT NULL DEFAULT 100,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE crawl_tasks (
+        id TEXT PRIMARY KEY,
+        analysis_run_id TEXT NOT NULL REFERENCES analysis_runs(id),
+        source_id TEXT NOT NULL REFERENCES sources(id),
+        status TEXT NOT NULL DEFAULT 'pending',
+        target_count INTEGER NOT NULL DEFAULT 100,
+        collected_count INTEGER NOT NULL DEFAULT 0,
+        valid_count INTEGER NOT NULL DEFAULT 0,
+        duplicate_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      INSERT INTO analysis_projects (id, name, goal, language, market)
+      VALUES ('proj_legacy', 'Legacy', 'g', 'en', 'US');
+      INSERT INTO analysis_runs (id, project_id, name, include_keywords, exclude_keywords)
+      VALUES ('run_legacy', 'proj_legacy', 'Legacy Run', '["kw"]', '[]');
+      INSERT INTO sources (id, platform, name) VALUES ('source_reddit', 'reddit', 'Reddit');
+      INSERT INTO crawl_tasks (id, analysis_run_id, source_id)
+      VALUES ('task_legacy', 'run_legacy', 'source_reddit');
+    `);
+
+    await initializeDatabase(legacyUrl);
+    const db = createDb(legacyUrl);
+    const tasks = createCrawlTaskRepository(db);
+    const updated = await tasks.update("task_legacy", {
+      pagesCollected: 2,
+      lastCursor: "t3_cursor",
+      stopReason: "rate_limited",
+      lastRequestAt: "2026-05-07T00:00:00.000Z",
+      nextRequestAt: "2026-05-07T00:01:00.000Z"
+    });
+
+    expect(updated).toMatchObject({
+      pagesCollected: 2,
+      lastCursor: "t3_cursor",
+      stopReason: "rate_limited",
+      lastRequestAt: "2026-05-07T00:00:00.000Z",
+      nextRequestAt: "2026-05-07T00:01:00.000Z"
+    });
   });
 });
 
@@ -92,6 +242,50 @@ describe("analysis repositories", () => {
     expect(updated?.status).toBe("content_ready");
     expect(updated?.collectedCount).toBe(42);
     expect(archived?.status).toBe("archived");
+  });
+
+  it("updates crawl task pagination progress", async () => {
+    const db = createDb(databaseUrl);
+    const projects = createAnalysisProjectRepository(db);
+    const runs = createAnalysisRunRepository(db);
+    const sources = createSourceRepository(db);
+    const tasks = createCrawlTaskRepository(db);
+
+    await sources.seedDefaults();
+    const source = await sources.getByPlatform("reddit");
+    if (!source) throw new Error("source not found");
+    const project = await projects.create({ name: "P", goal: "g", language: "en", market: "US" });
+    const run = await runs.create({
+      projectId: project.id,
+      name: "Run",
+      goal: project.goal,
+      includeKeywords: ["kw"],
+      excludeKeywords: [],
+      language: "en",
+      market: "US",
+      limit: 500
+    });
+    const task = await tasks.create({ analysisRunId: run.id, sourceId: source.id, targetCount: 500 });
+
+    const updated = await tasks.update(task.id, {
+      status: "running",
+      collectedCount: 100,
+      pagesCollected: 1,
+      lastCursor: "t3_after",
+      stopReason: null,
+      lastRequestAt: "2026-05-07T00:00:00.000Z",
+      nextRequestAt: "2026-05-07T00:00:20.000Z"
+    });
+
+    expect(updated).toMatchObject({
+      targetCount: 500,
+      collectedCount: 100,
+      pagesCollected: 1,
+      lastCursor: "t3_after",
+      stopReason: undefined,
+      lastRequestAt: "2026-05-07T00:00:00.000Z",
+      nextRequestAt: "2026-05-07T00:00:20.000Z"
+    });
   });
 });
 

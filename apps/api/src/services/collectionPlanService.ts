@@ -5,7 +5,7 @@ import {
   createCollectionPlanRepository,
   type AppDb
 } from "@domain-analysis/db";
-import type { CollectionCadence } from "@domain-analysis/shared";
+import type { BrowserMode, CollectionCadence, Platform } from "@domain-analysis/shared";
 
 export function createCollectionPlanService(db: AppDb) {
   const projectRepo = createAnalysisProjectRepository(db);
@@ -17,6 +17,10 @@ export function createCollectionPlanService(db: AppDb) {
       projectId: string;
       name: string;
       platform: "reddit";
+      platforms?: Platform[];
+      browserMode?: BrowserMode;
+      maxScrollsPerPlatform?: number;
+      maxItemsPerPlatform?: number;
       includeKeywords: string[];
       excludeKeywords: string[];
       language: string;
@@ -64,6 +68,10 @@ export function createCollectionPlanService(db: AppDb) {
         language: plan.language,
         market: plan.market,
         limit: plan.batchLimit,
+        platforms: plan.platforms,
+        browserMode: plan.browserMode,
+        maxScrollsPerPlatform: plan.maxScrollsPerPlatform,
+        maxItemsPerPlatform: plan.maxItemsPerPlatform,
         collectionPlanId: plan.id,
         runTrigger: "scheduled"
       });
