@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,7 +7,7 @@ import {
   createAnalysisRunRepository,
   createRunReportRepository
 } from "./analysisRepositories";
-import { createDb, initializeDatabase } from "./client";
+import { cleanupDatabaseTempDir, createDb, initializeDatabase } from "./client";
 import {
   createCrawlTaskRepository,
   createRawContentRepository,
@@ -24,7 +24,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(tempDir, { recursive: true, force: true });
+  await cleanupDatabaseTempDir(tempDir);
 });
 
 describe("initializeDatabase", () => {
@@ -63,7 +63,7 @@ describe("analysis repositories", () => {
     });
 
     expect(project.id).toMatch(/^proj_/);
-    expect(project.defaultPlatform).toBe("reddit");
+    expect(project.defaultPlatform).toBe("web");
     expect(run.id).toMatch(/^run_/);
     expect(run.projectId).toBe(project.id);
     expect(run.status).toBe("draft");

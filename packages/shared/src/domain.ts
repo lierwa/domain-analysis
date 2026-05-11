@@ -10,17 +10,30 @@ export const taskStatuses = [
   "parse_failed"
 ] as const;
 export const platforms = ["reddit", "x", "youtube", "tiktok", "pinterest", "web"] as const;
+export const analysisBatchPlatforms = ["reddit", "x", "youtube", "web"] as const;
 
 // WHY: analysis run 状态机完整描述一次分析的生命周期，避免前后端各自定义导致不一致。
 export const analysisRunStatuses = [
   "draft",
   "collecting",
   "collection_failed",
+  "no_content",
   "content_ready",
   "analyzing",
   "analysis_failed",
   "insight_ready",
   "reporting",
+  "report_ready"
+] as const;
+
+// WHY: batch 是一次业务分析意图的聚合状态，子 run 才表示具体平台采集状态。
+export const analysisBatchStatuses = [
+  "draft",
+  "collecting",
+  "partial_ready",
+  "content_ready",
+  "no_content",
+  "collection_failed",
   "report_ready"
 ] as const;
 
@@ -35,7 +48,9 @@ export const collectionRunTriggers = ["manual", "scheduled"] as const;
 
 export type TaskStatus = (typeof taskStatuses)[number];
 export type Platform = (typeof platforms)[number];
+export type AnalysisBatchPlatform = (typeof analysisBatchPlatforms)[number];
 export type AnalysisRunStatus = (typeof analysisRunStatuses)[number];
+export type AnalysisBatchStatus = (typeof analysisBatchStatuses)[number];
 export type AnalysisReportType = (typeof analysisReportTypes)[number];
 export type ProjectStatus = (typeof projectStatuses)[number];
 export type CollectionPlanStatus = (typeof collectionPlanStatuses)[number];

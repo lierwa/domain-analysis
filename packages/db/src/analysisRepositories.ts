@@ -1,12 +1,28 @@
 import { count, desc, eq } from "drizzle-orm";
-import type { AnalysisReportType, AnalysisRunStatus, ProjectStatus } from "@domain-analysis/shared";
+import type {
+  AnalysisBatchStatus,
+  AnalysisReportType,
+  AnalysisRunStatus,
+  Platform,
+  ProjectStatus
+} from "@domain-analysis/shared";
 import type { AppDb } from "./client";
 import type { PageInput, PageMeta } from "./repositories";
-import { analysisProjects, analysisRuns, crawlTasks, reports } from "./schema";
+import {
+  analysisBatches,
+  analysisProjects,
+  analysisRuns,
+  analyzedContents,
+  cleanedContents,
+  crawlTasks,
+  rawContents,
+  reports
+} from "./schema";
 
 // ─── 类型定义 ───────────────────────────────────────────────────────────────
 
 type AnalysisProjectRow = typeof analysisProjects.$inferSelect;
+type AnalysisBatchRow = typeof analysisBatches.$inferSelect;
 type AnalysisRunRow = typeof analysisRuns.$inferSelect;
 type CrawlTaskRow = typeof crawlTasks.$inferSelect;
 type ReportRow = typeof reports.$inferSelect;
@@ -21,8 +37,10 @@ export interface CreateAnalysisProjectInput {
 
 export interface CreateAnalysisRunInput {
   projectId: string;
+  analysisBatchId?: string;
   collectionPlanId?: string;
   runTrigger?: "manual" | "scheduled";
+  platform?: Platform;
   name: string;
   goal: string;
   includeKeywords: string[];
@@ -30,6 +48,27 @@ export interface CreateAnalysisRunInput {
   language: string;
   market: string;
   limit: number;
+}
+
+export interface CreateAnalysisBatchInput {
+  projectId: string;
+  name: string;
+  goal: string;
+  includeKeywords: string[];
+  excludeKeywords: string[];
+  language: string;
+  market: string;
+}
+
+export interface UpdateAnalysisBatchInput {
+  status?: AnalysisBatchStatus;
+  collectedCount?: number;
+  validCount?: number;
+  duplicateCount?: number;
+  reportId?: string | null;
+  errorMessage?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 }
 
 export interface UpdateAnalysisRunInput {
@@ -66,7 +105,7 @@ export function createAnalysisProjectRepository(db: AppDb) {
           goal: input.goal,
           language: input.language,
           market: input.market,
-          defaultPlatform: "reddit",
+          defaultPlatform: "web",
           defaultLimit: input.defaultLimit ?? 100,
           status: "active"
         })
@@ -102,6 +141,67 @@ export function createAnalysisProjectRepository(db: AppDb) {
   };
 }
 
+// ─── Analysis Batch Repository ────────────────────────────────────────────────
+
+export function createAnalysisBatchRepository(db: AppDb) {
+  return {
+    async create(input: CreateAnalysisBatchInput) {
+      const [row] = await db
+        .insert(analysisBatches)
+        .values({
+          id: createId("batch"),
+          projectId: input.projectId,
+          name: input.name,
+          status: "draft",
+          goal: input.goal,
+          includeKeywords: input.includeKeywords,
+          excludeKeywords: input.excludeKeywords,
+          language: input.language,
+          market: input.market,
+          collectedCount: 0,
+          validCount: 0,
+          duplicateCount: 0
+        })
+        .returning();
+      return mapBatch(requireRow(row, "analysis_batch_create_failed"));
+    },
+
+    async getById(id: string) {
+      const [row] = await db.select().from(analysisBatches).where(eq(analysisBatches.id, id));
+      return row ? mapBatch(row) : null;
+    },
+
+    async listPage(input: PageInput) {
+      const [countRow] = await db.select({ total: count() }).from(analysisBatches);
+      const total = countRow?.total ?? 0;
+      const rows = await db
+        .select()
+        .from(analysisBatches)
+        .orderBy(desc(analysisBatches.createdAt))
+        .limit(input.pageSize)
+        .offset(toOffset(input));
+      return { items: rows.map(mapBatch), page: createPageMeta(input, total) };
+    },
+
+    async update(id: string, input: UpdateAnalysisBatchInput) {
+      const [row] = await db
+        .update(analysisBatches)
+        .set({ ...input, updatedAt: now() })
+        .where(eq(analysisBatches.id, id))
+        .returning();
+      return row ? mapBatch(row) : null;
+    },
+
+    async remove(id: string) {
+      const rows = await db.select().from(analysisRuns).where(eq(analysisRuns.analysisBatchId, id));
+      for (const row of rows) {
+        await removeRunCascade(db, row.id);
+      }
+      await db.delete(analysisBatches).where(eq(analysisBatches.id, id));
+    }
+  };
+}
+
 // ─── Analysis Run Repository ──────────────────────────────────────────────────
 
 export function createAnalysisRunRepository(db: AppDb) {
@@ -112,13 +212,14 @@ export function createAnalysisRunRepository(db: AppDb) {
         .values({
           id: createId("run"),
           projectId: input.projectId,
+          analysisBatchId: input.analysisBatchId,
           collectionPlanId: input.collectionPlanId,
           name: input.name,
           status: "draft",
           runTrigger: input.runTrigger ?? "manual",
           includeKeywords: input.includeKeywords,
           excludeKeywords: input.excludeKeywords,
-          platform: "reddit",
+          platform: input.platform ?? "web",
           limit: input.limit,
           collectedCount: 0,
           validCount: 0,
@@ -165,7 +266,7 @@ export function createAnalysisRunRepository(db: AppDb) {
     },
 
     async remove(id: string) {
-      await db.delete(analysisRuns).where(eq(analysisRuns.id, id));
+      await removeRunCascade(db, id);
     },
 
     // WHY: 查询当前 run 下是否有已运行任务，避免重复启动并发采集。
@@ -184,6 +285,15 @@ export function createAnalysisRunRepository(db: AppDb) {
         .where(eq(crawlTasks.analysisRunId, runId))
         .orderBy(desc(crawlTasks.createdAt));
       return rows.map(mapCrawlTask);
+    },
+
+    async listByBatch(batchId: string) {
+      const rows = await db
+        .select()
+        .from(analysisRuns)
+        .where(eq(analysisRuns.analysisBatchId, batchId))
+        .orderBy(desc(analysisRuns.createdAt));
+      return rows.map(mapRun);
     }
   };
 }
@@ -281,9 +391,32 @@ function mapProject(row: AnalysisProjectRow) {
     goal: row.goal,
     language: row.language,
     market: row.market,
-    defaultPlatform: row.defaultPlatform as "reddit",
+    defaultPlatform: row.defaultPlatform as Platform,
     defaultLimit: row.defaultLimit,
     status: row.status as ProjectStatus,
+    createdAt: normalizeDateTime(row.createdAt) ?? row.createdAt,
+    updatedAt: normalizeDateTime(row.updatedAt) ?? row.updatedAt
+  };
+}
+
+function mapBatch(row: AnalysisBatchRow) {
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    name: row.name,
+    status: row.status as AnalysisBatchStatus,
+    goal: row.goal,
+    includeKeywords: (row.includeKeywords as string[]) ?? [],
+    excludeKeywords: (row.excludeKeywords as string[]) ?? [],
+    language: row.language,
+    market: row.market,
+    collectedCount: row.collectedCount,
+    validCount: row.validCount,
+    duplicateCount: row.duplicateCount,
+    reportId: row.reportId ?? undefined,
+    errorMessage: row.errorMessage ?? undefined,
+    startedAt: normalizeDateTime(row.startedAt),
+    finishedAt: normalizeDateTime(row.finishedAt),
     createdAt: normalizeDateTime(row.createdAt) ?? row.createdAt,
     updatedAt: normalizeDateTime(row.updatedAt) ?? row.updatedAt
   };
@@ -293,13 +426,14 @@ function mapRun(row: AnalysisRunRow) {
   return {
     id: row.id,
     projectId: row.projectId,
+    analysisBatchId: row.analysisBatchId ?? undefined,
     collectionPlanId: row.collectionPlanId ?? undefined,
     name: row.name,
     status: row.status as AnalysisRunStatus,
     runTrigger: row.runTrigger as "manual" | "scheduled",
     includeKeywords: (row.includeKeywords as string[]) ?? [],
     excludeKeywords: (row.excludeKeywords as string[]) ?? [],
-    platform: row.platform as "reddit",
+    platform: row.platform as Platform,
     limit: row.limit,
     collectedCount: row.collectedCount,
     validCount: row.validCount,
@@ -312,6 +446,18 @@ function mapRun(row: AnalysisRunRow) {
     createdAt: normalizeDateTime(row.createdAt) ?? row.createdAt,
     updatedAt: normalizeDateTime(row.updatedAt) ?? row.updatedAt
   };
+}
+
+async function removeRunCascade(db: AppDb, runId: string) {
+  const rawRows = await db.select().from(rawContents).where(eq(rawContents.analysisRunId, runId));
+  for (const raw of rawRows) {
+    await db.delete(analyzedContents).where(eq(analyzedContents.rawContentId, raw.id));
+    await db.delete(cleanedContents).where(eq(cleanedContents.rawContentId, raw.id));
+  }
+  await db.delete(reports).where(eq(reports.analysisRunId, runId));
+  await db.delete(rawContents).where(eq(rawContents.analysisRunId, runId));
+  await db.delete(crawlTasks).where(eq(crawlTasks.analysisRunId, runId));
+  await db.delete(analysisRuns).where(eq(analysisRuns.id, runId));
 }
 
 function mapCrawlTask(row: CrawlTaskRow) {

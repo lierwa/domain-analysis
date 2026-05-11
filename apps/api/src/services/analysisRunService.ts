@@ -1,4 +1,5 @@
 import {
+  createAnalysisBatchRepository,
   createAnalysisProjectRepository,
   createAnalysisRunRepository,
   createCrawlTaskRepository,
@@ -7,8 +8,8 @@ import {
   createSourceRepository,
   type AppDb
 } from "@domain-analysis/db";
-import type { AnalysisRunStatus } from "@domain-analysis/shared";
-import { TaskQueue } from "@domain-analysis/worker";
+import type { AnalysisBatchStatus, AnalysisRunStatus, TaskStatus } from "@domain-analysis/shared";
+import { mapCollectionErrorToTaskStatus, TaskQueue } from "@domain-analysis/worker";
 
 const queue = new TaskQueue();
 
@@ -17,6 +18,7 @@ const queue = new TaskQueue();
 
 export function createAnalysisRunService(db: AppDb) {
   const projectRepo = createAnalysisProjectRepository(db);
+  const batchRepo = createAnalysisBatchRepository(db);
   const runRepo = createAnalysisRunRepository(db);
   const sourceRepo = createSourceRepository(db);
   const taskRepo = createCrawlTaskRepository(db);
@@ -30,7 +32,9 @@ export function createAnalysisRunService(db: AppDb) {
       projectId?: string;
       projectName?: string;
       collectionPlanId?: string;
+      analysisBatchId?: string;
       runTrigger?: "manual" | "scheduled";
+      platform: "reddit" | "x" | "youtube" | "tiktok" | "pinterest" | "web";
       goal: string;
       includeKeywords: string[];
       excludeKeywords: string[];
@@ -55,8 +59,10 @@ export function createAnalysisRunService(db: AppDb) {
 
       const run = await runRepo.create({
         projectId,
+        analysisBatchId: input.analysisBatchId,
         collectionPlanId: input.collectionPlanId,
         runTrigger: input.runTrigger ?? "manual",
+        platform: input.platform,
         name: runName,
         goal: input.goal,
         includeKeywords: input.includeKeywords,
@@ -80,7 +86,11 @@ export function createAnalysisRunService(db: AppDb) {
     async deleteRun(id: string) {
       const run = await runRepo.getById(id);
       if (!run) return null;
+      if (run.status === "collecting") {
+        throw Object.assign(new Error("Cannot delete a collecting run"), { statusCode: 400 });
+      }
       await runRepo.remove(id);
+      if (run.analysisBatchId) await refreshBatchFromRuns(run.analysisBatchId, { batchRepo, runRepo });
       return run;
     },
 
@@ -103,9 +113,9 @@ export function createAnalysisRunService(db: AppDb) {
       }
 
       await sourceRepo.seedDefaults();
-      const source = await sourceRepo.getByPlatform("reddit");
+      const source = await sourceRepo.getByPlatform(run.platform);
       if (!source || !source.enabled) {
-        throw Object.assign(new Error("reddit_source_unavailable"), { statusCode: 503 });
+        throw Object.assign(new Error(`${run.platform}_source_unavailable`), { statusCode: 503 });
       }
 
       await runRepo.update(runId, {
@@ -113,17 +123,27 @@ export function createAnalysisRunService(db: AppDb) {
         startedAt: new Date().toISOString(),
         errorMessage: null
       });
+      if (run.analysisBatchId) {
+        await batchRepo.update(run.analysisBatchId, {
+          status: "collecting",
+          startedAt: new Date().toISOString(),
+          errorMessage: null
+        });
+      }
 
       const task = await taskRepo.create({
         analysisRunId: runId,
         sourceId: source.id,
-        targetCount: Math.min(run.limit, source.defaultLimit)
+        targetCount: determineTaskTargetCount({
+          runLimit: run.limit,
+          sourceDefaultLimit: source.defaultLimit
+        })
       });
 
       await taskRepo.update(task.id, { status: "running", startedAt: new Date().toISOString() });
 
       // WHY: 采集异步执行，API 立即返回避免慢抓取阻塞用户界面和健康检查。
-      void startCollection({ runId, taskId: task.id, run, source, taskRepo, contentRepo, runRepo, queue });
+      void startCollection({ runId, taskId: task.id, run, source, taskRepo, contentRepo, runRepo, batchRepo, queue });
 
       return runRepo.getById(runId);
     },
@@ -214,15 +234,24 @@ async function startCollection({
   taskRepo,
   contentRepo,
   runRepo,
+  batchRepo,
   queue
 }: {
   runId: string;
   taskId: string;
-  run: { includeKeywords: string[]; excludeKeywords: string[]; limit: number; projectId: string };
+  run: {
+    platform: "reddit" | "x" | "youtube" | "tiktok" | "pinterest" | "web";
+    includeKeywords: string[];
+    excludeKeywords: string[];
+    limit: number;
+    projectId: string;
+    analysisBatchId?: string;
+  };
   source: { id: string; defaultLimit: number };
   taskRepo: ReturnType<typeof createCrawlTaskRepository>;
   contentRepo: ReturnType<typeof createRawContentRepository>;
   runRepo: ReturnType<typeof createAnalysisRunRepository>;
+  batchRepo: ReturnType<typeof createAnalysisBatchRepository>;
   queue: TaskQueue;
 }) {
   try {
@@ -230,13 +259,16 @@ async function startCollection({
       id: taskId,
       kind: "crawl",
       payload: {
-        platform: "reddit",
+        platform: run.platform,
         query: {
           name: run.includeKeywords.join(" "),
           includeKeywords: run.includeKeywords,
           excludeKeywords: run.excludeKeywords,
           language: "en",
-          limitPerRun: Math.min(run.limit, source.defaultLimit)
+          limitPerRun: determineTaskTargetCount({
+            runLimit: run.limit,
+            sourceDefaultLimit: source.defaultLimit
+          })
         }
       }
     });
@@ -257,29 +289,35 @@ async function startCollection({
       }))
     );
 
+    const completion = determineCollectionCompletion({
+      collectedCount,
+      validCount: inserted.items.length,
+      duplicateCount: inserted.duplicates
+    });
+
     await taskRepo.update(taskId, {
-      status: collectedCount === 0 ? "no_content" : "success",
+      status: completion.taskStatus,
       collectedCount,
       validCount: inserted.items.length,
       duplicateCount: inserted.duplicates,
-      errorMessage:
-        collectedCount === 0
-          ? "No public posts matched this query, or the source returned an empty result."
-          : null,
+      errorMessage: completion.errorMessage,
       finishedAt: new Date().toISOString()
     });
 
     await runRepo.update(runId, {
-      status: "content_ready",
+      status: completion.runStatus,
       collectedCount,
       validCount: inserted.items.length,
       duplicateCount: inserted.duplicates,
+      errorMessage: completion.errorMessage,
       finishedAt: new Date().toISOString()
     });
+    if (run.analysisBatchId) await refreshBatchFromRuns(run.analysisBatchId, { batchRepo, runRepo });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_crawl_error";
+    const taskStatus = mapCollectionErrorToTaskStatus(error);
     await taskRepo.update(taskId, {
-      status: "failed",
+      status: taskStatus,
       errorMessage: message,
       finishedAt: new Date().toISOString()
     });
@@ -288,7 +326,95 @@ async function startCollection({
       errorMessage: message,
       finishedAt: new Date().toISOString()
     });
+    if (run.analysisBatchId) await refreshBatchFromRuns(run.analysisBatchId, { batchRepo, runRepo });
   }
+}
+
+export async function refreshBatchFromRuns(
+  batchId: string,
+  repos: {
+    batchRepo: ReturnType<typeof createAnalysisBatchRepository>;
+    runRepo: ReturnType<typeof createAnalysisRunRepository>;
+  }
+) {
+  const runs = await repos.runRepo.listByBatch(batchId);
+  const status = deriveBatchStatus(runs);
+  const collectedCount = runs.reduce((sum, run) => sum + run.collectedCount, 0);
+  const validCount = runs.reduce((sum, run) => sum + run.validCount, 0);
+  const duplicateCount = runs.reduce((sum, run) => sum + run.duplicateCount, 0);
+  const finishedStatuses: AnalysisBatchStatus[] = [
+    "partial_ready",
+    "content_ready",
+    "no_content",
+    "collection_failed"
+  ];
+
+  await repos.batchRepo.update(batchId, {
+    status,
+    collectedCount,
+    validCount,
+    duplicateCount,
+    errorMessage: runs.find((run) => run.errorMessage)?.errorMessage ?? null,
+    finishedAt: finishedStatuses.includes(status) ? new Date().toISOString() : null
+  });
+}
+
+export function deriveBatchStatus(
+  runs: Array<{ status: AnalysisRunStatus; validCount: number }>
+): AnalysisBatchStatus {
+  if (runs.length === 0) return "draft";
+  if (runs.some((run) => run.status === "collecting")) return "collecting";
+
+  const hasValid = runs.some((run) => run.validCount > 0);
+  const hasFailure = runs.some((run) => run.status === "collection_failed");
+  if (hasValid && hasFailure) return "partial_ready";
+  if (hasValid) return "content_ready";
+  if (hasFailure) return "collection_failed";
+  return "no_content";
+}
+
+export function determineTaskTargetCount({
+  runLimit,
+  sourceDefaultLimit
+}: {
+  runLimit: number;
+  sourceDefaultLimit: number;
+}) {
+  // WHY: 用户创建 run 时输入的 limit 是本次任务目标，source.defaultLimit 只能作为未指定时的默认值。
+  // TRADE-OFF: 低频采集仍由 adapter/平台限流控制，不在这里静默改小用户目标，避免 UI 与真实任务不一致。
+  return runLimit || sourceDefaultLimit;
+}
+
+export function determineCollectionCompletion({
+  collectedCount,
+  validCount,
+  duplicateCount
+}: {
+  collectedCount: number;
+  validCount: number;
+  duplicateCount: number;
+}): {
+  taskStatus: TaskStatus;
+  runStatus: AnalysisRunStatus;
+  errorMessage: string | null;
+} {
+  if (validCount > 0) {
+    return { taskStatus: "success", runStatus: "content_ready", errorMessage: null };
+  }
+
+  if (collectedCount > 0 && duplicateCount === collectedCount) {
+    return {
+      taskStatus: "no_content",
+      runStatus: "no_content",
+      errorMessage: "Collected items were all duplicate content already stored in the library."
+    };
+  }
+
+  return {
+    taskStatus: "no_content",
+    runStatus: "no_content",
+    errorMessage: "No public posts matched this query, or the source returned an empty result."
+  };
 }
 
 // WHY: deterministic 报告从采集数据直接生成，不依赖 AI；确保 MVP 有可用输出。

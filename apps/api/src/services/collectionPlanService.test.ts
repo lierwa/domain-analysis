@@ -1,7 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDb, initializeDatabase } from "@domain-analysis/db";
+import { cleanupDatabaseTempDir, createDb, initializeDatabase } from "@domain-analysis/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAnalysisRunService } from "./analysisRunService";
 import { createCollectionPlanService } from "./collectionPlanService";
@@ -16,7 +16,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(tempDir, { recursive: true, force: true });
+  await cleanupDatabaseTempDir(tempDir);
 });
 
 describe("collection plan scheduled runs", () => {
@@ -27,6 +27,7 @@ describe("collection plan scheduled runs", () => {
 
     const run = await runService.createRun({
       projectName: "AI search",
+      platform: "reddit",
       goal: "Track AI search product pain points",
       includeKeywords: ["AI search"],
       excludeKeywords: [],

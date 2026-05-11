@@ -1,9 +1,9 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAnalysisProjectRepository } from "./analysisRepositories";
-import { createDb, initializeDatabase } from "./client";
+import { cleanupDatabaseTempDir, createDb, initializeDatabase } from "./client";
 import { createCollectionPlanRepository } from "./collectionPlanRepository";
 
 let tempDir: string;
@@ -16,7 +16,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(tempDir, { recursive: true, force: true });
+  await cleanupDatabaseTempDir(tempDir);
 });
 
 describe("collection plan repository", () => {

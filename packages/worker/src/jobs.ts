@@ -1,7 +1,11 @@
 import type { Platform } from "@domain-analysis/shared";
+import type { TaskStatus } from "@domain-analysis/shared";
 import { createRedditAdapter } from "./adapters/reddit";
 import type { CollectedRawContent, CollectionQuery } from "./adapters/types";
+import { createWebAdapter } from "./adapters/web";
 import { createXAdapter } from "./adapters/x";
+import { createYoutubeAdapter } from "./adapters/youtube";
+import { ExternalCollectorError } from "./collectors/externalCollector";
 
 export type JobKind = "crawl" | "clean" | "analyze" | "report";
 
@@ -38,7 +42,7 @@ export async function runJob(job: WorkerJob): Promise<JobResult> {
 
 async function runCrawlJob(job: WorkerJob): Promise<JobResult> {
   const payload = parseCrawlPayload(job.payload);
-  const adapter = payload.platform === "reddit" ? createRedditAdapter() : createXAdapter();
+  const adapter = createAdapterForPlatform(payload.platform);
   const items = await adapter.collect(payload.query);
 
   return {
@@ -47,6 +51,21 @@ async function runCrawlJob(job: WorkerJob): Promise<JobResult> {
     message: `${payload.platform} collection completed`,
     items
   };
+}
+
+export function createAdapterForPlatform(platform: Platform) {
+  if (platform === "reddit") return createRedditAdapter();
+  if (platform === "youtube") return createYoutubeAdapter();
+  if (platform === "x") return createXAdapter();
+  if (platform === "web") return createWebAdapter();
+  throw new Error("unsupported_crawl_platform");
+}
+
+export function mapCollectionErrorToTaskStatus(error: unknown): TaskStatus {
+  if (error instanceof ExternalCollectorError) {
+    return error.code;
+  }
+  return "failed";
 }
 
 function finishJob(job: WorkerJob, message: string): JobResult {
@@ -58,7 +77,7 @@ function finishJob(job: WorkerJob, message: string): JobResult {
 }
 
 function parseCrawlPayload(payload: Record<string, unknown>): CrawlJobPayload {
-  if (payload.platform !== "reddit" && payload.platform !== "x") {
+  if (payload.platform !== "reddit" && payload.platform !== "x" && payload.platform !== "youtube" && payload.platform !== "web") {
     throw new Error("unsupported_crawl_platform");
   }
 

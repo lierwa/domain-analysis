@@ -1,5 +1,7 @@
 import { z } from "zod";
 import {
+  analysisBatchPlatforms,
+  analysisBatchStatuses,
   analysisReportTypes,
   analysisRunStatuses,
   collectionCadences,
@@ -52,9 +54,36 @@ export const analysisProjectSchema = z.object({
   goal: z.string().min(1).max(1000),
   language: z.string().min(2).max(12),
   market: z.string().min(2).max(64),
-  defaultPlatform: z.literal("reddit"),
+  defaultPlatform: z.enum(platforms).default("web"),
   defaultLimit: z.number().int().min(1).max(500),
   status: z.enum(projectStatuses),
+  createdAt: isoDateSchema,
+  updatedAt: isoDateSchema
+});
+
+export const platformLimitSchema = z.object({
+  platform: z.enum(analysisBatchPlatforms),
+  limit: z.number().int().min(1).max(500)
+});
+
+export const analysisBatchSchema = z.object({
+  id: idSchema,
+  projectId: idSchema,
+  name: z.string().min(1).max(200),
+  status: z.enum(analysisBatchStatuses),
+  goal: z.string().min(1).max(1000),
+  includeKeywords: z.array(z.string().min(1)),
+  excludeKeywords: z.array(z.string().min(1)),
+  language: z.string().min(2).max(12),
+  market: z.string().min(2).max(64),
+  collectedCount: z.number().int().min(0),
+  validCount: z.number().int().min(0),
+  duplicateCount: z.number().int().min(0),
+  runCount: z.number().int().min(0).optional(),
+  reportId: idSchema.optional(),
+  errorMessage: z.string().optional(),
+  startedAt: isoDateSchema.optional(),
+  finishedAt: isoDateSchema.optional(),
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema
 });
@@ -64,7 +93,7 @@ export const collectionPlanSchema = z.object({
   projectId: idSchema,
   name: z.string().min(1).max(160),
   status: z.enum(collectionPlanStatuses),
-  platform: z.literal("reddit"),
+  platform: z.enum(platforms),
   includeKeywords: z.array(z.string().min(1)).min(1),
   excludeKeywords: z.array(z.string().min(1)),
   language: z.string().min(2).max(12),
@@ -81,7 +110,7 @@ export const collectionPlanSchema = z.object({
 export const createCollectionPlanInputSchema = z.object({
   projectId: idSchema,
   name: z.string().min(1).max(160),
-  platform: z.literal("reddit").default("reddit"),
+  platform: z.enum(platforms).default("web"),
   includeKeywords: z.array(z.string().min(1)).min(1),
   excludeKeywords: z.array(z.string().min(1)).default([]),
   language: z.string().min(2).max(12),
@@ -96,11 +125,12 @@ export const collectionRunTriggerSchema = z.enum(collectionRunTriggers);
 export const analysisRunSchema = z.object({
   id: idSchema,
   projectId: idSchema,
+  analysisBatchId: idSchema.optional(),
   name: z.string().min(1).max(200),
   status: z.enum(analysisRunStatuses),
   includeKeywords: z.array(z.string().min(1)),
   excludeKeywords: z.array(z.string().min(1)),
-  platform: z.literal("reddit"),
+  platform: z.enum(platforms),
   limit: z.number().int().min(1).max(500),
   collectedCount: z.number().int().min(0),
   validCount: z.number().int().min(0),
@@ -147,6 +177,7 @@ export const runReportSchema = z.object({
 export const createAnalysisRunInputSchema = z.object({
   projectId: idSchema.optional(),
   projectName: z.string().min(1).max(120).optional(),
+  platform: z.enum(platforms),
   goal: z.string().min(1).max(1000),
   includeKeywords: z.array(z.string().min(1)).min(1),
   excludeKeywords: z.array(z.string().min(1)).default([]),
@@ -155,6 +186,34 @@ export const createAnalysisRunInputSchema = z.object({
   limit: z.number().int().min(1).max(500).default(100)
 });
 
+export const createAnalysisBatchInputSchema = z
+  .object({
+    projectId: idSchema.optional(),
+    projectName: z.string().min(1).max(120).optional(),
+    goal: z.string().min(1).max(1000),
+    includeKeywords: z.array(z.string().min(1)).min(1),
+    excludeKeywords: z.array(z.string().min(1)).default([]),
+    language: z.string().min(2).max(12),
+    market: z.string().min(2).max(64),
+    platformLimits: z.array(platformLimitSchema).min(1).max(4)
+  })
+  .superRefine((input, ctx) => {
+    const platformsSeen = new Set<string>();
+    for (const [index, item] of input.platformLimits.entries()) {
+      if (!platformsSeen.has(item.platform)) {
+        platformsSeen.add(item.platform);
+        continue;
+      }
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["platformLimits", index, "platform"],
+        message: "Platform can only appear once in a batch"
+      });
+    }
+  });
+
+export type AnalysisBatchDto = z.infer<typeof analysisBatchSchema>;
+export type PlatformLimitDto = z.infer<typeof platformLimitSchema>;
 export type AnalysisProjectDto = z.infer<typeof analysisProjectSchema>;
 export type CollectionPlanDto = z.infer<typeof collectionPlanSchema>;
 export type CreateCollectionPlanInput = z.infer<typeof createCollectionPlanInputSchema>;
@@ -163,3 +222,4 @@ export type AnalysisRunDto = z.infer<typeof analysisRunSchema>;
 export type RunContentDto = z.infer<typeof runContentSchema>;
 export type RunReportDto = z.infer<typeof runReportSchema>;
 export type CreateAnalysisRunInput = z.infer<typeof createAnalysisRunInputSchema>;
+export type CreateAnalysisBatchInput = z.infer<typeof createAnalysisBatchInputSchema>;

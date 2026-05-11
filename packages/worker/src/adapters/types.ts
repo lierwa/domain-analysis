@@ -1,6 +1,13 @@
 import type { Platform } from "@domain-analysis/shared";
 
-export type CollectionMode = "official_api" | "public_json" | "nitter_rss";
+export type CollectionMode =
+  | "official_api"
+  | "public_json_fallback"
+  | "yt_dlp"
+  | "transcript"
+  | "twscrape"
+  | "twikit"
+  | "playwright_search";
 
 export interface CollectionQuery {
   name: string;
@@ -8,6 +15,11 @@ export interface CollectionQuery {
   excludeKeywords: string[];
   language: string;
   limitPerRun: number;
+  targetUrls?: string[];
+  accountHandles?: string[];
+  channelUrls?: string[];
+  since?: string;
+  until?: string;
 }
 
 export interface CollectedRawContent {
@@ -45,7 +57,7 @@ export interface SourceCollectionPolicy {
 }
 
 export const defaultConservativeSourcePolicy: SourceCollectionPolicy = {
-  browserMode: "none",
+  browserMode: "local_profile",
   respectRobotsTxt: true,
   maxConcurrency: 1,
   maxRequestsPerMinute: 6,

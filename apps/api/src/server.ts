@@ -4,6 +4,7 @@ import { createDb, type AppDb } from "@domain-analysis/db";
 import { registerHealthRoutes } from "./routes/health";
 import { registerModuleRoutes } from "./routes/modules";
 import { registerAnalysisRoutes } from "./routes/analysisRoutes";
+import { registerSettingsRoutes } from "./routes/settingsRoutes";
 
 // WHY: 业务流程由 analysisRoutes + analysisRunService 统一编排，避免再暴露工程对象 API。
 
@@ -24,6 +25,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await registerHealthRoutes(app);
   await registerModuleRoutes(app, db);
   await registerAnalysisRoutes(app, db);
+  await registerSettingsRoutes(app);
 
   app.setErrorHandler((error, _request, reply) => {
     app.log.error(error);

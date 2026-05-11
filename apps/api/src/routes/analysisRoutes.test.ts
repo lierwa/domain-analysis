@@ -1,8 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createDb, initializeDatabase } from "@domain-analysis/db";
+import { cleanupDatabaseTempDir, createDb, initializeDatabase } from "@domain-analysis/db";
 import { buildServer } from "../server";
 
 let tempDir: string;
@@ -15,7 +15,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(tempDir, { recursive: true, force: true });
+  await cleanupDatabaseTempDir(tempDir);
 });
 
 describe("analysis project routes", () => {
@@ -75,6 +75,7 @@ describe("analysis run routes", () => {
       url: "/api/analysis-runs",
       payload: {
         goal: "Understand AI search frustrations",
+        platform: "reddit",
         includeKeywords: ["ChatGPT", "Perplexity"],
         excludeKeywords: [],
         language: "en",
@@ -86,6 +87,7 @@ describe("analysis run routes", () => {
     expect(created.statusCode).toBe(201);
     const run = created.json().item;
     expect(run.status).toBe("draft");
+    expect(run.platform).toBe("reddit");
     expect(run.includeKeywords).toEqual(["ChatGPT", "Perplexity"]);
     expect(run.projectId).toBeTruthy();
 
@@ -100,6 +102,7 @@ describe("analysis run routes", () => {
       url: "/api/analysis-runs",
       payload: {
         goal: "Test run",
+        platform: "reddit",
         includeKeywords: ["test"],
         language: "en",
         market: "US",
@@ -133,6 +136,27 @@ describe("analysis run routes", () => {
     await app.close();
   });
 
+  it("rejects create run without an explicit platform", async () => {
+    const app = await buildServer({ logger: false, db: createDb(databaseUrl) });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/analysis-runs",
+      payload: {
+        goal: "No platform",
+        includeKeywords: ["test"],
+        language: "en",
+        market: "US",
+        limit: 10
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toBe("validation_error");
+
+    await app.close();
+  });
+
   it("lists run crawl tasks and contents for a new run", async () => {
     const app = await buildServer({ logger: false, db: createDb(databaseUrl) });
 
@@ -141,6 +165,7 @@ describe("analysis run routes", () => {
       url: "/api/analysis-runs",
       payload: {
         goal: "Empty run",
+        platform: "reddit",
         includeKeywords: ["test"],
         language: "en",
         market: "US",
@@ -171,6 +196,7 @@ describe("analysis run routes", () => {
       url: "/api/analysis-runs",
       payload: {
         goal: "Delete test",
+        platform: "reddit",
         includeKeywords: ["test"],
         language: "en",
         market: "US",
@@ -185,6 +211,32 @@ describe("analysis run routes", () => {
     expect(deleted.statusCode).toBe(200);
     expect(deleted.json().ok).toBe(true);
     expect(fetched.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it("does not delete a collecting run", async () => {
+    const app = await buildServer({ logger: false, db: createDb(databaseUrl) });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/analysis-runs",
+      payload: {
+        goal: "Collecting delete test",
+        platform: "reddit",
+        includeKeywords: ["test"],
+        language: "en",
+        market: "US",
+        limit: 10
+      }
+    });
+    const runId: string = created.json().item.id;
+    await app.inject({ method: "POST", url: `/api/analysis-runs/${runId}/start` });
+
+    const deleted = await app.inject({ method: "POST", url: `/api/analysis-runs/${runId}/delete` });
+
+    expect(deleted.statusCode).toBe(400);
+    expect(deleted.json().message).toContain("collecting");
 
     await app.close();
   });

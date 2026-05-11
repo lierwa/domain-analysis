@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Trash2 } from "lucide-react";
 import { useState } from "react";
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import { RunStageTabs, type RunStage } from "../components/RunStageTabs";
@@ -6,6 +7,7 @@ import {
   fetchReport,
   fetchRunCrawlTasks,
   generateRunReport,
+  deleteAnalysisRun,
   retryAnalysisRun,
   type AnalysisRun
 } from "../lib/api";
@@ -15,10 +17,11 @@ import { RunContentPanel } from "./RunContentPanel";
 interface RunDetailProps {
   run: AnalysisRun;
   onRefresh: () => void;
+  onDeleted: () => void;
 }
 
 // WHY: RunDetail 一个页面承载完整闭环，用 stage tab 替代多级导航跳转。
-export function RunDetail({ run, onRefresh }: RunDetailProps) {
+export function RunDetail({ run, onRefresh, onDeleted }: RunDetailProps) {
   const [stage, setStage] = useState<RunStage>(deriveDefaultStage(run.status));
   const queryClient = useQueryClient();
 
@@ -44,7 +47,7 @@ export function RunDetail({ run, onRefresh }: RunDetailProps) {
             <span>{run.validCount} valid · {run.duplicateCount} dupes · {run.collectedCount} collected</span>
           </div>
         </div>
-        <RunActions run={run} onRefresh={handleRefresh} />
+        <RunActions run={run} onRefresh={handleRefresh} onDeleted={onDeleted} />
       </div>
 
       {/* Stage tabs */}
@@ -66,6 +69,7 @@ export function RunDetail({ run, onRefresh }: RunDetailProps) {
 function deriveDefaultStage(status: AnalysisRun["status"]): RunStage {
   if (status === "draft") return "setup";
   if (status === "collecting" || status === "collection_failed") return "collection";
+  if (status === "no_content") return "collection";
   if (status === "content_ready" || status === "analyzing" || status === "analysis_failed") return "content";
   if (status === "insight_ready") return "insights";
   if (status === "report_ready") return "report";
@@ -74,7 +78,15 @@ function deriveDefaultStage(status: AnalysisRun["status"]): RunStage {
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
 
-function RunActions({ run, onRefresh }: { run: AnalysisRun; onRefresh: () => void }) {
+function RunActions({
+  run,
+  onRefresh,
+  onDeleted
+}: {
+  run: AnalysisRun;
+  onRefresh: () => void;
+  onDeleted: () => void;
+}) {
   const retryMutation = useMutation({
     mutationFn: () => retryAnalysisRun(run.id),
     onSuccess: onRefresh
@@ -83,9 +95,29 @@ function RunActions({ run, onRefresh }: { run: AnalysisRun; onRefresh: () => voi
     mutationFn: () => generateRunReport(run.id),
     onSuccess: onRefresh
   });
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteAnalysisRun(run.id),
+    onSuccess: onDeleted,
+    onError: (error) => window.alert(error instanceof Error ? error.message : "Delete failed")
+  });
+
+  function handleDelete() {
+    if (run.status === "collecting") return;
+    if (!window.confirm("Delete this analysis run?")) return;
+    deleteMutation.mutate();
+  }
 
   return (
     <div className="flex gap-2">
+      <button
+        type="button"
+        title="Delete run"
+        disabled={run.status === "collecting" || deleteMutation.isPending}
+        onClick={handleDelete}
+        className="rounded border border-line p-1.5 text-muted hover:text-red-700 disabled:opacity-40"
+      >
+        <Trash2 size={14} aria-hidden="true" />
+      </button>
       {run.status === "collection_failed" && (
         <button
           type="button"
@@ -115,7 +147,7 @@ function RunActions({ run, onRefresh }: { run: AnalysisRun; onRefresh: () => voi
 function SetupTab({ run }: { run: AnalysisRun }) {
   const rows: [string, string][] = [
     ["Goal", run.name],
-    ["Platform", "Reddit"],
+    ["Platform", formatPlatform(run.platform)],
     ["Include keywords", run.includeKeywords.join(", ")],
     ["Exclude keywords", run.excludeKeywords.join(", ") || "—"],
     ["Limit", String(run.limit)],
@@ -133,6 +165,12 @@ function SetupTab({ run }: { run: AnalysisRun }) {
       ))}
     </dl>
   );
+}
+
+function formatPlatform(platform: AnalysisRun["platform"]) {
+  if (platform === "web") return "Web (local Chrome)";
+  if (platform === "x") return "X";
+  return platform.charAt(0).toUpperCase() + platform.slice(1);
 }
 
 // ─── Collection Tab ───────────────────────────────────────────────────────────

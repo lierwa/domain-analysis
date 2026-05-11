@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   archiveAnalysisProject,
+  createAnalysisBatch,
   createAnalysisProject,
   createAnalysisRun,
+  deleteAnalysisBatch,
   deleteAnalysisRun,
+  fetchAnalysisBatches,
+  fetchAnalysisBatch,
   fetchAnalysisProject,
   fetchAnalysisProjects,
   fetchAnalysisRun,
@@ -12,8 +16,10 @@ import {
   fetchReports,
   fetchRunContents,
   fetchRunCrawlTasks,
+  generateBatchReport,
   generateRunReport,
   retryAnalysisRun,
+  startAnalysisBatch,
   startAnalysisRun,
   buildQueryString
 } from "./api";
@@ -109,6 +115,106 @@ describe("analysis project API client", () => {
 });
 
 describe("analysis run API client", () => {
+  it("creates a multi-platform analysis batch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ item: { id: "batch_1", status: "draft", runs: [] } })
+      })
+    );
+
+    const batch = await createAnalysisBatch({
+      goal: "tattoo design demand",
+      includeKeywords: ["tattoo design"],
+      language: "en",
+      market: "US",
+      platformLimits: [
+        { platform: "x", limit: 200 },
+        { platform: "reddit", limit: 200 }
+      ]
+    });
+
+    expect(batch).toMatchObject({ id: "batch_1", status: "draft" });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-batches",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)).toContain("\"limit\":200");
+  });
+
+  it("starts and deletes an analysis batch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 202,
+          json: async () => ({ item: { id: "batch_1", status: "collecting" } })
+        })
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ok: true }) })
+    );
+
+    const batch = await startAnalysisBatch("batch_1");
+    await expect(deleteAnalysisBatch("batch_1")).resolves.toBeUndefined();
+
+    expect(batch.status).toBe("collecting");
+    expect(vi.mocked(fetch)).toHaveBeenNthCalledWith(
+      1,
+      "/api/analysis-batches/batch_1/start",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(vi.mocked(fetch)).toHaveBeenNthCalledWith(
+      2,
+      "/api/analysis-batches/batch_1/delete",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("generates a batch report", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ item: { id: "report_1", status: "ready", contentMarkdown: "# Batch" } })
+      })
+    );
+
+    const report = await generateBatchReport("batch_1");
+
+    expect(report).toMatchObject({ id: "report_1", status: "ready" });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/analysis-batches/batch_1/report",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("fetches batch list and detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            items: [{ id: "batch_1" }],
+            page: { page: 1, pageSize: 20, total: 1, totalPages: 1, hasNextPage: false, hasPreviousPage: false }
+          })
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ item: { id: "batch_1", runs: [{ id: "run_1", platform: "reddit" }] } })
+        })
+    );
+
+    const list = await fetchAnalysisBatches({ page: 1, pageSize: 20 });
+    const detail = await fetchAnalysisBatch("batch_1");
+
+    expect(list.items).toHaveLength(1);
+    expect(detail.runs?.[0]).toMatchObject({ platform: "reddit" });
+  });
+
   it("creates an analysis run", async () => {
     vi.stubGlobal(
       "fetch",
@@ -120,6 +226,7 @@ describe("analysis run API client", () => {
 
     const run = await createAnalysisRun({
       goal: "understand AI search UX",
+      platform: "reddit",
       includeKeywords: ["AI search"],
       language: "en",
       market: "US"

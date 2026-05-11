@@ -1,5 +1,20 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ExternalLink, RefreshCw } from "lucide-react";
+import { fetchXLoginStatus, openXLoginBrowser } from "../lib/api";
+
 // WHY: Settings 只展示真实已配置项，不显示未实现功能的假配置入口。
 export function SettingsPage() {
+  const queryClient = useQueryClient();
+  const xStatusQuery = useQuery({
+    queryKey: ["settings", "x-login"],
+    queryFn: fetchXLoginStatus,
+    refetchInterval: 5000
+  });
+  const openLoginMutation = useMutation({
+    mutationFn: openXLoginBrowser,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings", "x-login"] })
+  });
+
   return (
     <div className="flex flex-col gap-8">
       <div>
@@ -15,6 +30,47 @@ export function SettingsPage() {
             <SettingRow label="Default limit" value="100 posts per run" />
             <SettingRow label="Max concurrency" value="1 (conservative, rate-limit friendly)" />
           </dl>
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-4">
+        <h2 className="text-sm font-semibold">X Collection</h2>
+        <div className="rounded-xl border border-line p-4">
+          <dl className="divide-y divide-line">
+            <SettingRow label="Mode" value={xStatusQuery.data?.mode ?? "browser_profile"} />
+            <SettingRow label="Profile" value={xStatusQuery.data?.profileDir ?? "Loading..."} />
+            <SettingRow
+              label="Login"
+              value={xStatusQuery.data?.loggedIn ? "Ready" : xStatusQuery.data?.message ?? "Checking..."}
+            />
+          </dl>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={openLoginMutation.isPending}
+              onClick={() => openLoginMutation.mutate()}
+              className="inline-flex items-center gap-2 rounded bg-ink px-4 py-2 text-sm font-medium text-surface hover:bg-ink/80 disabled:opacity-50"
+            >
+              <ExternalLink size={15} aria-hidden="true" />
+              {openLoginMutation.isPending ? "Opening..." : "Open login browser"}
+            </button>
+            <button
+              type="button"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["settings", "x-login"] })}
+              className="inline-flex items-center gap-2 rounded border border-line px-4 py-2 text-sm text-muted hover:text-ink"
+            >
+              <RefreshCw size={15} aria-hidden="true" />
+              Check status
+            </button>
+          </div>
+          <p className="mt-3 text-xs text-muted">
+            X uses a dedicated local Chrome profile. Finish login manually in the opened browser, then retry the failed run.
+          </p>
+          {openLoginMutation.isError && (
+            <p className="mt-2 text-sm text-red-600">
+              {openLoginMutation.error instanceof Error ? openLoginMutation.error.message : "Could not open login browser."}
+            </p>
+          )}
         </div>
       </section>
 

@@ -12,6 +12,7 @@
   "dependencies": {
     "@domain-analysis/shared": "0.1.0",
     "crawlee": "^3.16.0",
-    "p-queue": "^8.0.1"
+    "p-queue": "^8.0.1",
+    "playwright": "^1.59.1"
   }
 }

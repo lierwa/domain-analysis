@@ -27,11 +27,41 @@ export const analysisProjects = sqliteTable("analysis_projects", {
   goal: text("goal").notNull(),
   language: text("language").notNull(),
   market: text("market").notNull(),
-  defaultPlatform: text("default_platform").notNull().default("reddit"),
+    defaultPlatform: text("default_platform").notNull().default("web"),
   defaultLimit: integer("default_limit").notNull().default(100),
   status: text("status").notNull().default("active"),
   ...timestamps
 });
+
+// WHY: analysis_batches 表达一次业务分析意图，子 run 才负责每个平台的实际采集。
+export const analysisBatches = sqliteTable(
+  "analysis_batches",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => analysisProjects.id),
+    name: text("name").notNull(),
+    status: text("status").notNull().default("draft"),
+    goal: text("goal").notNull(),
+    includeKeywords: text("include_keywords", { mode: "json" }).notNull(),
+    excludeKeywords: text("exclude_keywords", { mode: "json" }).notNull(),
+    language: text("language").notNull(),
+    market: text("market").notNull(),
+    collectedCount: integer("collected_count").notNull().default(0),
+    validCount: integer("valid_count").notNull().default(0),
+    duplicateCount: integer("duplicate_count").notNull().default(0),
+    reportId: text("report_id"),
+    errorMessage: text("error_message"),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    ...timestamps
+  },
+  (table) => ({
+    projectIdx: index("analysis_batches_project_idx").on(table.projectId),
+    statusIdx: index("analysis_batches_status_idx").on(table.status)
+  })
+);
 
 // WHY: collection_plans 是长期后台采集配置；analysis_runs 只是某次执行结果，不能承载调度策略。
 export const collectionPlans = sqliteTable(
@@ -43,7 +73,7 @@ export const collectionPlans = sqliteTable(
       .references(() => analysisProjects.id),
     name: text("name").notNull(),
     status: text("status").notNull().default("active"),
-    platform: text("platform").notNull().default("reddit"),
+    platform: text("platform").notNull().default("web"),
     includeKeywords: text("include_keywords", { mode: "json" }).notNull(),
     excludeKeywords: text("exclude_keywords", { mode: "json" }).notNull(),
     language: text("language").notNull(),
@@ -69,13 +99,14 @@ export const analysisRuns = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => analysisProjects.id),
+    analysisBatchId: text("analysis_batch_id").references(() => analysisBatches.id),
     collectionPlanId: text("collection_plan_id").references(() => collectionPlans.id),
     name: text("name").notNull(),
     status: text("status").notNull().default("draft"),
     runTrigger: text("run_trigger").notNull().default("manual"),
     includeKeywords: text("include_keywords", { mode: "json" }).notNull(),
     excludeKeywords: text("exclude_keywords", { mode: "json" }).notNull(),
-    platform: text("platform").notNull().default("reddit"),
+    platform: text("platform").notNull().default("web"),
     limit: integer("run_limit").notNull().default(100),
     collectedCount: integer("collected_count").notNull().default(0),
     validCount: integer("valid_count").notNull().default(0),

@@ -5,7 +5,7 @@ import {
   createCollectionPlanRepository,
   type AppDb
 } from "@domain-analysis/db";
-import type { CollectionCadence } from "@domain-analysis/shared";
+import type { CollectionCadence, Platform } from "@domain-analysis/shared";
 
 export function createCollectionPlanService(db: AppDb) {
   const projectRepo = createAnalysisProjectRepository(db);
@@ -16,7 +16,7 @@ export function createCollectionPlanService(db: AppDb) {
     async createPlan(input: {
       projectId: string;
       name: string;
-      platform: "reddit";
+      platform: Platform;
       includeKeywords: string[];
       excludeKeywords: string[];
       language: string;
@@ -59,6 +59,7 @@ export function createCollectionPlanService(db: AppDb) {
         projectId: plan.projectId,
         name: `${plan.name} - ${new Date().toISOString().slice(0, 10)}`,
         goal: `Scheduled collection for ${plan.name}`,
+        platform: plan.platform,
         includeKeywords: plan.includeKeywords,
         excludeKeywords: plan.excludeKeywords,
         language: plan.language,

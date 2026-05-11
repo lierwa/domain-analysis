@@ -1,15 +1,36 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createClient } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "./schema";
 
+const openClients = new Set<ReturnType<typeof createClient>>();
+
 export function createDb(databaseUrl = process.env.DATABASE_URL ?? "file:data/domain-analysis.sqlite") {
   const client = createClient({ url: databaseUrl });
+  openClients.add(client);
   return drizzle(client, { schema });
 }
 
 export type AppDb = ReturnType<typeof createDb>;
+
+export function closeAllDatabaseClients() {
+  for (const client of openClients) {
+    client.close();
+    openClients.delete(client);
+  }
+}
+
+export async function cleanupDatabaseTempDir(tempDir: string) {
+  closeAllDatabaseClients();
+  try {
+    await rm(tempDir, { recursive: true, force: true });
+  } catch (error) {
+    // WHY: libsql/sqlite native handles can release a file slightly after close on Windows;测试清理不能掩盖业务行为断言。
+    // TRADE-OFF: 遇到 EBUSY 时可能留下少量临时目录，但比让稳定测试因平台文件锁失败更可维护。
+    if ((error as NodeJS.ErrnoException).code !== "EBUSY") throw error;
+  }
+}
 
 export async function initializeDatabase(
   databaseUrl = process.env.DATABASE_URL ?? "file:data/domain-analysis.sqlite"
@@ -19,7 +40,8 @@ export async function initializeDatabase(
 
   // WHY: 当前仍是测试阶段的大重构，不为旧 SQLite schema 写兼容迁移。
   // TRADE-OFF: 如果已有本地旧库，需要手动清空/重建；后续稳定后再引入正式 migration。
-  await client.executeMultiple(`
+  try {
+    await client.executeMultiple(`
     PRAGMA foreign_keys = ON;
 
     CREATE TABLE IF NOT EXISTS sources (
@@ -42,19 +64,43 @@ export async function initializeDatabase(
       goal TEXT NOT NULL,
       language TEXT NOT NULL,
       market TEXT NOT NULL,
-      default_platform TEXT NOT NULL DEFAULT 'reddit',
+      default_platform TEXT NOT NULL DEFAULT 'web',
       default_limit INTEGER NOT NULL DEFAULT 100,
       status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS analysis_batches (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES analysis_projects(id),
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      goal TEXT NOT NULL,
+      include_keywords TEXT NOT NULL,
+      exclude_keywords TEXT NOT NULL,
+      language TEXT NOT NULL,
+      market TEXT NOT NULL,
+      collected_count INTEGER NOT NULL DEFAULT 0,
+      valid_count INTEGER NOT NULL DEFAULT 0,
+      duplicate_count INTEGER NOT NULL DEFAULT 0,
+      report_id TEXT,
+      error_message TEXT,
+      started_at TEXT,
+      finished_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS analysis_batches_project_idx ON analysis_batches(project_id);
+    CREATE INDEX IF NOT EXISTS analysis_batches_status_idx ON analysis_batches(status);
+
     CREATE TABLE IF NOT EXISTS collection_plans (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL REFERENCES analysis_projects(id),
       name TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',
-      platform TEXT NOT NULL DEFAULT 'reddit',
+      platform TEXT NOT NULL DEFAULT 'web',
       include_keywords TEXT NOT NULL,
       exclude_keywords TEXT NOT NULL,
       language TEXT NOT NULL,
@@ -74,13 +120,14 @@ export async function initializeDatabase(
     CREATE TABLE IF NOT EXISTS analysis_runs (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL REFERENCES analysis_projects(id),
+      analysis_batch_id TEXT REFERENCES analysis_batches(id),
       collection_plan_id TEXT REFERENCES collection_plans(id),
       name TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'draft',
       run_trigger TEXT NOT NULL DEFAULT 'manual',
       include_keywords TEXT NOT NULL,
       exclude_keywords TEXT NOT NULL,
-      platform TEXT NOT NULL DEFAULT 'reddit',
+      platform TEXT NOT NULL DEFAULT 'web',
       run_limit INTEGER NOT NULL DEFAULT 100,
       collected_count INTEGER NOT NULL DEFAULT 0,
       valid_count INTEGER NOT NULL DEFAULT 0,
@@ -192,6 +239,14 @@ export async function initializeDatabase(
 
     CREATE INDEX IF NOT EXISTS reports_run_idx ON reports(analysis_run_id);
   `);
+    await client.executeMultiple(`
+      ALTER TABLE analysis_runs ADD COLUMN analysis_batch_id TEXT REFERENCES analysis_batches(id);
+    `).catch((error) => {
+      if (!String((error as Error).message).includes("duplicate column name")) throw error;
+    });
+  } finally {
+    client.close();
+  }
 }
 
 async function ensureSqliteDirectory(databaseUrl: string) {

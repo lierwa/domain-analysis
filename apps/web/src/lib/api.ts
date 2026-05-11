@@ -6,11 +6,21 @@ export type AnalysisRunStatus =
   | "draft"
   | "collecting"
   | "collection_failed"
+  | "no_content"
   | "content_ready"
   | "analyzing"
   | "analysis_failed"
   | "insight_ready"
   | "reporting"
+  | "report_ready";
+
+export type AnalysisBatchStatus =
+  | "draft"
+  | "collecting"
+  | "partial_ready"
+  | "content_ready"
+  | "no_content"
+  | "collection_failed"
   | "report_ready";
 
 export type ProjectStatus = "active" | "paused" | "archived";
@@ -23,7 +33,7 @@ export interface AnalysisProject {
   goal: string;
   language: string;
   market: string;
-  defaultPlatform: "reddit";
+  defaultPlatform: Platform;
   defaultLimit: number;
   status: ProjectStatus;
   createdAt: string;
@@ -33,11 +43,12 @@ export interface AnalysisProject {
 export interface AnalysisRun {
   id: string;
   projectId: string;
+  analysisBatchId?: string;
   name: string;
   status: AnalysisRunStatus;
   includeKeywords: string[];
   excludeKeywords: string[];
-  platform: "reddit";
+  platform: Platform;
   limit: number;
   collectedCount: number;
   validCount: number;
@@ -51,12 +62,40 @@ export interface AnalysisRun {
   updatedAt: string;
 }
 
+export interface PlatformLimit {
+  platform: Extract<Platform, "reddit" | "x" | "youtube" | "web">;
+  limit: number;
+}
+
+export interface AnalysisBatch {
+  id: string;
+  projectId: string;
+  name: string;
+  status: AnalysisBatchStatus;
+  goal: string;
+  includeKeywords: string[];
+  excludeKeywords: string[];
+  language: string;
+  market: string;
+  collectedCount: number;
+  validCount: number;
+  duplicateCount: number;
+  runCount?: number;
+  reportId?: string;
+  errorMessage?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  runs?: AnalysisRun[];
+}
+
 export interface CollectionPlan {
   id: string;
   projectId: string;
   name: string;
   status: ProjectStatus;
-  platform: "reddit";
+  platform: Platform;
   includeKeywords: string[];
   excludeKeywords: string[];
   language: string;
@@ -134,12 +173,33 @@ export interface PaginatedResponse<TItem> {
 export interface CreateAnalysisRunInput {
   projectId?: string;
   projectName?: string;
+  platform: Platform;
   goal: string;
   includeKeywords: string[];
   excludeKeywords?: string[];
   language: string;
   market: string;
   limit?: number;
+}
+
+export interface XLoginStatus {
+  mode: string;
+  profileDir: string;
+  profileExists: boolean;
+  browserOpen: boolean;
+  loggedIn: boolean;
+  message: string;
+}
+
+export interface CreateAnalysisBatchInput {
+  projectId?: string;
+  projectName?: string;
+  goal: string;
+  includeKeywords: string[];
+  excludeKeywords?: string[];
+  language: string;
+  market: string;
+  platformLimits: PlatformLimit[];
 }
 
 export interface CreateCollectionPlanInput {
@@ -202,6 +262,43 @@ export async function createCollectionPlan(input: CreateCollectionPlanInput) {
 }
 
 // ─── Analysis Runs ────────────────────────────────────────────────────────────
+
+export async function fetchAnalysisBatches(
+  params: PageParams = { page: 1, pageSize: 20 }
+): Promise<PaginatedResponse<AnalysisBatch>> {
+  return request<PaginatedResponse<AnalysisBatch>>(`/api/analysis-batches${toQueryString(params)}`);
+}
+
+export async function fetchAnalysisBatch(id: string): Promise<AnalysisBatch> {
+  const data = await request<{ item: AnalysisBatch }>(`/api/analysis-batches/${id}`);
+  return data.item;
+}
+
+export async function createAnalysisBatch(input: CreateAnalysisBatchInput): Promise<AnalysisBatch> {
+  const data = await request<{ item: AnalysisBatch }>("/api/analysis-batches", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+  return data.item;
+}
+
+export async function startAnalysisBatch(id: string): Promise<AnalysisBatch> {
+  const data = await request<{ item: AnalysisBatch }>(`/api/analysis-batches/${id}/start`, {
+    method: "POST"
+  });
+  return data.item;
+}
+
+export async function deleteAnalysisBatch(id: string): Promise<void> {
+  await request<void>(`/api/analysis-batches/${id}/delete`, { method: "POST" });
+}
+
+export async function generateBatchReport(id: string): Promise<RunReport> {
+  const data = await request<{ item: RunReport }>(`/api/analysis-batches/${id}/report`, {
+    method: "POST"
+  });
+  return data.item;
+}
 
 export async function fetchAnalysisRuns(
   params: PageParams & { projectId?: string; status?: string } = { page: 1, pageSize: 20 }
@@ -299,6 +396,20 @@ export async function fetchReport(id: string): Promise<RunReport> {
   return data.item;
 }
 
+// ─── Settings ────────────────────────────────────────────────────────────────
+
+export async function fetchXLoginStatus(): Promise<XLoginStatus> {
+  const data = await request<{ item: XLoginStatus }>("/api/settings/x-login/status");
+  return data.item;
+}
+
+export async function openXLoginBrowser(): Promise<XLoginStatus> {
+  const data = await request<{ item: XLoginStatus }>("/api/settings/x-login/open", {
+    method: "POST"
+  });
+  return data.item;
+}
+
 // ─── 内部工具 ──────────────────────────────────────────────────────────────────
 
 export function buildQueryString(params: Record<string, string | number | boolean | undefined>) {
@@ -328,9 +439,19 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
+    const message = await readErrorMessage(response);
+    throw new Error(message ?? `API request failed: ${response.status}`);
   }
 
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+async function readErrorMessage(response: Response) {
+  try {
+    const body = (await response.json()) as { error?: string; message?: string };
+    return body.message ?? body.error;
+  } catch {
+    return undefined;
+  }
 }

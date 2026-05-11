@@ -6,7 +6,7 @@ import { collectionPlans } from "./schema";
 export interface CreateCollectionPlanInput {
   projectId: string;
   name: string;
-  platform: "reddit";
+  platform: Platform;
   includeKeywords: string[];
   excludeKeywords: string[];
   language: string;

@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { AppDb } from "@domain-analysis/db";
-import { createAnalysisRunInputSchema } from "@domain-analysis/shared";
+import { createAnalysisBatchInputSchema, createAnalysisRunInputSchema } from "@domain-analysis/shared";
 import { z } from "zod";
+import { createAnalysisBatchService } from "../services/analysisBatchService";
 import { createAnalysisRunService } from "../services/analysisRunService";
 import { createContentService } from "../services/contentService";
 
@@ -37,6 +38,7 @@ const createProjectSchema = z.object({
 // WHY: 所有 analysis 路由集中在一个文件，便于统一管理 service 生命周期和错误处理。
 export async function registerAnalysisRoutes(app: FastifyInstance, db: AppDb) {
   const runService = createAnalysisRunService(db);
+  const batchService = createAnalysisBatchService(db);
   const contentService = createContentService(db);
 
   // ─── Analysis Projects ────────────────────────────────────────────────────
@@ -70,6 +72,50 @@ export async function registerAnalysisRoutes(app: FastifyInstance, db: AppDb) {
   );
 
   // ─── Analysis Runs ────────────────────────────────────────────────────────
+
+  app.get<{ Querystring: unknown }>("/api/analysis-batches", async (request, reply) => {
+    const query = parseQuery(pageQuerySchema, request.query, reply);
+    if (!query) return reply;
+    return batchService.listBatches(query.page, query.pageSize);
+  });
+
+  app.post("/api/analysis-batches", async (request, reply) => {
+    const input = parseBody(createAnalysisBatchInputSchema, request.body, reply);
+    if (!input) return reply;
+    const batch = await batchService.createBatch(input);
+    return reply.status(201).send({ item: batch });
+  });
+
+  app.get<{ Params: { id: string } }>("/api/analysis-batches/:id", async (request, reply) => {
+    const batch = await batchService.getBatch(request.params.id);
+    if (!batch) return reply.status(404).send({ error: "batch_not_found" });
+    return { item: batch };
+  });
+
+  app.post<{ Params: { id: string } }>(
+    "/api/analysis-batches/:id/start",
+    async (request, reply) => {
+      const batch = await batchService.startBatch(request.params.id);
+      return reply.status(202).send({ item: batch });
+    }
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/analysis-batches/:id/delete",
+    async (request, reply) => {
+      const batch = await batchService.deleteBatch(request.params.id);
+      if (!batch) return reply.status(404).send({ error: "batch_not_found" });
+      return { ok: true };
+    }
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/analysis-batches/:id/report",
+    async (request, reply) => {
+      const report = await batchService.generateReport(request.params.id);
+      return reply.status(201).send({ item: report });
+    }
+  );
 
   app.get<{ Querystring: unknown }>("/api/analysis-runs", async (request, reply) => {
     const query = parseQuery(runListQuerySchema, request.query, reply);

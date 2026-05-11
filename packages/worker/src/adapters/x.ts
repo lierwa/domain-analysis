@@ -1,5 +1,9 @@
 import { CheerioCrawler } from "crawlee";
+import { chromium, type BrowserContext } from "playwright";
+import { createExternalCollectorError, runExternalCollectorCommand } from "../collectors/externalCollector";
+import { getXUserDataDir, hasXAuthCookie } from "../runtime/xLoginRuntime";
 import {
+  buildKeywordQuery,
   conservativeHttpCrawlerOptions,
   hasExcludedKeyword,
   type CollectedRawContent,
@@ -27,7 +31,75 @@ export function createXAdapter(env: NodeJS.ProcessEnv = process.env): Collection
   if (env.X_COLLECTION_MODE === "official_api") {
     return createXOfficialApiAdapter(env);
   }
-  return createXNitterRssAdapter(env);
+  if (env.X_COLLECTION_MODE === "nitter_rss") {
+    return createXNitterRssAdapter(env);
+  }
+  if ((env.X_COLLECTION_MODE === "twscrape" || env.X_COLLECTION_MODE === "twikit") && env.X_COLLECTOR_COMMAND) {
+    return createXExternalAdapter(env);
+  }
+  return createXBrowserProfileAdapter(env);
+}
+
+export function createXBrowserProfileAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {
+  return {
+    async collect(query) {
+      const context = await chromium.launchPersistentContext(getXUserDataDir(env), {
+        channel: "chrome",
+        headless: env.BROWSER_MODE === "headless"
+      });
+      try {
+        if (!(await hasXAuthCookie(context))) {
+          throw createExternalCollectorError(
+            "login_required",
+            "X login is required. Open Settings > X Collection > Open login browser, finish login, then retry this run."
+          );
+        }
+
+        // WHY: browser_profile 使用用户手动登录的同一份本机 profile，避免默认访问第三方镜像站。
+        // TRADE-OFF: X 前端 DOM 可能变化，第一版作为个人低频 best-effort；稳定重采集仍建议接 twscrape/twikit。
+        const page = await context.newPage();
+        await page.goto(buildXSearchUrl(query.includeKeywords, query.excludeKeywords).toString(), {
+          waitUntil: "domcontentloaded",
+          timeout: 30000
+        });
+        await page.waitForTimeout(2500);
+        return (await extractTweetsFromSearch(context, query.excludeKeywords)).slice(0, query.limitPerRun);
+      } finally {
+        await context.close();
+      }
+    }
+  };
+}
+
+export function createXExternalAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {
+  return {
+    async collect(query) {
+      const command = env.X_COLLECTOR_COMMAND;
+      if (!command) {
+        throw createExternalCollectorError(
+          "login_required",
+          "X collector is not configured. Set X_COLLECTION_MODE=twscrape or twikit with X_COLLECTOR_COMMAND after preparing the login session."
+        );
+      }
+
+      // WHY: X 按计划依赖 twscrape/twikit 这类成熟登录态采集器；Node 只做薄封装和错误归一。
+      // TRADE-OFF: 未配置时宁可明确失败，也不默认访问第三方 Nitter 实例，避免主流程打开不可控网站。
+      const result = await runExternalCollectorCommand({
+        command,
+        args: splitCommandArgs(env.X_COLLECTOR_ARGS),
+        input: {
+          platform: "x",
+          query,
+          config: {
+            mode: env.X_COLLECTION_MODE ?? "twscrape",
+            sessionPath: env.X_SESSION_PATH
+          }
+        },
+        timeoutMs: Number(env.X_COLLECTOR_TIMEOUT_MS ?? 120000)
+      });
+      return result.items.slice(0, query.limitPerRun);
+    }
+  };
 }
 
 export function createXNitterRssAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {
@@ -132,13 +204,59 @@ export function createXOfficialApiAdapter(env: NodeJS.ProcessEnv = process.env):
   };
 }
 
-function buildNitterSearchRssUrl(env: NodeJS.ProcessEnv, includeKeywords: string[], excludeKeywords: string[]) {
+export function buildNitterSearchRssUrl(env: NodeJS.ProcessEnv, includeKeywords: string[], excludeKeywords: string[]) {
   const baseUrl = env.X_NITTER_BASE_URL || "https://nitter.net";
   const url = new URL("/search/rss", baseUrl);
   const include = includeKeywords.map((keyword) => `"${keyword}"`).join(" OR ");
   const exclude = excludeKeywords.map((keyword) => `-"${keyword}"`).join(" ");
   url.searchParams.set("q", [include, exclude].filter(Boolean).join(" "));
   return url;
+}
+
+function splitCommandArgs(value: string | undefined) {
+  if (!value) return [];
+  return value.split(" ").map((item) => item.trim()).filter(Boolean);
+}
+
+export function buildXSearchUrl(includeKeywords: string[], excludeKeywords: string[]) {
+  const url = new URL("https://x.com/search");
+  url.searchParams.set("q", buildKeywordQuery(includeKeywords, excludeKeywords));
+  url.searchParams.set("src", "typed_query");
+  url.searchParams.set("f", "live");
+  return url;
+}
+
+async function extractTweetsFromSearch(context: BrowserContext, excludeKeywords: string[]) {
+  const page = context.pages().at(-1);
+  if (!page) return [];
+  const rows = await page.locator("article").evaluateAll((articles) =>
+    articles.map((article) => {
+      const text = (article.textContent ?? "").replace(/\s+/g, " ").trim();
+      const link = article.querySelector('a[href*="/status/"]')?.getAttribute("href") ?? "";
+      const time = article.querySelector("time")?.getAttribute("datetime") ?? "";
+      const authorHandle = article.querySelector('a[href^="/"]')?.getAttribute("href")?.replace("/", "") ?? "";
+      return { text, link, time, authorHandle };
+    })
+  );
+
+  const seen = new Set<string>();
+  return rows
+    .filter((row) => row.text && row.link && !hasExcludedKeyword(row.text, excludeKeywords))
+    .filter((row) => {
+      if (seen.has(row.link)) return false;
+      seen.add(row.link);
+      return true;
+    })
+    .map((row) => ({
+      platform: "x" as const,
+      externalId: row.link.split("/status/").at(1)?.split("?")[0],
+      url: new URL(row.link, "https://x.com").toString(),
+      authorHandle: row.authorHandle,
+      text: row.text,
+      publishedAt: row.time || undefined,
+      metricsJson: { source: "x_browser_profile" },
+      rawJson: row
+    }));
 }
 
 function cleanRssText(value: string) {
