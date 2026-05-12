@@ -10,6 +10,7 @@ import {
 } from "@domain-analysis/db";
 import type { AnalysisBatchStatus, AnalysisRunStatus, TaskStatus } from "@domain-analysis/shared";
 import { mapCollectionErrorToTaskStatus, TaskQueue } from "@domain-analysis/worker";
+import { buildDeterministicReport } from "./analysisReportBuilder";
 
 const queue = new TaskQueue();
 
@@ -99,7 +100,7 @@ export function createAnalysisRunService(db: AppDb) {
       const run = await runRepo.getById(runId);
       if (!run) throw Object.assign(new Error("run_not_found"), { statusCode: 404 });
 
-      if (run.status !== "draft" && run.status !== "collection_failed") {
+      if (run.status !== "draft" && run.status !== "collection_failed" && run.status !== "login_required") {
         throw Object.assign(
           new Error(`Cannot start run in status: ${run.status}`),
           { statusCode: 400 }
@@ -153,8 +154,8 @@ export function createAnalysisRunService(db: AppDb) {
       const run = await runRepo.getById(runId);
       if (!run) throw Object.assign(new Error("run_not_found"), { statusCode: 404 });
 
-      if (run.status !== "collection_failed") {
-        throw Object.assign(new Error("Only collection_failed runs can be retried"), { statusCode: 400 });
+      if (run.status !== "collection_failed" && run.status !== "login_required") {
+        throw Object.assign(new Error("Only collection_failed or login_required runs can be retried"), { statusCode: 400 });
       }
 
       return this.startRun(runId);
@@ -316,15 +317,16 @@ async function startCollection({
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_crawl_error";
     const taskStatus = mapCollectionErrorToTaskStatus(error);
+    const completion = determineCollectionFailureCompletion({ taskStatus, message });
     await taskRepo.update(taskId, {
-      status: taskStatus,
-      errorMessage: message,
-      finishedAt: new Date().toISOString()
+      status: completion.taskStatus,
+      errorMessage: completion.errorMessage,
+      finishedAt: completion.finishedAt
     });
     await runRepo.update(runId, {
-      status: "collection_failed",
-      errorMessage: message,
-      finishedAt: new Date().toISOString()
+      status: completion.runStatus,
+      errorMessage: completion.errorMessage,
+      finishedAt: completion.finishedAt
     });
     if (run.analysisBatchId) await refreshBatchFromRuns(run.analysisBatchId, { batchRepo, runRepo });
   }
@@ -366,8 +368,10 @@ export function deriveBatchStatus(
   if (runs.some((run) => run.status === "collecting")) return "collecting";
 
   const hasValid = runs.some((run) => run.validCount > 0);
+  const hasLoginRequired = runs.some((run) => run.status === "login_required");
   const hasFailure = runs.some((run) => run.status === "collection_failed");
-  if (hasValid && hasFailure) return "partial_ready";
+  if (hasValid && (hasFailure || hasLoginRequired)) return "partial_ready";
+  if (hasLoginRequired) return "login_required";
   if (hasValid) return "content_ready";
   if (hasFailure) return "collection_failed";
   return "no_content";
@@ -417,98 +421,33 @@ export function determineCollectionCompletion({
   };
 }
 
-// WHY: deterministic 报告从采集数据直接生成，不依赖 AI；确保 MVP 有可用输出。
-function buildDeterministicReport(
-  run: {
-    name: string;
-    includeKeywords: string[];
-    excludeKeywords: string[];
-    validCount: number;
-    collectedCount: number;
-    duplicateCount: number;
-  },
-  contents: Array<{
-    authorName?: string;
-    authorHandle?: string;
-    url: string;
-    text: string;
-    metricsJson: Record<string, unknown> | null;
-    publishedAt?: string;
-  }>
-): string {
-  const topAuthors = getTopAuthors(contents, 10);
-  const highEngagement = getHighEngagement(contents, 5);
-
-  return `# ${run.name} – Analysis Report
-
-## Overview
-
-| Metric | Value |
-|--------|-------|
-| Collected | ${run.collectedCount} |
-| Valid | ${run.validCount} |
-| Duplicates | ${run.duplicateCount} |
-| Include keywords | ${run.includeKeywords.join(", ")} |
-| Exclude keywords | ${run.excludeKeywords.join(", ") || "—"} |
-
-## Top Authors
-
-${topAuthors.map((a) => `- **${a.name}** (${a.count} posts)`).join("\n") || "_No author data_"}
-
-## High Engagement Samples
-
-${highEngagement
-  .map(
-    (c, i) => `### ${i + 1}. ${c.authorName ?? "Unknown"}
-> ${c.text.slice(0, 300)}${c.text.length > 300 ? "…" : ""}
-
-[Source](${c.url})${c.publishedAt ? ` · ${c.publishedAt.slice(0, 10)}` : ""}
-`
-  )
-  .join("\n") || "_No samples available_"}
-
----
-_Generated ${new Date().toISOString().slice(0, 10)} · ${run.validCount} samples_
-`;
-}
-
-function getTopAuthors(
-  contents: Array<{ authorName?: string; authorHandle?: string }>,
-  limit: number
-) {
-  const counts = new Map<string, number>();
-  for (const c of contents) {
-    const name = c.authorName ?? c.authorHandle;
-    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+export function determineCollectionFailureCompletion({
+  taskStatus,
+  message
+}: {
+  taskStatus: TaskStatus;
+  message: string;
+}): {
+  taskStatus: TaskStatus;
+  runStatus: AnalysisRunStatus;
+  errorMessage: string;
+  finishedAt: string | null;
+} {
+  // WHY: login_required 是等待用户补登录的可恢复节点，不是采集器失败。
+  // TRADE-OFF: task 不再 running，但 run 不写 finishedAt，UI 可以明确展示“继续”而不是“重试失败”。
+  if (taskStatus === "login_required") {
+    return {
+      taskStatus,
+      runStatus: "login_required",
+      errorMessage: "X login is required. Complete login in the opened browser, then continue this run.",
+      finishedAt: null
+    };
   }
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([name, count]) => ({ name, count }));
-}
 
-function getHighEngagement(
-  contents: Array<{
-    authorName?: string;
-    url: string;
-    text: string;
-    metricsJson: Record<string, unknown> | null;
-    publishedAt?: string;
-  }>,
-  limit: number
-) {
-  return [...contents]
-    .sort((a, b) => {
-      const scoreA = getEngagementScore(a.metricsJson);
-      const scoreB = getEngagementScore(b.metricsJson);
-      return scoreB - scoreA;
-    })
-    .slice(0, limit);
-}
-
-function getEngagementScore(metrics: Record<string, unknown> | null): number {
-  if (!metrics) return 0;
-  const score = (metrics.score as number) ?? 0;
-  const comments = (metrics.num_comments as number) ?? 0;
-  return score + comments * 2;
+  return {
+    taskStatus,
+    runStatus: "collection_failed",
+    errorMessage: message,
+    finishedAt: new Date().toISOString()
+  };
 }

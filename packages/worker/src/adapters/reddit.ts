@@ -1,4 +1,5 @@
-import { HttpCrawler } from "crawlee";
+import got from "got";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import {
   buildKeywordQuery,
   conservativeHttpCrawlerOptions,
@@ -43,42 +44,29 @@ export function createRedditAdapter(env: NodeJS.ProcessEnv = process.env): Colle
 export function createRedditPublicJsonAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {
   return {
     async collect(query) {
-      const items: CollectedRawContent[] = [];
-      let crawlError: Error | null = null;
       const url = buildPublicSearchUrl(query.includeKeywords, query.excludeKeywords, query.limitPerRun);
-      const crawler = new HttpCrawler({
-        ...conservativeHttpCrawlerOptions,
-        maxRequestsPerCrawl: 1,
-        requestHandlerTimeoutSecs: 30,
-        preNavigationHooks: [
-          async (_context, gotOptions) => {
-            gotOptions.headers = {
-              ...gotOptions.headers,
-              "User-Agent": getRedditUserAgent(env)
-            };
-          }
-        ],
-        requestHandler: async ({ body }) => {
-          const payload = parseRedditJsonBody(body);
-          items.push(...normalizeRedditListing(payload, query.excludeKeywords, query.limitPerRun));
+      const response = await got(url, {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": getRedditUserAgent(env)
         },
-        failedRequestHandler: async ({ response, request }, error) => {
-          const status = response?.statusCode;
-          if (status === 403 || status === 429) {
-            crawlError = new Error(`reddit_public_rate_limited_${status}`);
-            return;
-          }
-          crawlError = new Error(
-            `reddit_public_search_failed_${status ?? request.errorMessages.at(-1) ?? error.message}`
-          );
-        }
+        agent: createRedditProxyAgent(env),
+        retry: { limit: conservativeHttpCrawlerOptions.maxRequestRetries },
+        throwHttpErrors: false,
+        timeout: { request: 30000 }
       });
 
-      // WHY: Reddit 公开 JSON 不需要 secret，Crawlee 负责限速/重试；MVP 牺牲速度换取低成本和低封禁风险。
-      // TRADE-OFF: 公开端点可能被 Reddit 策略调整，失败时需要清楚降级而不是切回高频浏览器抓取。
-      await crawler.run([url.toString()]);
-      if (crawlError) throw crawlError;
-      return items.slice(0, query.limitPerRun);
+      if (response.statusCode === 403 || response.statusCode === 429) {
+        throw new Error(`reddit_public_rate_limited_${response.statusCode}`);
+      }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw new Error(`reddit_public_search_failed_${response.statusCode}`);
+      }
+
+      // WHY: Reddit search.json 是单个 JSON 端点；当前网络下 Crawlee+got-scraping 会被 Reddit 403，
+      // 而 got+https-proxy-agent 与 curl 代理路径一致且更薄，避免把简单 JSON 请求升级成浏览器采集。
+      // TRADE-OFF: 这里放弃 Crawlee 的队列能力；本 adapter 只发 1 个低频请求，重试和超时由 got 负责。
+      return normalizeRedditListing(parseRedditJsonBody(response.body), query.excludeKeywords, query.limitPerRun);
     }
   };
 }
@@ -118,6 +106,23 @@ function buildPublicSearchUrl(includeKeywords: string[], excludeKeywords: string
   url.searchParams.set("sort", "new");
   url.searchParams.set("type", "link");
   return url;
+}
+
+function createRedditProxyAgent(env: NodeJS.ProcessEnv) {
+  const proxyUrl = getRedditProxyUrl(env);
+  if (!proxyUrl) return undefined;
+
+  // WHY: Node 不会自动使用 macOS 或 shell 的 http_proxy；Reddit 直连在当前网络会 reset/超时。
+  // TRADE-OFF: 只把代理显式接入 Reddit JSON 请求，不改变其它平台采集路径。
+  return { https: new HttpsProxyAgent(proxyUrl) };
+}
+
+function getRedditProxyUrl(env: NodeJS.ProcessEnv) {
+  return env.REDDIT_PROXY_URL
+    || env.HTTPS_PROXY
+    || env.https_proxy
+    || env.HTTP_PROXY
+    || env.http_proxy;
 }
 
 function parseRedditJsonBody(body: unknown): RedditListingResponse {

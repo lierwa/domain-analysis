@@ -64,7 +64,7 @@ export function SettingsPage() {
             </button>
           </div>
           <p className="mt-3 text-xs text-muted">
-            X uses a dedicated local Chrome profile. Finish login manually in the opened browser, then retry the failed run.
+            X uses a dedicated local Chrome profile. Finish login manually in the opened browser, then continue the waiting run.
           </p>
           {openLoginMutation.isError && (
             <p className="mt-2 text-sm text-red-600">

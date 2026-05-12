@@ -5,6 +5,7 @@ export type Platform = "reddit" | "x" | "youtube" | "tiktok" | "pinterest" | "we
 export type AnalysisRunStatus =
   | "draft"
   | "collecting"
+  | "login_required"
   | "collection_failed"
   | "no_content"
   | "content_ready"
@@ -17,6 +18,7 @@ export type AnalysisRunStatus =
 export type AnalysisBatchStatus =
   | "draft"
   | "collecting"
+  | "login_required"
   | "partial_ready"
   | "content_ready"
   | "no_content"

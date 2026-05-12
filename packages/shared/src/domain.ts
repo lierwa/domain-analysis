@@ -16,6 +16,7 @@ export const analysisBatchPlatforms = ["reddit", "x", "youtube", "web"] as const
 export const analysisRunStatuses = [
   "draft",
   "collecting",
+  "login_required",
   "collection_failed",
   "no_content",
   "content_ready",
@@ -30,6 +31,7 @@ export const analysisRunStatuses = [
 export const analysisBatchStatuses = [
   "draft",
   "collecting",
+  "login_required",
   "partial_ready",
   "content_ready",
   "no_content",

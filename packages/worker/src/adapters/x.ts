@@ -1,7 +1,12 @@
 import { CheerioCrawler } from "crawlee";
-import { chromium, type BrowserContext } from "playwright";
+import type { BrowserContext } from "playwright";
 import { createExternalCollectorError, runExternalCollectorCommand } from "../collectors/externalCollector";
-import { getXUserDataDir, hasXAuthCookie } from "../runtime/xLoginRuntime";
+import {
+  acquireXCollectionContext,
+  hasXAuthCookie,
+  openXLoginBrowser,
+  XChromeDevToolsUnavailableError
+} from "../runtime/xLoginRuntime";
 import {
   buildKeywordQuery,
   conservativeHttpCrawlerOptions,
@@ -43,29 +48,35 @@ export function createXAdapter(env: NodeJS.ProcessEnv = process.env): Collection
 export function createXBrowserProfileAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {
   return {
     async collect(query) {
-      const context = await chromium.launchPersistentContext(getXUserDataDir(env), {
-        channel: "chrome",
-        headless: env.BROWSER_MODE === "headless"
-      });
+      let lease;
       try {
-        if (!(await hasXAuthCookie(context))) {
+        lease = await acquireXCollectionContext(env);
+      } catch (error) {
+        if (error instanceof XChromeDevToolsUnavailableError) {
+          throw createExternalCollectorError("login_required", error.message);
+        }
+        throw error;
+      }
+      try {
+        if (!(await hasXAuthCookie(lease.context))) {
+          await openXLoginBrowser(env);
           throw createExternalCollectorError(
             "login_required",
-            "X login is required. Open Settings > X Collection > Open login browser, finish login, then retry this run."
+            "X login is required. Complete login in the opened browser, then continue this run."
           );
         }
 
         // WHY: browser_profile 使用用户手动登录的同一份本机 profile，避免默认访问第三方镜像站。
         // TRADE-OFF: X 前端 DOM 可能变化，第一版作为个人低频 best-effort；稳定重采集仍建议接 twscrape/twikit。
-        const page = await context.newPage();
+        const page = await lease.context.newPage();
         await page.goto(buildXSearchUrl(query.includeKeywords, query.excludeKeywords).toString(), {
           waitUntil: "domcontentloaded",
           timeout: 30000
         });
         await page.waitForTimeout(2500);
-        return (await extractTweetsFromSearch(context, query.excludeKeywords)).slice(0, query.limitPerRun);
+        return (await extractTweetsFromSearch(lease.context, query.excludeKeywords)).slice(0, query.limitPerRun);
       } finally {
-        await context.close();
+        await lease.release();
       }
     }
   };

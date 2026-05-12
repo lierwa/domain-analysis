@@ -8,6 +8,7 @@ interface RunStatusBadgeProps {
 const statusConfig: Record<AnalysisRunStatus | AnalysisBatchStatus, { label: string; className: string }> = {
   draft: { label: "Draft", className: "bg-gray-100 text-gray-600" },
   collecting: { label: "Collecting", className: "bg-blue-100 text-blue-700 animate-pulse" },
+  login_required: { label: "Login Required", className: "bg-amber-100 text-amber-700" },
   collection_failed: { label: "Failed", className: "bg-red-100 text-red-700" },
   partial_ready: { label: "Partial Ready", className: "bg-amber-100 text-amber-700" },
   no_content: { label: "No Content", className: "bg-yellow-100 text-yellow-700" },

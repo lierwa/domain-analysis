@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { ExternalLink, RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import { RunStageTabs, type RunStage } from "../components/RunStageTabs";
@@ -8,6 +8,7 @@ import {
   fetchRunCrawlTasks,
   generateRunReport,
   deleteAnalysisRun,
+  openXLoginBrowser,
   retryAnalysisRun,
   type AnalysisRun
 } from "../lib/api";
@@ -91,6 +92,10 @@ function RunActions({
     mutationFn: () => retryAnalysisRun(run.id),
     onSuccess: onRefresh
   });
+  const openLoginMutation = useMutation({
+    mutationFn: openXLoginBrowser,
+    onSuccess: onRefresh
+  });
   const reportMutation = useMutation({
     mutationFn: () => generateRunReport(run.id),
     onSuccess: onRefresh
@@ -118,6 +123,29 @@ function RunActions({
       >
         <Trash2 size={14} aria-hidden="true" />
       </button>
+      {/* WHY: login_required 是等待用户补登录的可恢复状态，入口必须区别于失败重试。 */}
+      {run.status === "login_required" && (
+        <>
+          <button
+            type="button"
+            disabled={openLoginMutation.isPending}
+            onClick={() => openLoginMutation.mutate()}
+            className="inline-flex items-center gap-1.5 rounded border border-line px-3 py-1.5 text-xs hover:bg-surface disabled:opacity-50"
+          >
+            <ExternalLink size={13} aria-hidden="true" />
+            {openLoginMutation.isPending ? "Opening…" : "Open login browser"}
+          </button>
+          <button
+            type="button"
+            disabled={retryMutation.isPending}
+            onClick={() => retryMutation.mutate()}
+            className="inline-flex items-center gap-1.5 rounded bg-ink px-3 py-1.5 text-xs font-medium text-surface hover:bg-ink/80 disabled:opacity-50"
+          >
+            <RefreshCw size={13} aria-hidden="true" />
+            {retryMutation.isPending ? "Continuing…" : "Continue"}
+          </button>
+        </>
+      )}
       {run.status === "collection_failed" && (
         <button
           type="button"
@@ -201,7 +229,13 @@ function CollectionTab({ runId }: { runId: string }) {
             <Metric label="Valid" value={task.validCount} />
           </div>
           {task.errorMessage && (
-            <p className="mt-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{task.errorMessage}</p>
+            <p
+              className={`mt-3 rounded px-3 py-2 text-xs ${
+                task.status === "login_required" ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-700"
+              }`}
+            >
+              {task.errorMessage}
+            </p>
           )}
           {task.startedAt && (
             <p className="mt-2 text-xs text-muted">Started {formatDateTime(task.startedAt)}</p>
@@ -214,11 +248,14 @@ function CollectionTab({ runId }: { runId: string }) {
 
 function StatusPill({ status }: { status: string }) {
   const isRunning = status === "running" || status === "pending";
+  const isLoginRequired = status === "login_required";
   return (
     <span
       className={`rounded-full px-2 py-0.5 text-xs font-medium ${
         isRunning
           ? "bg-blue-100 text-blue-700 animate-pulse"
+          : isLoginRequired
+            ? "bg-amber-100 text-amber-700"
           : status === "success"
             ? "bg-green-100 text-green-700"
             : status === "no_content"
