@@ -14,6 +14,9 @@ import {
 } from "../lib/api";
 import { formatDateTime, shortId } from "../lib/format";
 import { RunContentPanel } from "./RunContentPanel";
+import { RunInsightsPanel, InsightsWorkspace } from "./RunInsightsPanel";
+
+export { InsightsWorkspace };
 
 interface RunDetailProps {
   run: AnalysisRun;
@@ -30,6 +33,7 @@ export function RunDetail({ run, onRefresh, onDeleted }: RunDetailProps) {
     queryClient.invalidateQueries({ queryKey: ["analysis-runs"] });
     queryClient.invalidateQueries({ queryKey: ["run-contents", run.id] });
     queryClient.invalidateQueries({ queryKey: ["run-crawl-tasks", run.id] });
+    queryClient.invalidateQueries({ queryKey: ["run-insights", run.id] });
     onRefresh();
   }
 
@@ -59,7 +63,7 @@ export function RunDetail({ run, onRefresh, onDeleted }: RunDetailProps) {
         {stage === "setup" && <SetupTab run={run} />}
         {stage === "collection" && <CollectionTab runId={run.id} />}
         {stage === "content" && <RunContentPanel runId={run.id} />}
-        {stage === "insights" && <InsightsTab />}
+        {stage === "insights" && <InsightsTab run={run} onRefresh={handleRefresh} />}
         {stage === "report" && <ReportTab run={run} onRefresh={handleRefresh} />}
       </div>
     </div>
@@ -156,18 +160,25 @@ function RunActions({
           {retryMutation.isPending ? "Retrying…" : "Retry"}
         </button>
       )}
-      {(run.status === "content_ready" || run.status === "insight_ready") && !run.reportId && (
+      {canGenerateReport(run) && (
         <button
           type="button"
           disabled={reportMutation.isPending}
           onClick={() => reportMutation.mutate()}
           className="rounded bg-ink px-3 py-1.5 text-xs font-medium text-surface hover:bg-ink/80 disabled:opacity-50"
         >
-          {reportMutation.isPending ? "Generating…" : "Generate report"}
+          {reportMutation.isPending
+            ? "Generating…"
+            : run.reportId ? "Regenerate report" : "Generate report"}
         </button>
       )}
     </div>
   );
+}
+
+function canGenerateReport(run: AnalysisRun) {
+  // WHY: 已生成报告的 run 也需要重生成入口，否则中文模板发布后旧报告无法在 UI 内刷新。
+  return ["content_ready", "insight_ready", "report_ready"].includes(run.status);
 }
 
 // ─── Setup Tab ────────────────────────────────────────────────────────────────
@@ -285,20 +296,8 @@ function Metric({ label, value }: { label: string; value: number | string }) {
 
 // ─── Insights Tab ─────────────────────────────────────────────────────────────
 
-function InsightsTab() {
-  return (
-    <div className="flex flex-col items-center gap-3 py-12 text-center">
-      <p className="text-sm font-medium text-muted">Analysis is not configured yet</p>
-      <p className="text-xs text-muted">AI analysis will be enabled in a future release.</p>
-      <button
-        type="button"
-        disabled
-        className="rounded border border-line px-4 py-2 text-sm text-muted/40 cursor-not-allowed"
-      >
-        Run analysis
-      </button>
-    </div>
-  );
+function InsightsTab({ run, onRefresh }: { run: AnalysisRun; onRefresh: () => void }) {
+  return <RunInsightsPanel run={run} onRefresh={onRefresh} />;
 }
 
 // ─── Report Tab ───────────────────────────────────────────────────────────────

@@ -18,7 +18,7 @@ function isStageEnabled(stage: RunStage, status: AnalysisRunStatus): boolean {
     case "content":
       return ["content_ready", "analyzing", "analysis_failed", "insight_ready", "reporting", "report_ready"].includes(status);
     case "insights":
-      return ["insight_ready", "reporting", "report_ready"].includes(status);
+      return ["content_ready", "analyzing", "analysis_failed", "insight_ready", "reporting", "report_ready"].includes(status);
     case "report":
       return status === "report_ready";
   }

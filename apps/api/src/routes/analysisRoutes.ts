@@ -3,8 +3,10 @@ import type { AppDb } from "@domain-analysis/db";
 import { createAnalysisBatchInputSchema, createAnalysisRunInputSchema } from "@domain-analysis/shared";
 import { z } from "zod";
 import { createAnalysisBatchService } from "../services/analysisBatchService";
+import { createAnalysisInsightService } from "../services/analysisInsightService";
 import { createAnalysisRunService } from "../services/analysisRunService";
 import { createContentService } from "../services/contentService";
+import type { AiInsightAnalyzer } from "../services/analysisInsightService";
 
 const pageQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -23,6 +25,13 @@ const contentListQuerySchema = pageQuerySchema.extend({
   publishedTo: z.string().optional()
 });
 
+const insightCandidateQuerySchema = pageQuerySchema.extend({
+  selected: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => (value === undefined ? undefined : value === "true"))
+});
+
 const reportListQuerySchema = pageQuerySchema.extend({
   projectId: z.string().optional()
 });
@@ -36,8 +45,13 @@ const createProjectSchema = z.object({
 });
 
 // WHY: 所有 analysis 路由集中在一个文件，便于统一管理 service 生命周期和错误处理。
-export async function registerAnalysisRoutes(app: FastifyInstance, db: AppDb) {
+export async function registerAnalysisRoutes(
+  app: FastifyInstance,
+  db: AppDb,
+  options: { aiInsightAnalyzer?: AiInsightAnalyzer } = {}
+) {
   const runService = createAnalysisRunService(db);
+  const insightService = createAnalysisInsightService(db, { analyzer: options.aiInsightAnalyzer });
   const batchService = createAnalysisBatchService(db);
   const contentService = createContentService(db);
 
@@ -186,6 +200,50 @@ export async function registerAnalysisRoutes(app: FastifyInstance, db: AppDb) {
     "/api/analysis-runs/:id/crawl-tasks",
     async (request) => {
       return { items: await runService.listRunCrawlTasks(request.params.id) };
+    }
+  );
+
+  // ─── Run Insights ─────────────────────────────────────────────────────────
+
+  app.post<{ Params: { id: string } }>(
+    "/api/analysis-runs/:id/insights",
+    async (request, reply) => {
+      const insights = await insightService.generateInsights(request.params.id);
+      return reply.status(201).send(insights);
+    }
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/analysis-runs/:id/insights/runs/latest",
+    async (request, reply) => {
+      const item = await insightService.getLatestInsightRun(request.params.id);
+      if (!item) return reply.status(404).send({ error: "ai_insight_run_not_found" });
+      return { item };
+    }
+  );
+
+  app.get<{ Params: { id: string }; Querystring: unknown }>(
+    "/api/analysis-runs/:id/insights/candidates",
+    async (request, reply) => {
+      const query = parseQuery(insightCandidateQuerySchema, request.query, reply);
+      if (!query) return reply;
+      return insightService.listInsightCandidates(request.params.id, query, query.selected);
+    }
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/analysis-runs/:id/insights/batches",
+    async (request) => {
+      return insightService.listInsightBatches(request.params.id);
+    }
+  );
+
+  app.get<{ Params: { id: string }; Querystring: unknown }>(
+    "/api/analysis-runs/:id/insights",
+    async (request, reply) => {
+      const query = parseQuery(pageQuerySchema, request.query, reply);
+      if (!query) return reply;
+      return insightService.getRunInsights(request.params.id, query);
     }
   );
 

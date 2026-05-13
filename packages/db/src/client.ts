@@ -226,8 +226,68 @@ export async function initializeDatabase(
       content_opportunity TEXT,
       reason TEXT NOT NULL,
       model_name TEXT NOT NULL,
+      analysis_json TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS ai_insight_runs (
+      id TEXT PRIMARY KEY,
+      analysis_run_id TEXT NOT NULL REFERENCES analysis_runs(id),
+      status TEXT NOT NULL,
+      total_raw_count INTEGER NOT NULL DEFAULT 0,
+      eligible_count INTEGER NOT NULL DEFAULT 0,
+      selected_candidate_count INTEGER NOT NULL DEFAULT 0,
+      excluded_candidate_count INTEGER NOT NULL DEFAULT 0,
+      batch_count INTEGER NOT NULL DEFAULT 0,
+      output_insight_count INTEGER NOT NULL DEFAULT 0,
+      model_name TEXT NOT NULL,
+      config_snapshot TEXT NOT NULL,
+      error_message TEXT,
+      started_at TEXT,
+      finished_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS ai_insight_runs_analysis_run_idx ON ai_insight_runs(analysis_run_id);
+    CREATE INDEX IF NOT EXISTS ai_insight_runs_status_idx ON ai_insight_runs(status);
+
+    CREATE TABLE IF NOT EXISTS ai_insight_candidates (
+      id TEXT PRIMARY KEY,
+      ai_insight_run_id TEXT NOT NULL REFERENCES ai_insight_runs(id),
+      analysis_run_id TEXT NOT NULL REFERENCES analysis_runs(id),
+      raw_content_id TEXT NOT NULL REFERENCES raw_contents(id),
+      selected INTEGER NOT NULL DEFAULT 0,
+      selection_score INTEGER NOT NULL DEFAULT 0,
+      selection_reasons TEXT NOT NULL,
+      excluded_reason TEXT,
+      batch_index INTEGER,
+      input_text_preview TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS ai_insight_candidates_insight_run_idx ON ai_insight_candidates(ai_insight_run_id);
+    CREATE INDEX IF NOT EXISTS ai_insight_candidates_analysis_run_idx ON ai_insight_candidates(analysis_run_id);
+    CREATE INDEX IF NOT EXISTS ai_insight_candidates_raw_content_idx ON ai_insight_candidates(raw_content_id);
+
+    CREATE TABLE IF NOT EXISTS ai_insight_batches (
+      id TEXT PRIMARY KEY,
+      ai_insight_run_id TEXT NOT NULL REFERENCES ai_insight_runs(id),
+      analysis_run_id TEXT NOT NULL REFERENCES analysis_runs(id),
+      batch_index INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      raw_content_ids TEXT NOT NULL,
+      candidate_count INTEGER NOT NULL DEFAULT 0,
+      output_insight_count INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      started_at TEXT,
+      finished_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS ai_insight_batches_insight_run_idx ON ai_insight_batches(ai_insight_run_id);
+    CREATE INDEX IF NOT EXISTS ai_insight_batches_analysis_run_idx ON ai_insight_batches(analysis_run_id);
 
     CREATE TABLE IF NOT EXISTS reports (
       id TEXT PRIMARY KEY,
@@ -254,6 +314,8 @@ export async function initializeDatabase(
     await addColumnIfMissing(client, "crawl_tasks", "stop_reason TEXT");
     await addColumnIfMissing(client, "crawl_tasks", "last_request_at TEXT");
     await addColumnIfMissing(client, "crawl_tasks", "next_request_at TEXT");
+    await addColumnIfMissing(client, "raw_contents", "media_urls TEXT");
+    await addColumnIfMissing(client, "analyzed_contents", "analysis_json TEXT");
   } finally {
     client.close();
   }

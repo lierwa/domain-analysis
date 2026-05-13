@@ -8,7 +8,7 @@ import {
   type CollectedRawContent,
   type CollectionAdapter
 } from "./types";
-export { normalizeRedditBrowserRows } from "./redditBrowser";
+export { mergeRedditDetailIntoContent, normalizeRedditBrowserRows } from "./redditBrowser";
 
 interface RedditListingResponse {
   data?: {

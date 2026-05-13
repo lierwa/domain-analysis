@@ -157,6 +157,7 @@ export const runContentSchema = z.object({
   authorHandle: z.string().optional(),
   url: z.string().url(),
   text: z.string().min(1),
+  mediaUrls: z.array(z.string().url()).nullable().optional(),
   matchedKeywords: z.array(z.string()),
   metricsJson: z.record(z.unknown()).nullable(),
   publishedAt: isoDateSchema.optional(),

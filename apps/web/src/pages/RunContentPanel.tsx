@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { PaginationControls } from "../components/PaginationControls";
-import { fetchRunContents, type RunContent } from "../lib/api";
+import { fetchInsightCandidates, fetchRunContents, type AiInsightCandidate, type RunContent } from "../lib/api";
 import { formatDateTime, shortId } from "../lib/format";
 
 interface RunContentPanelProps {
@@ -20,8 +20,19 @@ export function RunContentPanel({ runId }: RunContentPanelProps) {
 
   const contentsQuery = useQuery({
     queryKey: ["run-contents", runId, page, search, author],
-    queryFn: () => fetchRunContents(runId, { page, pageSize: PAGE_SIZE, search: search || undefined, author: author || undefined })
+    queryFn: () =>
+      fetchRunContents(runId, {
+        page,
+        pageSize: PAGE_SIZE,
+        search: search || undefined,
+        author: author || undefined
+      })
   });
+  const candidatesQuery = useQuery({
+    queryKey: ["run-insights", runId, "content-candidates"],
+    queryFn: () => fetchInsightCandidates(runId, { page: 1, pageSize: 100 })
+  });
+  const candidateByRawId = new Map((candidatesQuery.data?.items ?? []).map((candidate) => [candidate.rawContentId, candidate]));
 
   function handleSearch(event: React.FormEvent) {
     event.preventDefault();
@@ -83,7 +94,7 @@ export function RunContentPanel({ runId }: RunContentPanelProps) {
 
       <div className="flex flex-col gap-3">
         {contentsQuery.data?.items.map((content) => (
-          <ContentCard key={content.id} content={content} />
+          <ContentCard key={content.id} content={content} aiCandidate={candidateByRawId.get(content.id)} />
         ))}
       </div>
 
@@ -104,11 +115,11 @@ export function RunContentPanel({ runId }: RunContentPanelProps) {
   );
 }
 
-// ─── Content Card ─────────────────────────────────────────────────────────────
+// Content Card
 
-function ContentCard({ content }: { content: RunContent }) {
+export function ContentCard({ content, aiCandidate }: { content: RunContent; aiCandidate?: AiInsightCandidate }) {
   const score = (content.metricsJson?.score as number | undefined) ?? null;
-  const comments = (content.metricsJson?.num_comments as number | undefined) ?? null;
+  const comments = getCommentCount(content.metricsJson);
 
   return (
     <article className="rounded-lg border border-line p-4">
@@ -121,6 +132,7 @@ function ContentCard({ content }: { content: RunContent }) {
         {content.crawlTaskId && (
           <span className="font-mono opacity-60">task #{shortId(content.crawlTaskId)}</span>
         )}
+        {aiCandidate && <AiStatusBadge candidate={aiCandidate} />}
       </div>
 
       {/* Text */}
@@ -155,4 +167,24 @@ function ContentCard({ content }: { content: RunContent }) {
       </p>
     </article>
   );
+}
+
+function AiStatusBadge({ candidate }: { candidate: AiInsightCandidate }) {
+  if (candidate.selected) {
+    return <span className="rounded bg-green-50 px-1.5 py-0.5 text-green-700">Selected for AI</span>;
+  }
+  const label =
+    candidate.excludedReason === "duplicate"
+      ? "Excluded: duplicate"
+      : candidate.excludedReason === "budget_cap"
+        ? "Excluded: budget cap"
+        : "Excluded: low signal";
+  return <span className="rounded bg-surface px-1.5 py-0.5 text-muted">{label}</span>;
+}
+
+function getCommentCount(metrics: Record<string, unknown> | null) {
+  const comments = metrics?.comments;
+  if (typeof comments === "number") return comments;
+  const legacyComments = metrics?.num_comments;
+  return typeof legacyComments === "number" ? legacyComments : null;
 }

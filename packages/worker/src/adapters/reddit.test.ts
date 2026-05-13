@@ -4,6 +4,7 @@ import { PlaywrightCrawler, playwrightUtils } from "crawlee";
 import {
   createRedditAdapter,
   createRedditPublicJsonAdapter,
+  mergeRedditDetailIntoContent,
   normalizeRedditBrowserRows
 } from "./reddit";
 
@@ -33,7 +34,19 @@ const crawleeMock = vi.hoisted(() => {
       href: index === 0 ? row.href : `/r/tattoo/comments/${row.id}_${index}/tattoo_styles_inspiration/`
     }));
     return {
-      evaluate: vi.fn(async (script: unknown) => typeof script === "string" ? rows : undefined),
+      evaluate: vi.fn(async (script: unknown) => {
+        if (typeof script !== "string") return undefined;
+        if (script.includes("topComments")) {
+          return {
+            fetchStatus: "success",
+            title: rows[0]?.title,
+            body: "Full detail body",
+            mediaUrls: ["https://i.redd.it/detail.jpg"],
+            topComments: [{ author: "helper", text: "Useful detail comment", score: 2 }]
+          };
+        }
+        return rows;
+      }),
       locator: vi.fn(() => ({
         innerText: vi.fn(async () => bodyText)
       }))
@@ -229,15 +242,17 @@ describe("normalizeRedditBrowserRows", () => {
         },
         publishedAt: "2026-05-01T00:00:00.000Z",
         rawJson: {
-          id: "post_1",
-          title: "Tattoo styles inspiration",
-          body: "Fine line ideas",
-          href: "/r/tattoo/comments/post_1/tattoo_styles_inspiration/",
-          authorName: "u/artist",
-          subreddit: "r/tattoo",
-          scoreText: "12",
-          commentsText: "3 comments",
-          publishedAt: "2026-05-01T00:00:00.000Z"
+          searchCard: {
+            id: "post_1",
+            title: "Tattoo styles inspiration",
+            body: "Fine line ideas",
+            href: "/r/tattoo/comments/post_1/tattoo_styles_inspiration/",
+            authorName: "u/artist",
+            subreddit: "r/tattoo",
+            scoreText: "12",
+            commentsText: "3 comments",
+            publishedAt: "2026-05-01T00:00:00.000Z"
+          }
         }
       }
     ]);
@@ -251,6 +266,41 @@ describe("normalizeRedditBrowserRows", () => {
 
     expect(items).toHaveLength(1);
     expect(items[0]?.externalId).toBe("post_1");
+  });
+});
+
+describe("mergeRedditDetailIntoContent", () => {
+  it("adds full body, media URLs, and top comments without losing the search card", () => {
+    const [item] = normalizeRedditBrowserRows([
+      {
+        id: "post_1",
+        title: "Tattoo placement advice",
+        body: "Short card text",
+        href: "/r/tattoo/comments/post_1/tattoo_placement_advice/",
+        authorName: "u/artist",
+        subreddit: "r/tattoo",
+        scoreText: "12",
+        commentsText: "3 comments"
+      }
+    ], [], 10);
+
+    const merged = mergeRedditDetailIntoContent(item!, {
+      fetchStatus: "success",
+      title: "Tattoo placement advice",
+      body: "Full post body with placement context.",
+      mediaUrls: ["https://i.redd.it/example.jpg"],
+      topComments: [{ author: "helper", text: "Upper arm placement works.", score: 5 }]
+    });
+
+    expect(merged.text).toContain("Full post body with placement context.");
+    expect(merged.mediaUrls).toEqual(["https://i.redd.it/example.jpg"]);
+    expect(merged.rawJson).toMatchObject({
+      searchCard: expect.objectContaining({ title: "Tattoo placement advice" }),
+      detail: {
+        fetchStatus: "success",
+        topComments: [{ author: "helper", text: "Upper arm placement works.", score: 5 }]
+      }
+    });
   });
 });
 

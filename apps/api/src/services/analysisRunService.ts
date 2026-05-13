@@ -2,6 +2,7 @@ import {
   createAnalysisBatchRepository,
   createAnalysisProjectRepository,
   createAnalysisRunRepository,
+  createAnalyzedContentRepository,
   createCrawlTaskRepository,
   createRawContentRepository,
   createRunReportRepository,
@@ -25,6 +26,7 @@ export function createAnalysisRunService(db: AppDb) {
   const taskRepo = createCrawlTaskRepository(db);
   const contentRepo = createRawContentRepository(db);
   const reportRepo = createRunReportRepository(db);
+  const insightRepo = createAnalyzedContentRepository(db);
 
   return {
     // ─── 创建 Analysis Run ────────────────────────────────────────────────────
@@ -167,7 +169,7 @@ export function createAnalysisRunService(db: AppDb) {
       const run = await runRepo.getById(runId);
       if (!run) throw Object.assign(new Error("run_not_found"), { statusCode: 404 });
 
-      if (run.status !== "content_ready" && run.status !== "insight_ready") {
+      if (!canGenerateReport(run.status)) {
         throw Object.assign(
           new Error("Report can only be generated after content is ready"),
           { statusCode: 400 }
@@ -177,17 +179,19 @@ export function createAnalysisRunService(db: AppDb) {
       const contentsResult = await contentRepo.listByRunPage(runId, { page: 1, pageSize: 500 });
       const contents = contentsResult.items;
 
-      const markdown = buildDeterministicReport(run, contents);
+      const insights = await insightRepo.listByRun(runId);
+      const markdown = buildDeterministicReport(run, contents, insights);
 
       const report = await reportRepo.create({
         projectId: run.projectId,
         analysisRunId: runId,
-        title: `${run.name} – Analysis Report`,
+        title: `${run.name} – 中文分析报告`,
         type: "run_summary",
         contentMarkdown: markdown,
         contentJson: {
           runId,
           totalContents: contents.length,
+          totalInsights: insights.length,
           generatedAt: new Date().toISOString()
         }
       });
@@ -226,6 +230,12 @@ export function createAnalysisRunService(db: AppDb) {
 }
 
 // ─── 采集执行（私有）────────────────────────────────────────────────────────────
+
+// WHY: report_ready 允许重生成，避免模板升级后用户只能看到旧报告。
+// TRADE-OFF: 当前会生成一条新的 reports 记录，保留历史报告；后续可再做覆盖/版本管理。
+function canGenerateReport(status: AnalysisRunStatus) {
+  return ["content_ready", "insight_ready", "report_ready"].includes(status);
+}
 
 async function startCollection({
   runId,

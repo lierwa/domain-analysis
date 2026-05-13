@@ -21,6 +21,21 @@ interface RedditBrowserRow {
   publishedAt?: string;
 }
 
+interface RedditDetail {
+  fetchStatus: "success" | "failed";
+  title?: string;
+  body?: string;
+  mediaUrls?: string[];
+  topComments?: RedditDetailComment[];
+  error?: string;
+}
+
+interface RedditDetailComment {
+  author?: string;
+  text: string;
+  score?: number;
+}
+
 const REDDIT_BROWSER_TARGETS_PER_SEARCH = 40;
 const REDDIT_BROWSER_POST_SELECTOR = [
   "[data-testid='search-sdui-post']",
@@ -90,6 +105,34 @@ const REDDIT_BROWSER_EXTRACT_SCRIPT = `
 })()
 `;
 
+const REDDIT_DETAIL_EXTRACT_SCRIPT = `
+(() => {
+  const text = (query) => {
+    const node = document.querySelector(query);
+    return node && node.textContent ? node.textContent.replace(/\\s+/g, " ").trim() : "";
+  };
+  const post = document.querySelector("shreddit-post, [data-testid='post-container'], article");
+  const postAttr = (name) => post ? (post.getAttribute(name) || "") : "";
+  const title = postAttr("post-title") || text("h1") || text("[slot='title'], a[slot='title']");
+  const body = text("[slot='text-body'], [data-click-id='text'], [data-testid='post-content']");
+  const mediaUrls = Array.from(document.querySelectorAll("img[src], video source[src], shreddit-player[src]"))
+    .map((node) => node.getAttribute("src") || "")
+    .filter((src) => /^https?:\\/\\//.test(src))
+    .filter((src) => !/avatar|emoji|icon|redditstatic\\.com\\/desktop2x/i.test(src));
+  const topComments = Array.from(document.querySelectorAll("shreddit-comment, [data-testid='comment']"))
+    .slice(0, 5)
+    .map((node) => {
+      const author = node.getAttribute("author") || "";
+      const commentText = (node.textContent || "").replace(/\\s+/g, " ").trim();
+      const scoreRaw = node.getAttribute("score") || "";
+      const score = Number(scoreRaw);
+      return { author, text: commentText, score: Number.isFinite(score) ? score : undefined };
+    })
+    .filter((comment) => comment.text);
+  return { fetchStatus: "success", title, body, mediaUrls: Array.from(new Set(mediaUrls)), topComments };
+})()
+`;
+
 export function createRedditBrowserAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {
   return {
     async collect(query) {
@@ -151,8 +194,10 @@ export function createRedditBrowserAdapter(env: NodeJS.ProcessEnv = process.env)
 
       await crawler.run(searchUrls.map((url) => url.toString()));
       if (crawlError) throw crawlError;
+      const items = normalizeRedditBrowserRows(rows, query.excludeKeywords, query.limitPerRun);
+      const detailedItems = await collectRedditDetails(items, env);
       return {
-        items: normalizeRedditBrowserRows(rows, query.excludeKeywords, query.limitPerRun),
+        items: detailedItems,
         metadata: {
           pagesCollected,
           stopReason
@@ -160,6 +205,35 @@ export function createRedditBrowserAdapter(env: NodeJS.ProcessEnv = process.env)
       };
     }
   };
+}
+
+async function collectRedditDetails(items: CollectedRawContent[], env: NodeJS.ProcessEnv) {
+  if (!items.length || env.REDDIT_DETAIL_COLLECTION === "off") return items;
+  const details = new Map<string, RedditDetail>();
+  const browser = createBrowserRuntimeConfig(env);
+  const proxyUrl = getRedditProxyUrl(env);
+  const crawler = new PlaywrightCrawler({
+    maxConcurrency: 1,
+    maxRequestsPerCrawl: items.length,
+    maxRequestsPerMinute: Number(env.REDDIT_DETAIL_MAX_REQUESTS_PER_MINUTE ?? 3),
+    sameDomainDelaySecs: Number(env.REDDIT_DETAIL_SAME_DOMAIN_DELAY_SECS ?? 10),
+    requestHandlerTimeoutSecs: 90,
+    launchContext: {
+      useChrome: true,
+      userDataDir: browser.userDataDir,
+      launchOptions: { headless: browser.mode === "headless" }
+    },
+    ...(proxyUrl ? { proxyConfiguration: new ProxyConfiguration({ proxyUrls: [proxyUrl] }) } : {}),
+    requestHandler: async ({ page, request }) => {
+      details.set(request.url, await readRedditDetail(page).catch(toFailedDetail));
+    },
+    failedRequestHandler: async ({ request }, error) => {
+      details.set(request.url, { fetchStatus: "failed", error: error.message });
+    }
+  });
+
+  await crawler.run(items.map((item) => item.url));
+  return items.map((item) => mergeRedditDetailIntoContent(item, details.get(item.url)));
 }
 
 function buildBrowserSearchUrls(includeKeywords: string[], excludeKeywords: string[], limitPerRun: number) {
@@ -251,6 +325,17 @@ function readRedditBrowserRows(page: Page) {
   return page.evaluate<RedditBrowserRow[]>(REDDIT_BROWSER_EXTRACT_SCRIPT);
 }
 
+function readRedditDetail(page: Page) {
+  return page.evaluate<RedditDetail>(REDDIT_DETAIL_EXTRACT_SCRIPT);
+}
+
+function toFailedDetail(error: unknown): RedditDetail {
+  return {
+    fetchStatus: "failed",
+    error: error instanceof Error ? error.message : "detail_extract_failed"
+  };
+}
+
 function isTransientRedditDomError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("Execution context was destroyed") || message.includes("Cannot find context with specified id");
@@ -288,8 +373,38 @@ export function normalizeRedditBrowserRows(
         subreddit: normalizeSubreddit(row.subreddit)
       },
       publishedAt: normalizeRedditPublishedAt(row.publishedAt),
-      rawJson: row as Record<string, unknown>
+      rawJson: { searchCard: row } as Record<string, unknown>
     }));
+}
+
+export function mergeRedditDetailIntoContent(item: CollectedRawContent, detail?: RedditDetail): CollectedRawContent {
+  if (!detail) return withDetail(item, { fetchStatus: "failed", error: "detail_not_collected" });
+  if (detail.fetchStatus === "failed") return withDetail(item, detail);
+  return {
+    ...item,
+    text: mergeText(item.text, [detail.title, detail.body].filter(Boolean).join("\n\n")),
+    mediaUrls: detail.mediaUrls ?? item.mediaUrls,
+    rawJson: {
+      ...(item.rawJson ?? {}),
+      detail
+    }
+  };
+}
+
+function withDetail(item: CollectedRawContent, detail: RedditDetail): CollectedRawContent {
+  return {
+    ...item,
+    rawJson: {
+      ...(item.rawJson ?? {}),
+      detail
+    }
+  };
+}
+
+function mergeText(cardText: string, detailText: string) {
+  const normalizedDetail = detailText.replace(/\s+/g, " ").trim();
+  if (!normalizedDetail || cardText.includes(normalizedDetail)) return cardText;
+  return [cardText, normalizedDetail].filter(Boolean).join("\n\n");
 }
 
 function normalizeRedditUrl(href: string | undefined) {

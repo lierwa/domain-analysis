@@ -61,6 +61,7 @@ export interface CreateRawContentInput {
   authorName?: string;
   authorHandle?: string;
   text: string;
+  mediaUrls?: string[];
   metricsJson?: Record<string, unknown>;
   publishedAt?: string;
   rawJson?: Record<string, unknown>;
@@ -255,6 +256,7 @@ export function createRawContentRepository(db: AppDb) {
             authorName: input.authorName,
             authorHandle: input.authorHandle,
             text: input.text,
+            mediaUrls: input.mediaUrls,
             metricsJson: input.metricsJson,
             publishedAt: input.publishedAt,
             rawJson: input.rawJson
@@ -415,6 +417,7 @@ function mapRawContent(row: RawContentRow) {
     authorName: row.authorName ?? undefined,
     authorHandle: row.authorHandle ?? undefined,
     text: row.text,
+    mediaUrls: row.mediaUrls as string[] | null,
     metricsJson: row.metricsJson as Record<string, unknown> | null,
     publishedAt: normalizeDateTime(row.publishedAt),
     capturedAt: normalizeDateTime(row.capturedAt) ?? row.capturedAt,

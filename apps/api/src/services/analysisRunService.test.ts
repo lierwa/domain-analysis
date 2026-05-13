@@ -1,10 +1,21 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  cleanupDatabaseTempDir,
+  createAnalysisProjectRepository,
+  createAnalysisRunRepository,
+  createDb,
+  initializeDatabase
+} from "@domain-analysis/db";
 import {
   deriveBatchStatus,
   determineCollectionCompletion,
   determineCollectionFailureCompletion,
   determineTaskTargetCount
 } from "./analysisRunService";
+import { createAnalysisRunService } from "./analysisRunService";
 
 describe("analysis run collection policy", () => {
   it("keeps the user requested limit as the task target", () => {
@@ -44,5 +55,43 @@ describe("analysis run collection policy", () => {
       { status: "content_ready", validCount: 3 },
       { status: "login_required", validCount: 0 }
     ])).toBe("partial_ready");
+  });
+
+  it("allows regenerating a report for report-ready runs", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "domain-analysis-run-service-"));
+    const databaseUrl = `file:${join(tempDir, "test.sqlite")}`;
+    await initializeDatabase(databaseUrl);
+    const db = createDb(databaseUrl);
+
+    try {
+      const projects = createAnalysisProjectRepository(db);
+      const runs = createAnalysisRunRepository(db);
+      const service = createAnalysisRunService(db);
+      const project = await projects.create({
+        name: "Tattoo Study",
+        goal: "Read report",
+        language: "en",
+        market: "US"
+      });
+      const run = await runs.create({
+        projectId: project.id,
+        name: "tattoo design – May 13",
+        goal: "Read report",
+        includeKeywords: ["tattoo design"],
+        excludeKeywords: [],
+        language: "en",
+        market: "US",
+        limit: 200
+      });
+      await runs.update(run.id, { status: "report_ready", reportId: "report_old" });
+
+      const report = await service.generateReport(run.id);
+
+      expect(report.contentMarkdown).toContain("中文分析报告");
+      expect(report.title).toContain("中文分析报告");
+      expect(report.analysisRunId).toBe(run.id);
+    } finally {
+      await cleanupDatabaseTempDir(tempDir);
+    }
   });
 });

@@ -2,7 +2,15 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupDatabaseTempDir, createDb, initializeDatabase } from "@domain-analysis/db";
+import {
+  cleanupDatabaseTempDir,
+  createAnalysisRunRepository,
+  createCrawlTaskRepository,
+  createDb,
+  createRawContentRepository,
+  createSourceRepository,
+  initializeDatabase
+} from "@domain-analysis/db";
 import { buildServer } from "../server";
 
 let tempDir: string;
@@ -188,6 +196,91 @@ describe("analysis run routes", () => {
     await app.close();
   });
 
+  it("generates and reads AI-backed run insights", async () => {
+    const db = createDb(databaseUrl);
+    const app = await buildServer({
+      logger: false,
+      db,
+      aiInsightAnalyzer: {
+        analyzeRun: async ({ contents }) => ({
+          items: contents.map((content) => ({
+            rawContentId: content.id,
+            problemStatement: "User needs placement confidence before booking.",
+            userIntent: "Choose tattoo placement.",
+            audienceSegment: "Tattoo planning user",
+            needType: "placement decision",
+            painPoints: ["uncertain placement"],
+            desiredOutcome: "A clear next step",
+            sentiment: "concerned",
+            confidence: 0.8,
+            evidence: [
+              {
+                source: "title",
+                rawContentId: content.id,
+                quote: content.text,
+                url: content.url
+              }
+            ],
+            recommendedAction: "Create a placement checklist."
+          })),
+          summary: {
+            themes: [
+              {
+                themeName: "Placement confidence",
+                whyItMatters: "Users need help deciding where a tattoo fits.",
+                opportunityType: "content",
+                demandSignals: ["placement question"],
+                contentIdeas: ["Placement checklist"],
+                productServiceIdeas: ["Consultation offer"],
+                representativePostIds: [contents[0]?.id ?? ""],
+                riskOrLimitations: ["Search result data may be incomplete."]
+              }
+            ],
+            opportunityTypes: ["content"],
+            topDemandSignals: ["placement question"],
+            recommendedNextActions: ["Collect more comments"],
+            dataLimitations: ["No visual model analysis."]
+          }
+        })
+      }
+    });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/analysis-runs",
+      payload: {
+        goal: "Tattoo opportunity study",
+        platform: "reddit",
+        includeKeywords: ["tattoo design"],
+        language: "en",
+        market: "US",
+        limit: 10
+      }
+    });
+    const runId: string = created.json().item.id;
+    await seedRouteRunContent(db, runId, created.json().item.projectId);
+
+    const generated = await app.inject({ method: "POST", url: `/api/analysis-runs/${runId}/insights` });
+    const fetched = await app.inject({ method: "GET", url: `/api/analysis-runs/${runId}/insights?page=1&pageSize=20` });
+    const latestRun = await app.inject({ method: "GET", url: `/api/analysis-runs/${runId}/insights/runs/latest` });
+    const candidates = await app.inject({ method: "GET", url: `/api/analysis-runs/${runId}/insights/candidates?page=1&pageSize=20` });
+    const batches = await app.inject({ method: "GET", url: `/api/analysis-runs/${runId}/insights/batches` });
+
+    expect(generated.statusCode).toBe(201);
+    expect(generated.json().summary.totalInsights).toBe(1);
+    expect(generated.json().summary.themes[0]).toMatchObject({ themeName: "Placement confidence" });
+    expect(generated.json().items[0]).toMatchObject({ needType: "placement decision", confidence: 0.8 });
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.json().items[0].source).toMatchObject({ url: "https://www.reddit.com/r/tattooadvice/comments/route" });
+    expect(latestRun.statusCode).toBe(200);
+    expect(latestRun.json().item).toMatchObject({ status: "completed", totalRawCount: 1, selectedCandidateCount: 1 });
+    expect(candidates.statusCode).toBe(200);
+    expect(candidates.json().items[0]).toMatchObject({ selected: true, batchIndex: 0 });
+    expect(batches.statusCode).toBe(200);
+    expect(batches.json().items[0]).toMatchObject({ status: "completed", candidateCount: 1, outputInsightCount: 1 });
+
+    await app.close();
+  });
+
   it("deletes a run", async () => {
     const app = await buildServer({ logger: false, db: createDb(databaseUrl) });
 
@@ -241,6 +334,32 @@ describe("analysis run routes", () => {
     await app.close();
   });
 });
+
+async function seedRouteRunContent(db: ReturnType<typeof createDb>, runId: string, projectId: string) {
+  const runs = createAnalysisRunRepository(db);
+  const sources = createSourceRepository(db);
+  const tasks = createCrawlTaskRepository(db);
+  const contents = createRawContentRepository(db);
+  await sources.seedDefaults();
+  const source = await sources.getByPlatform("reddit");
+  if (!source) throw new Error("reddit source missing");
+  const task = await tasks.create({ analysisRunId: runId, sourceId: source.id, targetCount: 10 });
+  await contents.createMany([
+    {
+      platform: "reddit",
+      analysisProjectId: projectId,
+      analysisRunId: runId,
+      crawlTaskId: task.id,
+      sourceId: source.id,
+      matchedKeywords: ["tattoo design"],
+      url: "https://www.reddit.com/r/tattooadvice/comments/route",
+      text: "Advice on tattoo placement for my sleeve?",
+      metricsJson: { score: 5, comments: 4, subreddit: "tattooadvice" },
+      rawJson: { detail: { fetchStatus: "success", topComments: [{ text: "Upper arm works well." }] } }
+    }
+  ]);
+  await runs.update(runId, { status: "content_ready", collectedCount: 1, validCount: 1 });
+}
 
 describe("reports routes", () => {
   it("lists reports and returns 404 for missing report", async () => {

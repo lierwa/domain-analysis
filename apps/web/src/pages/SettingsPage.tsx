@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, RefreshCw } from "lucide-react";
-import { fetchXLoginStatus, openXLoginBrowser } from "../lib/api";
+import { fetchAiProviderStatus, fetchXLoginStatus, openXLoginBrowser } from "../lib/api";
 
 // WHY: Settings 只展示真实已配置项，不显示未实现功能的假配置入口。
 export function SettingsPage() {
@@ -9,6 +9,10 @@ export function SettingsPage() {
     queryKey: ["settings", "x-login"],
     queryFn: fetchXLoginStatus,
     refetchInterval: 5000
+  });
+  const aiStatusQuery = useQuery({
+    queryKey: ["settings", "ai"],
+    queryFn: fetchAiProviderStatus
   });
   const openLoginMutation = useMutation({
     mutationFn: openXLoginBrowser,
@@ -76,11 +80,16 @@ export function SettingsPage() {
 
       <section className="flex flex-col gap-4">
         <h2 className="text-sm font-semibold">AI Provider</h2>
-        <div className="rounded-xl border border-dashed border-line p-4">
-          <p className="text-sm text-muted">
-            AI analysis and LLM report generation are not yet configured.
+        <div className="rounded-xl border border-line p-4">
+          <dl className="divide-y divide-line">
+            <SettingRow label="Configured" value={aiStatusQuery.data?.configured ? "Ready" : "Missing"} />
+            <SettingRow label="Provider" value={aiStatusQuery.data?.provider ?? "openai-compatible"} />
+            <SettingRow label="Model" value={aiStatusQuery.data?.model ?? "Not set"} />
+            <SettingRow label="Base URL" value={aiStatusQuery.data?.baseUrl ?? "Default provider endpoint"} />
+          </dl>
+          <p className="mt-3 text-xs text-muted">
+            API keys are read from the API process environment and are never returned to the browser.
           </p>
-          <p className="mt-1 text-xs text-muted">This will be available in a future release.</p>
         </div>
       </section>
 

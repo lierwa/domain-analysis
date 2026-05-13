@@ -29,6 +29,7 @@ export interface CollectedRawContent {
   authorName?: string;
   authorHandle?: string;
   text: string;
+  mediaUrls?: string[];
   metricsJson?: Record<string, unknown>;
   publishedAt?: string;
   rawJson?: Record<string, unknown>;

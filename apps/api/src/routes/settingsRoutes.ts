@@ -1,7 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { getXLoginStatus, openXLoginBrowser, XChromeDevToolsUnavailableError } from "@domain-analysis/worker";
+import { getAiProviderStatus } from "../services/aiProviderConfig";
 
 export async function registerSettingsRoutes(app: FastifyInstance) {
+  app.get("/api/settings/ai/status", async () => ({
+    item: getAiProviderStatus(process.env)
+  }));
+
   app.get("/api/settings/x-login/status", async () => ({
     item: await getXLoginStatus(process.env)
   }));

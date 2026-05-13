@@ -11,13 +11,19 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.77",
+    "@ai-sdk/google": "^3.0.73",
+    "@ai-sdk/openai": "^3.0.63",
     "@domain-analysis/db": "0.1.0",
     "@domain-analysis/shared": "0.1.0",
     "@domain-analysis/worker": "0.1.0",
     "@fastify/cors": "^9.0.1",
+    "ai": "^6.0.180",
     "ajv": "^8.17.1",
+    "dotenv": "^17.4.2",
     "fastify": "^4.28.1",
     "mnemonist": "^0.40.4",
+    "p-limit": "^3.1.0",
     "process-warning": "^3.0.0",
     "zod": "^3.23.8"
   }

@@ -1,5 +1,18 @@
 // WHY: API client 只暴露 analysis run/project/content/report 接口，避免 UI 依赖工程内部概念。
 
+import type { AiInsightBatch, AiInsightCandidate, AiInsightRunDiagnostics, RunInsightsResponse } from "./insightTypes";
+
+export type {
+  AiInsightBatch,
+  AiInsightCandidate,
+  AiInsightRunDiagnostics,
+  InsightEvidence,
+  InsightTheme,
+  RunInsight,
+  RunInsightsResponse,
+  RunInsightsSummary
+} from "./insightTypes";
+
 export type Platform = "reddit" | "x" | "youtube" | "tiktok" | "pinterest" | "web";
 
 export type AnalysisRunStatus =
@@ -120,6 +133,7 @@ export interface RunContent {
   authorHandle?: string;
   url: string;
   text: string;
+  mediaUrls?: string[] | null;
   matchedKeywords: string[];
   metricsJson: Record<string, unknown> | null;
   publishedAt?: string;
@@ -195,6 +209,13 @@ export interface XLoginStatus {
   browserOpen: boolean;
   loggedIn: boolean;
   message: string;
+}
+
+export interface AiProviderStatus {
+  configured: boolean;
+  provider: "openai-compatible" | "openai" | "anthropic" | "google";
+  model?: string;
+  baseUrl?: string;
 }
 
 export interface CreateAnalysisBatchInput {
@@ -376,6 +397,47 @@ export async function fetchRunCrawlTasks(runId: string): Promise<RunCrawlTask[]>
   return data.items;
 }
 
+// ─── Run Insights ────────────────────────────────────────────────────────────
+
+export async function generateRunInsights(runId: string): Promise<RunInsightsResponse> {
+  return request<RunInsightsResponse>(`/api/analysis-runs/${runId}/insights`, {
+    method: "POST"
+  });
+}
+
+export async function fetchRunInsights(
+  runId: string,
+  params: PageParams = { page: 1, pageSize: 20 }
+): Promise<RunInsightsResponse> {
+  return request<RunInsightsResponse>(`/api/analysis-runs/${runId}/insights${toQueryString(params)}`);
+}
+
+export async function fetchLatestInsightRun(runId: string): Promise<AiInsightRunDiagnostics | null> {
+  try {
+    const data = await request<{ item: AiInsightRunDiagnostics }>(`/api/analysis-runs/${runId}/insights/runs/latest`);
+    return data.item;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("ai_insight_run_not_found")) return null;
+    throw error;
+  }
+}
+
+export async function fetchInsightCandidates(
+  runId: string,
+  params: PageParams & { selected?: boolean } = { page: 1, pageSize: 20 }
+): Promise<PaginatedResponse<AiInsightCandidate>> {
+  const query = new URLSearchParams();
+  query.set("page", String(params.page));
+  query.set("pageSize", String(params.pageSize));
+  if (params.selected !== undefined) query.set("selected", String(params.selected));
+  return request<PaginatedResponse<AiInsightCandidate>>(`/api/analysis-runs/${runId}/insights/candidates?${query.toString()}`);
+}
+
+export async function fetchInsightBatches(runId: string): Promise<AiInsightBatch[]> {
+  const data = await request<{ items: AiInsightBatch[] }>(`/api/analysis-runs/${runId}/insights/batches`);
+  return data.items;
+}
+
 // ─── Reports ──────────────────────────────────────────────────────────────────
 
 export async function generateRunReport(runId: string): Promise<RunReport> {
@@ -406,6 +468,11 @@ export async function fetchReport(id: string): Promise<RunReport> {
 
 export async function fetchXLoginStatus(): Promise<XLoginStatus> {
   const data = await request<{ item: XLoginStatus }>("/api/settings/x-login/status");
+  return data.item;
+}
+
+export async function fetchAiProviderStatus(): Promise<AiProviderStatus> {
+  const data = await request<{ item: AiProviderStatus }>("/api/settings/ai/status");
   return data.item;
 }
 

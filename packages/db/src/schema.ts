@@ -231,8 +231,92 @@ export const analyzedContents = sqliteTable("analyzed_contents", {
   contentOpportunity: text("content_opportunity"),
   reason: text("reason").notNull(),
   modelName: text("model_name").notNull(),
+  analysisJson: text("analysis_json", { mode: "json" }),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`)
 });
+
+export const aiInsightRuns = sqliteTable(
+  "ai_insight_runs",
+  {
+    id: text("id").primaryKey(),
+    analysisRunId: text("analysis_run_id")
+      .notNull()
+      .references(() => analysisRuns.id),
+    status: text("status").notNull(),
+    totalRawCount: integer("total_raw_count").notNull().default(0),
+    eligibleCount: integer("eligible_count").notNull().default(0),
+    selectedCandidateCount: integer("selected_candidate_count").notNull().default(0),
+    excludedCandidateCount: integer("excluded_candidate_count").notNull().default(0),
+    batchCount: integer("batch_count").notNull().default(0),
+    outputInsightCount: integer("output_insight_count").notNull().default(0),
+    modelName: text("model_name").notNull(),
+    configSnapshot: text("config_snapshot", { mode: "json" }).notNull(),
+    errorMessage: text("error_message"),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => ({
+    runIdx: index("ai_insight_runs_analysis_run_idx").on(table.analysisRunId),
+    statusIdx: index("ai_insight_runs_status_idx").on(table.status)
+  })
+);
+
+export const aiInsightCandidates = sqliteTable(
+  "ai_insight_candidates",
+  {
+    id: text("id").primaryKey(),
+    aiInsightRunId: text("ai_insight_run_id")
+      .notNull()
+      .references(() => aiInsightRuns.id),
+    analysisRunId: text("analysis_run_id")
+      .notNull()
+      .references(() => analysisRuns.id),
+    rawContentId: text("raw_content_id")
+      .notNull()
+      .references(() => rawContents.id),
+    selected: integer("selected", { mode: "boolean" }).notNull().default(false),
+    selectionScore: integer("selection_score").notNull().default(0),
+    selectionReasons: text("selection_reasons", { mode: "json" }).notNull(),
+    excludedReason: text("excluded_reason"),
+    batchIndex: integer("batch_index"),
+    inputTextPreview: text("input_text_preview").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => ({
+    insightRunIdx: index("ai_insight_candidates_insight_run_idx").on(table.aiInsightRunId),
+    analysisRunIdx: index("ai_insight_candidates_analysis_run_idx").on(table.analysisRunId),
+    rawContentIdx: index("ai_insight_candidates_raw_content_idx").on(table.rawContentId)
+  })
+);
+
+export const aiInsightBatches = sqliteTable(
+  "ai_insight_batches",
+  {
+    id: text("id").primaryKey(),
+    aiInsightRunId: text("ai_insight_run_id")
+      .notNull()
+      .references(() => aiInsightRuns.id),
+    analysisRunId: text("analysis_run_id")
+      .notNull()
+      .references(() => analysisRuns.id),
+    batchIndex: integer("batch_index").notNull(),
+    status: text("status").notNull(),
+    rawContentIds: text("raw_content_ids", { mode: "json" }).notNull(),
+    candidateCount: integer("candidate_count").notNull().default(0),
+    outputInsightCount: integer("output_insight_count").notNull().default(0),
+    errorMessage: text("error_message"),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
+  },
+  (table) => ({
+    insightRunIdx: index("ai_insight_batches_insight_run_idx").on(table.aiInsightRunId),
+    analysisRunIdx: index("ai_insight_batches_analysis_run_idx").on(table.analysisRunId)
+  })
+);
 
 // WHY: reports 只绑定 analysis run，不再保留 topic/date-range 兼容字段。
 export const reports = sqliteTable(
