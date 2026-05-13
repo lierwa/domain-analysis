@@ -228,6 +228,12 @@ function CollectionTab({ runId }: { runId: string }) {
             <Metric label="Collected" value={task.collectedCount} />
             <Metric label="Valid" value={task.validCount} />
           </div>
+          {(task.pagesCollected !== undefined || task.stopReason) && (
+            <div className="mt-3 grid grid-cols-2 gap-3 text-center text-sm">
+              <Metric label="Pages" value={task.pagesCollected ?? 0} />
+              <Metric label="Stop reason" value={task.stopReason ?? "running"} />
+            </div>
+          )}
           {task.errorMessage && (
             <p
               className={`mt-3 rounded px-3 py-2 text-xs ${
@@ -268,7 +274,7 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="flex flex-col items-center gap-0.5">
       <span className="text-lg font-semibold">{value}</span>

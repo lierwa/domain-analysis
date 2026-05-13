@@ -37,6 +37,8 @@ export const crawlTaskSchema = z.object({
   collectedCount: z.number().int().min(0),
   validCount: z.number().int().min(0),
   duplicateCount: z.number().int().min(0),
+  pagesCollected: z.number().int().min(0).optional(),
+  stopReason: z.string().optional(),
   errorMessage: z.string().optional(),
   startedAt: isoDateSchema.optional(),
   finishedAt: isoDateSchema.optional(),

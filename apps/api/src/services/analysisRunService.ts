@@ -301,6 +301,9 @@ async function startCollection({
       collectedCount,
       validCount: inserted.items.length,
       duplicateCount: inserted.duplicates,
+      pagesCollected: result?.metadata?.pagesCollected,
+      stopReason: result?.metadata?.stopReason,
+      lastRequestAt: result?.metadata?.pagesCollected ? new Date().toISOString() : undefined,
       errorMessage: completion.errorMessage,
       finishedAt: new Date().toISOString()
     });

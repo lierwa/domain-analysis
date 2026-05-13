@@ -3,6 +3,7 @@ import {
   analysisProjectSchema,
   analysisBatchSchema,
   analysisRunSchema,
+  crawlTaskSchema,
   createAnalysisBatchInputSchema,
   createCollectionPlanInputSchema,
   createAnalysisRunInputSchema,
@@ -138,6 +139,26 @@ describe("analysis domain schemas", () => {
     });
 
     expect(result.platform).toBe("tiktok");
+  });
+
+  it("accepts crawl task observability fields", () => {
+    const result = crawlTaskSchema.parse({
+      id: "task_1",
+      analysisRunId: "run_1",
+      sourceId: "source_1",
+      status: "success",
+      targetCount: 200,
+      collectedCount: 35,
+      validCount: 30,
+      duplicateCount: 5,
+      pagesCollected: 1,
+      stopReason: "scroll_exhausted",
+      createdAt: "2026-05-06T00:00:00.000Z",
+      updatedAt: "2026-05-06T00:00:00.000Z"
+    });
+
+    expect(result.stopReason).toBe("scroll_exhausted");
+    expect(result.pagesCollected).toBe(1);
   });
 
   it("accepts an analysis run dto", () => {

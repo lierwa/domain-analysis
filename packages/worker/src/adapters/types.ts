@@ -34,8 +34,23 @@ export interface CollectedRawContent {
   rawJson?: Record<string, unknown>;
 }
 
+export type CollectionStopReason =
+  | "target_reached"
+  | "scroll_exhausted"
+  | "blocked_or_login";
+
+export interface CollectionMetadata {
+  pagesCollected?: number;
+  stopReason?: CollectionStopReason | string;
+}
+
+export interface CollectionResult {
+  items: CollectedRawContent[];
+  metadata?: CollectionMetadata;
+}
+
 export interface CollectionAdapter {
-  collect(query: CollectionQuery): Promise<CollectedRawContent[]>;
+  collect(query: CollectionQuery): Promise<CollectedRawContent[] | CollectionResult>;
 }
 
 export interface ConservativeCrawlerOptions {

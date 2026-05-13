@@ -135,6 +135,10 @@ export interface RunCrawlTask {
   collectedCount: number;
   validCount: number;
   duplicateCount: number;
+  pagesCollected?: number;
+  stopReason?: string;
+  lastRequestAt?: string;
+  nextRequestAt?: string;
   errorMessage?: string;
   startedAt?: string;
   finishedAt?: string;

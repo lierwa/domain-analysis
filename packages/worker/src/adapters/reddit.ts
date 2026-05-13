@@ -1,5 +1,6 @@
 import got from "got";
 import { HttpsProxyAgent } from "https-proxy-agent";
+import { createRedditBrowserAdapter } from "./redditBrowser";
 import {
   buildKeywordQuery,
   conservativeHttpCrawlerOptions,
@@ -7,6 +8,7 @@ import {
   type CollectedRawContent,
   type CollectionAdapter
 } from "./types";
+export { normalizeRedditBrowserRows } from "./redditBrowser";
 
 interface RedditListingResponse {
   data?: {
@@ -38,7 +40,10 @@ export function createRedditAdapter(env: NodeJS.ProcessEnv = process.env): Colle
   if (env.REDDIT_COLLECTION_MODE === "official_api") {
     return createRedditOfficialApiAdapter(env);
   }
-  return createRedditPublicJsonAdapter(env);
+  if (env.REDDIT_COLLECTION_MODE === "public_json" || env.REDDIT_COLLECTION_MODE === "public_json_fallback") {
+    return createRedditPublicJsonAdapter(env);
+  }
+  return createRedditBrowserAdapter(env);
 }
 
 export function createRedditPublicJsonAdapter(env: NodeJS.ProcessEnv = process.env): CollectionAdapter {

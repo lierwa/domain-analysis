@@ -114,6 +114,46 @@ describe("platform sources", () => {
 });
 
 describe("run content isolation", () => {
+  it("persists crawl task observability fields", async () => {
+    const db = createDb(databaseUrl);
+    const projects = createAnalysisProjectRepository(db);
+    const runs = createAnalysisRunRepository(db);
+    const sources = createSourceRepository(db);
+    const tasks = createCrawlTaskRepository(db);
+
+    await sources.seedDefaults();
+    const source = await sources.getByPlatform("reddit");
+    if (!source) throw new Error("source not found");
+
+    const project = await projects.create({ name: "P", goal: "g", language: "en", market: "US" });
+    const run = await runs.create({
+      projectId: project.id,
+      name: "R",
+      goal: project.goal,
+      includeKeywords: ["kw"],
+      excludeKeywords: [],
+      language: "en",
+      market: "US",
+      limit: 200
+    });
+    const task = await tasks.create({ analysisRunId: run.id, sourceId: source.id, targetCount: 200 });
+
+    await tasks.update(task.id, {
+      status: "success",
+      collectedCount: 35,
+      validCount: 30,
+      duplicateCount: 5,
+      pagesCollected: 1,
+      stopReason: "scroll_exhausted"
+    });
+
+    const [listed] = await runs.listCrawlTasks(run.id);
+    expect(listed).toMatchObject({
+      pagesCollected: 1,
+      stopReason: "scroll_exhausted"
+    });
+  });
+
   it("requires run/project/task context and only returns content from the requested run", async () => {
     const db = createDb(databaseUrl);
     const projects = createAnalysisProjectRepository(db);

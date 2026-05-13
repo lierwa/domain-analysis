@@ -52,13 +52,14 @@ describe("createYoutubeAdapter", () => {
       5000
     );
 
-    const items = await adapter.collect({
+    const result = await adapter.collect({
       name: "AI agents",
       includeKeywords: ["AI agents"],
       excludeKeywords: [],
       language: "en",
       limitPerRun: 1
     });
+    const items = Array.isArray(result) ? result : result.items;
 
     expect(items).toHaveLength(1);
     expect(items[0]?.platform).toBe("youtube");

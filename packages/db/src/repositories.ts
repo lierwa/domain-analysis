@@ -39,6 +39,11 @@ export interface UpdateCrawlTaskInput {
   collectedCount?: number;
   validCount?: number;
   duplicateCount?: number;
+  pagesCollected?: number;
+  lastCursor?: string | null;
+  stopReason?: string | null;
+  lastRequestAt?: string | null;
+  nextRequestAt?: string | null;
   errorMessage?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
@@ -383,6 +388,11 @@ function mapCrawlTask(row: CrawlTaskRow) {
     collectedCount: row.collectedCount,
     validCount: row.validCount,
     duplicateCount: row.duplicateCount,
+    pagesCollected: row.pagesCollected,
+    lastCursor: row.lastCursor ?? undefined,
+    stopReason: row.stopReason ?? undefined,
+    lastRequestAt: normalizeDateTime(row.lastRequestAt),
+    nextRequestAt: normalizeDateTime(row.nextRequestAt),
     errorMessage: row.errorMessage ?? undefined,
     startedAt: normalizeDateTime(row.startedAt),
     finishedAt: normalizeDateTime(row.finishedAt),

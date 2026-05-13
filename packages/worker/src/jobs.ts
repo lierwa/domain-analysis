@@ -1,7 +1,7 @@
 import type { Platform } from "@domain-analysis/shared";
 import type { TaskStatus } from "@domain-analysis/shared";
 import { createRedditAdapter } from "./adapters/reddit";
-import type { CollectedRawContent, CollectionQuery } from "./adapters/types";
+import type { CollectionAdapter, CollectedRawContent, CollectionMetadata, CollectionQuery } from "./adapters/types";
 import { createWebAdapter } from "./adapters/web";
 import { createXAdapter } from "./adapters/x";
 import { createYoutubeAdapter } from "./adapters/youtube";
@@ -20,6 +20,7 @@ export interface JobResult {
   status: "success";
   message: string;
   items?: CollectedRawContent[];
+  metadata?: CollectionMetadata;
 }
 
 export interface CrawlJobPayload extends Record<string, unknown> {
@@ -43,14 +44,20 @@ export async function runJob(job: WorkerJob): Promise<JobResult> {
 async function runCrawlJob(job: WorkerJob): Promise<JobResult> {
   const payload = parseCrawlPayload(job.payload);
   const adapter = createAdapterForPlatform(payload.platform);
-  const items = await adapter.collect(payload.query);
+  const collection = normalizeCollectionResult(await adapter.collect(payload.query));
 
   return {
     jobId: job.id,
     status: "success",
     message: `${payload.platform} collection completed`,
-    items
+    items: collection.items,
+    metadata: collection.metadata
   };
+}
+
+function normalizeCollectionResult(collection: Awaited<ReturnType<CollectionAdapter["collect"]>>) {
+  if (Array.isArray(collection)) return { items: collection };
+  return collection;
 }
 
 export function createAdapterForPlatform(platform: Platform) {

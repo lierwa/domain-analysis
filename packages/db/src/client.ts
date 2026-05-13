@@ -154,6 +154,11 @@ export async function initializeDatabase(
       collected_count INTEGER NOT NULL DEFAULT 0,
       valid_count INTEGER NOT NULL DEFAULT 0,
       duplicate_count INTEGER NOT NULL DEFAULT 0,
+      pages_collected INTEGER NOT NULL DEFAULT 0,
+      last_cursor TEXT,
+      stop_reason TEXT,
+      last_request_at TEXT,
+      next_request_at TEXT,
       error_message TEXT,
       started_at TEXT,
       finished_at TEXT,
@@ -244,9 +249,22 @@ export async function initializeDatabase(
     `).catch((error) => {
       if (!String((error as Error).message).includes("duplicate column name")) throw error;
     });
+    await addColumnIfMissing(client, "crawl_tasks", "pages_collected INTEGER NOT NULL DEFAULT 0");
+    await addColumnIfMissing(client, "crawl_tasks", "last_cursor TEXT");
+    await addColumnIfMissing(client, "crawl_tasks", "stop_reason TEXT");
+    await addColumnIfMissing(client, "crawl_tasks", "last_request_at TEXT");
+    await addColumnIfMissing(client, "crawl_tasks", "next_request_at TEXT");
   } finally {
     client.close();
   }
+}
+
+async function addColumnIfMissing(client: ReturnType<typeof createClient>, table: string, columnSql: string) {
+  await client.executeMultiple(`
+    ALTER TABLE ${table} ADD COLUMN ${columnSql};
+  `).catch((error) => {
+    if (!String((error as Error).message).includes("duplicate column name")) throw error;
+  });
 }
 
 async function ensureSqliteDirectory(databaseUrl: string) {
