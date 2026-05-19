@@ -28,10 +28,11 @@ export interface CrawlJobPayload extends Record<string, unknown> {
   query: CollectionQuery;
 }
 
-export async function runJob(job: WorkerJob): Promise<JobResult> {
+export async function runJob(job: WorkerJob, signal?: AbortSignal): Promise<JobResult> {
+  throwIfAborted(signal);
   switch (job.kind) {
     case "crawl":
-      return runCrawlJob(job);
+      return runCrawlJob(job, signal);
     case "clean":
       return finishJob(job, "Cleaning placeholder completed");
     case "analyze":
@@ -41,10 +42,11 @@ export async function runJob(job: WorkerJob): Promise<JobResult> {
   }
 }
 
-async function runCrawlJob(job: WorkerJob): Promise<JobResult> {
+async function runCrawlJob(job: WorkerJob, signal?: AbortSignal): Promise<JobResult> {
   const payload = parseCrawlPayload(job.payload);
   const adapter = createAdapterForPlatform(payload.platform);
   const collection = normalizeCollectionResult(await adapter.collect(payload.query));
+  throwIfAborted(signal);
 
   return {
     jobId: job.id,
@@ -53,6 +55,11 @@ async function runCrawlJob(job: WorkerJob): Promise<JobResult> {
     items: collection.items,
     metadata: collection.metadata
   };
+}
+
+function throwIfAborted(signal: AbortSignal | undefined) {
+  if (!signal?.aborted) return;
+  throw Object.assign(new Error("job_cancelled"), { name: "AbortError" });
 }
 
 function normalizeCollectionResult(collection: Awaited<ReturnType<CollectionAdapter["collect"]>>) {

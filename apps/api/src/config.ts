@@ -3,7 +3,7 @@ import { z } from "zod";
 const configSchema = z.object({
   nodeEnv: z.string().default("development"),
   host: z.string().default("127.0.0.1"),
-  port: z.coerce.number().int().min(1).max(65535).default(4000),
+  port: z.coerce.number().int().min(1).max(65535).default(43117),
   databaseUrl: z.string().default("file:../../data/domain-analysis.sqlite")
 });
 

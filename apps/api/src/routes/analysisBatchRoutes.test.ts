@@ -2,7 +2,14 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupDatabaseTempDir, createDb, initializeDatabase } from "@domain-analysis/db";
+import {
+  cleanupDatabaseTempDir,
+  createAnalysisRunRepository,
+  createCrawlTaskRepository,
+  createDb,
+  createSourceRepository,
+  initializeDatabase
+} from "@domain-analysis/db";
 import { buildServer } from "../server";
 
 let tempDir: string;
@@ -99,4 +106,48 @@ describe("analysis batch routes", () => {
 
     await app.close();
   });
+
+  it("stops collecting child runs before allowing batch deletion", async () => {
+    const db = createDb(databaseUrl);
+    const app = await buildServer({ logger: false, db });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/analysis-batches",
+      payload: {
+        goal: "Stop batch",
+        includeKeywords: ["tattoo design"],
+        language: "en",
+        market: "US",
+        platformLimits: [{ platform: "reddit", limit: 50 }]
+      }
+    });
+    const batch = created.json().item;
+    const runId: string = batch.runs[0].id;
+    await seedCollectingChildRun(db, runId);
+
+    const deleted = await app.inject({ method: "POST", url: `/api/analysis-batches/${batch.id}/delete` });
+    const stopped = await app.inject({ method: "POST", url: `/api/analysis-batches/${batch.id}/stop` });
+    const deletedAfterStop = await app.inject({ method: "POST", url: `/api/analysis-batches/${batch.id}/delete` });
+
+    expect(deleted.statusCode).toBe(400);
+    expect(stopped.statusCode).toBe(202);
+    expect(stopped.json().item).toMatchObject({ id: batch.id, status: "cancelled" });
+    expect(stopped.json().item.runs[0]).toMatchObject({ id: runId, status: "cancelled" });
+    expect(deletedAfterStop.statusCode).toBe(200);
+
+    await app.close();
+  });
 });
+
+async function seedCollectingChildRun(db: ReturnType<typeof createDb>, runId: string) {
+  const runs = createAnalysisRunRepository(db);
+  const tasks = createCrawlTaskRepository(db);
+  const sources = createSourceRepository(db);
+  await sources.seedDefaults();
+  const source = await sources.getByPlatform("reddit");
+  if (!source) throw new Error("reddit source missing");
+  const task = await tasks.create({ analysisRunId: runId, sourceId: source.id, targetCount: 50 });
+  await tasks.update(task.id, { status: "running", startedAt: new Date().toISOString() });
+  await runs.update(runId, { status: "collecting", startedAt: new Date().toISOString() });
+}

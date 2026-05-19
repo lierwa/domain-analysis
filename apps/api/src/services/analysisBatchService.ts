@@ -8,16 +8,17 @@ import {
 } from "@domain-analysis/db";
 import type { AnalysisBatchPlatform } from "@domain-analysis/shared";
 import { createAnalysisRunService, deriveBatchStatus, refreshBatchFromRuns } from "./analysisRunService";
+import { logBusinessInfo, type ServiceLoggingOptions } from "./businessLogger";
 
 export { deriveBatchStatus };
 
-export function createAnalysisBatchService(db: AppDb) {
+export function createAnalysisBatchService(db: AppDb, options: ServiceLoggingOptions = {}) {
   const batchRepo = createAnalysisBatchRepository(db);
   const projectRepo = createAnalysisProjectRepository(db);
   const runRepo = createAnalysisRunRepository(db);
   const contentRepo = createRawContentRepository(db);
   const reportRepo = createRunReportRepository(db);
-  const runService = createAnalysisRunService(db);
+  const runService = createAnalysisRunService(db, { logger: options.logger });
 
   return {
     async createBatch(input: {
@@ -106,6 +107,11 @@ export function createAnalysisBatchService(db: AppDb) {
         startedAt: new Date().toISOString(),
         errorMessage: null
       });
+      logBusinessInfo(options.logger, "analysis.batch.started", {
+        batchId: id,
+        status: "collecting",
+        targetCount: runs.reduce((sum, run) => sum + run.limit, 0)
+      });
 
       for (const run of runs) {
         if (run.status === "draft" || run.status === "collection_failed") {
@@ -115,7 +121,20 @@ export function createAnalysisBatchService(db: AppDb) {
       await refreshBatchFromRuns(id, { batchRepo, runRepo });
 
       const updated = await batchRepo.getById(id);
-      return withRuns(updated ?? batch, await runRepo.listByBatch(id));
+      const latestRuns = await runRepo.listByBatch(id);
+      const completed = updated && updated.status !== "collecting";
+      if (completed) {
+        logBusinessInfo(options.logger, "analysis.batch.completed", {
+          batchId: id,
+          status: updated.status,
+          targetCount: latestRuns.reduce((sum, run) => sum + run.limit, 0),
+          collectedCount: updated.collectedCount,
+          validCount: updated.validCount,
+          duplicateCount: updated.duplicateCount,
+          errorMessage: updated.errorMessage
+        });
+      }
+      return withRuns(updated ?? batch, latestRuns);
     },
 
     async deleteBatch(id: string) {
@@ -127,6 +146,34 @@ export function createAnalysisBatchService(db: AppDb) {
       }
       await batchRepo.remove(id);
       return batch;
+    },
+
+    async stopBatch(id: string) {
+      const batch = await batchRepo.getById(id);
+      if (!batch) return null;
+      const runs = await runRepo.listByBatch(id);
+      const collectingRuns = runs.filter((run) => run.status === "collecting");
+      if (collectingRuns.length === 0) return withRuns(batch, runs);
+
+      for (const run of collectingRuns) {
+        await runService.stopRun(run.id);
+      }
+
+      const latestRuns = await runRepo.listByBatch(id);
+      const status = deriveBatchStatus(latestRuns);
+      const stopped = await batchRepo.update(id, {
+        status,
+        errorMessage: status === "cancelled" ? "Stopped by user." : batch.errorMessage,
+        finishedAt: status === "cancelled" ? new Date().toISOString() : batch.finishedAt
+      });
+
+      logBusinessInfo(options.logger, "analysis.batch.cancelled", {
+        batchId: id,
+        status,
+        targetCount: latestRuns.reduce((sum, run) => sum + run.limit, 0)
+      });
+
+      return withRuns(stopped ?? batch, latestRuns);
     },
 
     async generateReport(id: string) {
@@ -175,6 +222,12 @@ export function createAnalysisBatchService(db: AppDb) {
       });
 
       await batchRepo.update(id, { status: "report_ready", reportId: report.id });
+      logBusinessInfo(options.logger, "report.generated", {
+        batchId: id,
+        status: "report_ready",
+        validCount: contents.length,
+        targetCount: runs.reduce((sum, run) => sum + run.limit, 0)
+      });
       return report;
     }
   };

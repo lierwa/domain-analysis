@@ -11,6 +11,7 @@ import { createVercelAiInsightAnalyzer, type AiInsightAnalyzer, type AiInsightCo
 import { loadAiProviderConfig } from "./aiProviderConfig";
 import type { PostInsight, RunInsightSummary } from "./aiInsightSchemas";
 import { getEngagementScore, getSubreddit } from "./analysisMetrics";
+import { logBusinessError, logBusinessInfo, type ServiceLoggingOptions } from "./businessLogger";
 
 const RUN_SUMMARY_CONTENT_TYPE = "__run_summary";
 
@@ -18,7 +19,7 @@ export type { AiInsightAnalyzer } from "./aiInsightAnalyzer";
 
 export function createAnalysisInsightService(
   db: AppDb,
-  options: { analyzer?: AiInsightAnalyzer; env?: NodeJS.ProcessEnv } = {}
+  options: { analyzer?: AiInsightAnalyzer; env?: NodeJS.ProcessEnv } & ServiceLoggingOptions = {}
 ) {
   const runRepo = createAnalysisRunRepository(db);
   const contentRepo = createRawContentRepository(db);
@@ -42,6 +43,12 @@ export function createAnalysisInsightService(
         startedAt
       });
       await runRepo.update(runId, { status: "analyzing", errorMessage: null });
+      logBusinessInfo(options.logger, "insight.run.started", {
+        runId,
+        platform: run.platform,
+        status: "analyzing",
+        targetCount: contents.length
+      });
 
       try {
         const selection = selectInsightCandidates(run, contents, insightConfig);
@@ -80,6 +87,7 @@ export function createAnalysisInsightService(
           limit(async () => {
             const persistedBatch = batches.find((item) => item.batchIndex === batch.batchIndex);
             if (!persistedBatch) throw new Error("ai_insight_batch_missing");
+            const batchStartedAt = Date.now();
             await insightRunRepo.updateBatch(persistedBatch.id, { status: "running", startedAt: new Date().toISOString() });
             try {
               const output = await analyzer.analyzeRun({
@@ -93,6 +101,15 @@ export function createAnalysisInsightService(
                 outputInsightCount: items.length,
                 finishedAt: new Date().toISOString()
               });
+              logBusinessInfo(options.logger, "insight.batch.completed", {
+                runId,
+                taskId: persistedBatch.id,
+                platform: run.platform,
+                status: "completed",
+                targetCount: batch.contents.length,
+                validCount: items.length,
+                durationMs: Date.now() - batchStartedAt
+              });
               return { batchIndex: batch.batchIndex, items, summary: output.summary };
             } catch (error) {
               const message = error instanceof Error ? error.message : "ai_insight_batch_failed";
@@ -100,6 +117,15 @@ export function createAnalysisInsightService(
                 status: "failed",
                 errorMessage: message,
                 finishedAt: new Date().toISOString()
+              });
+              logBusinessError(options.logger, "insight.batch.failed", {
+                runId,
+                taskId: persistedBatch.id,
+                platform: run.platform,
+                status: "failed",
+                targetCount: batch.contents.length,
+                errorMessage: message,
+                durationMs: Date.now() - batchStartedAt
               });
               throw error;
             }

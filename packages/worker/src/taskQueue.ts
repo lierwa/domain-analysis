@@ -5,6 +5,10 @@ export interface TaskQueueOptions {
   concurrency?: number;
 }
 
+export interface AddTaskOptions {
+  signal?: AbortSignal;
+}
+
 export class TaskQueue {
   private readonly queue: PQueue;
 
@@ -16,8 +20,8 @@ export class TaskQueue {
     });
   }
 
-  add(job: WorkerJob): Promise<JobResult | void> {
-    return this.queue.add(() => runJob(job));
+  add(job: WorkerJob, options: AddTaskOptions = {}): Promise<JobResult | void> {
+    return this.queue.add(() => runJob(job, options.signal), { signal: options.signal });
   }
 
   get size() {

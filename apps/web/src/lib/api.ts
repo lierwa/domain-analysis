@@ -20,6 +20,7 @@ export type AnalysisRunStatus =
   | "collecting"
   | "login_required"
   | "collection_failed"
+  | "cancelled"
   | "no_content"
   | "content_ready"
   | "analyzing"
@@ -36,6 +37,7 @@ export type AnalysisBatchStatus =
   | "content_ready"
   | "no_content"
   | "collection_failed"
+  | "cancelled"
   | "report_ready";
 
 export type ProjectStatus = "active" | "paused" | "archived";
@@ -320,6 +322,13 @@ export async function deleteAnalysisBatch(id: string): Promise<void> {
   await request<void>(`/api/analysis-batches/${id}/delete`, { method: "POST" });
 }
 
+export async function stopAnalysisBatch(id: string): Promise<AnalysisBatch> {
+  const data = await request<{ item: AnalysisBatch }>(`/api/analysis-batches/${id}/stop`, {
+    method: "POST"
+  });
+  return data.item;
+}
+
 export async function generateBatchReport(id: string): Promise<RunReport> {
   const data = await request<{ item: RunReport }>(`/api/analysis-batches/${id}/report`, {
     method: "POST"
@@ -362,6 +371,13 @@ export async function startAnalysisRun(id: string): Promise<AnalysisRun> {
 
 export async function retryAnalysisRun(id: string): Promise<AnalysisRun> {
   const data = await request<{ item: AnalysisRun }>(`/api/analysis-runs/${id}/retry`, {
+    method: "POST"
+  });
+  return data.item;
+}
+
+export async function stopAnalysisRun(id: string): Promise<AnalysisRun> {
+  const data = await request<{ item: AnalysisRun }>(`/api/analysis-runs/${id}/stop`, {
     method: "POST"
   });
   return data.item;

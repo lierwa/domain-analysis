@@ -34,12 +34,12 @@ export function WorkspacePage() {
   const batchesQuery = useQuery({
     queryKey: ["analysis-batches", page],
     queryFn: () => fetchAnalysisBatches({ page, pageSize: PAGE_SIZE }),
-    refetchInterval: 5000 // WHY: batch 状态由多个 child run 汇总，轮询让主列表保持可观测。
+    refetchInterval: (query) => hasActiveRuns(query.state.data as { items?: Array<{ status: string }> } | undefined) ? 3000 : false
   });
   const runsQuery = useQuery({
     queryKey: ["analysis-runs", page],
     queryFn: () => fetchAnalysisRuns({ page, pageSize: PAGE_SIZE }),
-    refetchInterval: 5000,
+    refetchInterval: (query) => hasActiveRuns(query.state.data as { items?: Array<{ status: string }> } | undefined) ? 3000 : false,
     enabled: mode === "run"
   });
 
@@ -493,4 +493,8 @@ function splitCommaList(value: string) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function hasActiveRuns(data: { items?: Array<{ status: string }> } | undefined) {
+  return data?.items?.some((item) => item.status === "collecting") ?? false;
 }

@@ -12,13 +12,15 @@ import {
 import type { AnalysisBatchStatus, AnalysisRunStatus, TaskStatus } from "@domain-analysis/shared";
 import { mapCollectionErrorToTaskStatus, TaskQueue } from "@domain-analysis/worker";
 import { buildDeterministicReport } from "./analysisReportBuilder";
+import { logBusinessError, logBusinessInfo, type ServiceLoggingOptions } from "./businessLogger";
 
 const queue = new TaskQueue();
+const activeRunControllers = new Map<string, AbortController>();
 
 // WHY: service 层编排业务流程，route 只做 HTTP 参数解析，repository 只做数据读写。
 // TRADE-OFF: MVP 仍用进程内 TaskQueue；进程重启会丢 running 任务，后续再换持久化队列。
 
-export function createAnalysisRunService(db: AppDb) {
+export function createAnalysisRunService(db: AppDb, options: ServiceLoggingOptions = {}) {
   const projectRepo = createAnalysisProjectRepository(db);
   const batchRepo = createAnalysisBatchRepository(db);
   const runRepo = createAnalysisRunRepository(db);
@@ -75,6 +77,14 @@ export function createAnalysisRunService(db: AppDb) {
         limit: input.limit
       });
 
+      logBusinessInfo(options.logger, "analysis.run.created", {
+        runId: run.id,
+        batchId: run.analysisBatchId,
+        platform: run.platform,
+        status: run.status,
+        targetCount: run.limit
+      });
+
       return run;
     },
 
@@ -95,6 +105,41 @@ export function createAnalysisRunService(db: AppDb) {
       await runRepo.remove(id);
       if (run.analysisBatchId) await refreshBatchFromRuns(run.analysisBatchId, { batchRepo, runRepo });
       return run;
+    },
+
+    async stopRun(id: string) {
+      const run = await runRepo.getById(id);
+      if (!run) return null;
+      if (run.status !== "collecting") return run;
+
+      activeRunControllers.get(id)?.abort();
+      const stoppedAt = new Date().toISOString();
+      const activeTask = await runRepo.findActiveCrawlTask(id);
+      if (activeTask) {
+        await taskRepo.update(activeTask.id, {
+          status: "cancelled",
+          stopReason: "user_stopped",
+          errorMessage: "Stopped by user.",
+          finishedAt: stoppedAt
+        });
+      }
+
+      const stopped = await runRepo.update(id, {
+        status: "cancelled",
+        errorMessage: "Stopped by user.",
+        finishedAt: stoppedAt
+      });
+      if (run.analysisBatchId) await refreshBatchFromRuns(run.analysisBatchId, { batchRepo, runRepo });
+
+      logBusinessInfo(options.logger, "analysis.run.cancelled", {
+        runId: id,
+        batchId: run.analysisBatchId,
+        taskId: activeTask?.id,
+        platform: run.platform,
+        status: "cancelled"
+      });
+
+      return stopped;
     },
 
     // ─── 启动采集 ─────────────────────────────────────────────────────────────
@@ -145,8 +190,40 @@ export function createAnalysisRunService(db: AppDb) {
 
       await taskRepo.update(task.id, { status: "running", startedAt: new Date().toISOString() });
 
+      // WHY: 生命周期日志比 GET 访问日志更能说明系统正在做什么，便于排查异步任务状态。
+      logBusinessInfo(options.logger, "analysis.run.started", {
+        runId,
+        batchId: run.analysisBatchId,
+        platform: run.platform,
+        status: "collecting",
+        targetCount: task.targetCount
+      });
+      logBusinessInfo(options.logger, "crawl.task.started", {
+        runId,
+        batchId: run.analysisBatchId,
+        taskId: task.id,
+        platform: run.platform,
+        status: "running",
+        targetCount: task.targetCount
+      });
+
+      const controller = new AbortController();
+      activeRunControllers.set(runId, controller);
+
       // WHY: 采集异步执行，API 立即返回避免慢抓取阻塞用户界面和健康检查。
-      void startCollection({ runId, taskId: task.id, run, source, taskRepo, contentRepo, runRepo, batchRepo, queue });
+      void startCollection({
+        runId,
+        taskId: task.id,
+        run,
+        source,
+        taskRepo,
+        contentRepo,
+        runRepo,
+        batchRepo,
+        queue,
+        logger: options.logger,
+        abortSignal: controller.signal
+      });
 
       return runRepo.getById(runId);
     },
@@ -198,6 +275,13 @@ export function createAnalysisRunService(db: AppDb) {
 
       await runRepo.update(runId, { status: "report_ready", reportId: report.id });
 
+      logBusinessInfo(options.logger, "report.generated", {
+        runId,
+        status: "report_ready",
+        validCount: contents.length,
+        targetCount: run.limit
+      });
+
       return report;
     },
 
@@ -246,7 +330,9 @@ async function startCollection({
   contentRepo,
   runRepo,
   batchRepo,
-  queue
+  queue,
+  logger,
+  abortSignal
 }: {
   runId: string;
   taskId: string;
@@ -264,25 +350,36 @@ async function startCollection({
   runRepo: ReturnType<typeof createAnalysisRunRepository>;
   batchRepo: ReturnType<typeof createAnalysisBatchRepository>;
   queue: TaskQueue;
+  logger?: ServiceLoggingOptions["logger"];
+  abortSignal?: AbortSignal;
 }) {
+  const startedAt = Date.now();
   try {
-    const result = await queue.add({
-      id: taskId,
-      kind: "crawl",
-      payload: {
-        platform: run.platform,
-        query: {
-          name: run.includeKeywords.join(" "),
-          includeKeywords: run.includeKeywords,
-          excludeKeywords: run.excludeKeywords,
-          language: "en",
-          limitPerRun: determineTaskTargetCount({
-            runLimit: run.limit,
-            sourceDefaultLimit: source.defaultLimit
-          })
+    const result = await queue.add(
+      {
+        id: taskId,
+        kind: "crawl",
+        payload: {
+          platform: run.platform,
+          query: {
+            name: run.includeKeywords.join(" "),
+            includeKeywords: run.includeKeywords,
+            excludeKeywords: run.excludeKeywords,
+            language: "en",
+            limitPerRun: determineTaskTargetCount({
+              runLimit: run.limit,
+              sourceDefaultLimit: source.defaultLimit
+            })
+          }
         }
-      }
-    });
+      },
+      { signal: abortSignal }
+    );
+
+    if (await isRunCancelled(runId, runRepo)) {
+      await ensureTaskCancelled(taskId, taskRepo);
+      return;
+    }
 
     const collectedCount = result?.items?.length ?? 0;
 
@@ -327,7 +424,28 @@ async function startCollection({
       finishedAt: new Date().toISOString()
     });
     if (run.analysisBatchId) await refreshBatchFromRuns(run.analysisBatchId, { batchRepo, runRepo });
+
+    logBusinessInfo(logger, "crawl.task.completed", {
+      runId,
+      batchId: run.analysisBatchId,
+      taskId,
+      platform: run.platform,
+      status: completion.taskStatus,
+      targetCount: determineTaskTargetCount({
+        runLimit: run.limit,
+        sourceDefaultLimit: source.defaultLimit
+      }),
+      collectedCount,
+      validCount: inserted.items.length,
+      duplicateCount: inserted.duplicates,
+      durationMs: Date.now() - startedAt
+    });
   } catch (error) {
+    if (await isRunCancelled(runId, runRepo)) {
+      await ensureTaskCancelled(taskId, taskRepo);
+      return;
+    }
+
     const message = error instanceof Error ? error.message : "unknown_crawl_error";
     const taskStatus = mapCollectionErrorToTaskStatus(error);
     const completion = determineCollectionFailureCompletion({ taskStatus, message });
@@ -342,7 +460,38 @@ async function startCollection({
       finishedAt: completion.finishedAt
     });
     if (run.analysisBatchId) await refreshBatchFromRuns(run.analysisBatchId, { batchRepo, runRepo });
+
+    logBusinessError(logger, "crawl.task.failed", {
+      runId,
+      batchId: run.analysisBatchId,
+      taskId,
+      platform: run.platform,
+      status: completion.taskStatus,
+      errorMessage: completion.errorMessage,
+      durationMs: Date.now() - startedAt
+    });
+  } finally {
+    if (activeRunControllers.get(runId)?.signal === abortSignal) activeRunControllers.delete(runId);
   }
+}
+
+async function isRunCancelled(
+  runId: string,
+  runRepo: ReturnType<typeof createAnalysisRunRepository>
+) {
+  return (await runRepo.getById(runId))?.status === "cancelled";
+}
+
+async function ensureTaskCancelled(
+  taskId: string,
+  taskRepo: ReturnType<typeof createCrawlTaskRepository>
+) {
+  await taskRepo.update(taskId, {
+    status: "cancelled",
+    stopReason: "user_stopped",
+    errorMessage: "Stopped by user.",
+    finishedAt: new Date().toISOString()
+  });
 }
 
 export async function refreshBatchFromRuns(
@@ -361,7 +510,8 @@ export async function refreshBatchFromRuns(
     "partial_ready",
     "content_ready",
     "no_content",
-    "collection_failed"
+    "collection_failed",
+    "cancelled"
   ];
 
   await repos.batchRepo.update(batchId, {
@@ -387,6 +537,7 @@ export function deriveBatchStatus(
   if (hasLoginRequired) return "login_required";
   if (hasValid) return "content_ready";
   if (hasFailure) return "collection_failed";
+  if (runs.every((run) => run.status === "cancelled")) return "cancelled";
   return "no_content";
 }
 

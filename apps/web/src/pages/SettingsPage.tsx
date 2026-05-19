@@ -7,8 +7,7 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const xStatusQuery = useQuery({
     queryKey: ["settings", "x-login"],
-    queryFn: fetchXLoginStatus,
-    refetchInterval: 5000
+    queryFn: fetchXLoginStatus
   });
   const aiStatusQuery = useQuery({
     queryKey: ["settings", "ai"],

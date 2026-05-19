@@ -4,6 +4,7 @@ export const taskStatuses = [
   "success",
   "failed",
   "no_content",
+  "cancelled",
   "paused",
   "login_required",
   "rate_limited",
@@ -18,6 +19,7 @@ export const analysisRunStatuses = [
   "collecting",
   "login_required",
   "collection_failed",
+  "cancelled",
   "no_content",
   "content_ready",
   "analyzing",
@@ -36,6 +38,7 @@ export const analysisBatchStatuses = [
   "content_ready",
   "no_content",
   "collection_failed",
+  "cancelled",
   "report_ready"
 ] as const;
 

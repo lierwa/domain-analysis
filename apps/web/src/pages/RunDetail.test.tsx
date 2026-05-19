@@ -53,6 +53,23 @@ describe("RunDetail", () => {
     expect(html).toContain("Regenerate report");
   });
 
+  it("shows a stop action for collecting runs", () => {
+    const queryClient = new QueryClient();
+
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <RunDetail
+          run={{ ...baseRun, status: "collecting" }}
+          onRefresh={() => undefined}
+          onDeleted={() => undefined}
+        />
+      </QueryClientProvider>
+    );
+
+    expect(html).toContain("Stop");
+    expect(html).not.toContain("Continue");
+  });
+
   it("renders the AI insights workspace with evidence and confidence", () => {
     const html = renderToStaticMarkup(
       <InsightsWorkspace

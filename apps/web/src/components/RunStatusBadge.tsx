@@ -10,6 +10,7 @@ const statusConfig: Record<AnalysisRunStatus | AnalysisBatchStatus, { label: str
   collecting: { label: "Collecting", className: "bg-blue-100 text-blue-700 animate-pulse" },
   login_required: { label: "Login Required", className: "bg-amber-100 text-amber-700" },
   collection_failed: { label: "Failed", className: "bg-red-100 text-red-700" },
+  cancelled: { label: "Cancelled", className: "bg-zinc-100 text-zinc-700" },
   partial_ready: { label: "Partial Ready", className: "bg-amber-100 text-amber-700" },
   no_content: { label: "No Content", className: "bg-yellow-100 text-yellow-700" },
   content_ready: { label: "Content Ready", className: "bg-green-100 text-green-700" },

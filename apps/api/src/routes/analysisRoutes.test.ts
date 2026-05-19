@@ -308,8 +308,9 @@ describe("analysis run routes", () => {
     await app.close();
   });
 
-  it("does not delete a collecting run", async () => {
-    const app = await buildServer({ logger: false, db: createDb(databaseUrl) });
+  it("stops a collecting run before allowing deletion", async () => {
+    const db = createDb(databaseUrl);
+    const app = await buildServer({ logger: false, db });
 
     const created = await app.inject({
       method: "POST",
@@ -324,12 +325,20 @@ describe("analysis run routes", () => {
       }
     });
     const runId: string = created.json().item.id;
-    await app.inject({ method: "POST", url: `/api/analysis-runs/${runId}/start` });
+    const projectId: string = created.json().item.projectId;
+    await seedCollectingRun(db, runId, projectId);
 
     const deleted = await app.inject({ method: "POST", url: `/api/analysis-runs/${runId}/delete` });
+    const stopped = await app.inject({ method: "POST", url: `/api/analysis-runs/${runId}/stop` });
+    const deletedAfterStop = await app.inject({ method: "POST", url: `/api/analysis-runs/${runId}/delete` });
+    const fetched = await app.inject({ method: "GET", url: `/api/analysis-runs/${runId}` });
 
     expect(deleted.statusCode).toBe(400);
     expect(deleted.json().message).toContain("collecting");
+    expect(stopped.statusCode).toBe(202);
+    expect(stopped.json().item).toMatchObject({ id: runId, status: "cancelled" });
+    expect(deletedAfterStop.statusCode).toBe(200);
+    expect(fetched.statusCode).toBe(404);
 
     await app.close();
   });
@@ -359,6 +368,27 @@ async function seedRouteRunContent(db: ReturnType<typeof createDb>, runId: strin
     }
   ]);
   await runs.update(runId, { status: "content_ready", collectedCount: 1, validCount: 1 });
+}
+
+async function seedCollectingRun(db: ReturnType<typeof createDb>, runId: string, projectId: string) {
+  const runs = createAnalysisRunRepository(db);
+  const sources = createSourceRepository(db);
+  const tasks = createCrawlTaskRepository(db);
+  await sources.seedDefaults();
+  const source = await sources.getByPlatform("reddit");
+  if (!source) throw new Error("reddit source missing");
+  await tasks.create({ analysisRunId: runId, sourceId: source.id, targetCount: 10 });
+  const [task] = await runs.listCrawlTasks(runId);
+  if (!task) throw new Error("crawl task missing");
+  await tasks.update(task.id, { status: "running", startedAt: new Date().toISOString() });
+  await runs.update(runId, {
+    status: "collecting",
+    startedAt: new Date().toISOString(),
+    collectedCount: 0,
+    validCount: 0,
+    duplicateCount: 0
+  });
+  void projectId;
 }
 
 describe("reports routes", () => {

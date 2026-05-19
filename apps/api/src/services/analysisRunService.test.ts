@@ -94,4 +94,57 @@ describe("analysis run collection policy", () => {
       await cleanupDatabaseTempDir(tempDir);
     }
   });
+
+  it("logs run creation and report generation lifecycle events", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "domain-analysis-run-service-"));
+    const databaseUrl = `file:${join(tempDir, "test.sqlite")}`;
+    await initializeDatabase(databaseUrl);
+    const db = createDb(databaseUrl);
+    const logger = createBusinessLogCapture();
+
+    try {
+      const service = createAnalysisRunService(db, { logger });
+      const run = await service.createRun({
+        goal: "Understand AI search frustrations",
+        platform: "reddit",
+        includeKeywords: ["ChatGPT"],
+        excludeKeywords: [],
+        language: "en",
+        market: "US",
+        limit: 10
+      });
+      const runs = createAnalysisRunRepository(db);
+      await runs.update(run.id, { status: "content_ready" });
+
+      await service.generateReport(run.id);
+
+      expect(logger.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: "analysis.run.created",
+            payload: expect.objectContaining({ runId: run.id, platform: "reddit", status: "draft", targetCount: 10 })
+          }),
+          expect.objectContaining({
+            message: "report.generated",
+            payload: expect.objectContaining({ runId: run.id, status: "report_ready" })
+          })
+        ])
+      );
+    } finally {
+      await cleanupDatabaseTempDir(tempDir);
+    }
+  });
 });
+
+function createBusinessLogCapture() {
+  const events: Array<{ payload: Record<string, unknown>; message?: string }> = [];
+  return {
+    events,
+    info(payload: Record<string, unknown>, message?: string) {
+      events.push({ payload, message });
+    },
+    error(payload: Record<string, unknown>, message?: string) {
+      events.push({ payload, message });
+    }
+  };
+}

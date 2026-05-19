@@ -8,10 +8,10 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n api,web -c black,white \"npm run dev:api\" \"npm run dev:web:ready\"",
+    "dev": "node scripts/dev.mjs",
     "dev:api": "npm --workspace @domain-analysis/api run dev",
     "dev:web": "npm --workspace @domain-analysis/web run dev",
-    "dev:web:ready": "wait-on http-get://${API_HOST:-127.0.0.1}:${API_PORT:-4000}/health && npm run dev:web",
+    "dev:web:ready": "node scripts/dev-web-ready.mjs",
     "build": "npm run build:shared && npm run build:db && npm run build:worker && npm run build:api && npm run build:web",
     "build:api": "npm --workspace @domain-analysis/api run build",
     "build:web": "npm --workspace @domain-analysis/web run build",
@@ -27,7 +27,6 @@
     "typecheck:worker": "npm --workspace @domain-analysis/worker run typecheck"
   },
   "devDependencies": {
-    "@rollup/rollup-darwin-x64": "^4.60.3",
     "@types/node": "^20.12.12",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",

@@ -7,6 +7,7 @@ import { createAnalysisInsightService } from "../services/analysisInsightService
 import { createAnalysisRunService } from "../services/analysisRunService";
 import { createContentService } from "../services/contentService";
 import type { AiInsightAnalyzer } from "../services/analysisInsightService";
+import type { BusinessLogger } from "../services/businessLogger";
 
 const pageQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -48,11 +49,14 @@ const createProjectSchema = z.object({
 export async function registerAnalysisRoutes(
   app: FastifyInstance,
   db: AppDb,
-  options: { aiInsightAnalyzer?: AiInsightAnalyzer } = {}
+  options: { aiInsightAnalyzer?: AiInsightAnalyzer; logger?: BusinessLogger } = {}
 ) {
-  const runService = createAnalysisRunService(db);
-  const insightService = createAnalysisInsightService(db, { analyzer: options.aiInsightAnalyzer });
-  const batchService = createAnalysisBatchService(db);
+  const runService = createAnalysisRunService(db, { logger: options.logger });
+  const insightService = createAnalysisInsightService(db, {
+    analyzer: options.aiInsightAnalyzer,
+    logger: options.logger
+  });
+  const batchService = createAnalysisBatchService(db, { logger: options.logger });
   const contentService = createContentService(db);
 
   // ─── Analysis Projects ────────────────────────────────────────────────────
@@ -124,6 +128,15 @@ export async function registerAnalysisRoutes(
   );
 
   app.post<{ Params: { id: string } }>(
+    "/api/analysis-batches/:id/stop",
+    async (request, reply) => {
+      const batch = await batchService.stopBatch(request.params.id);
+      if (!batch) return reply.status(404).send({ error: "batch_not_found" });
+      return reply.status(202).send({ item: batch });
+    }
+  );
+
+  app.post<{ Params: { id: string } }>(
     "/api/analysis-batches/:id/report",
     async (request, reply) => {
       const report = await batchService.generateReport(request.params.id);
@@ -165,6 +178,15 @@ export async function registerAnalysisRoutes(
     "/api/analysis-runs/:id/retry",
     async (request, reply) => {
       const run = await runService.retryRun(request.params.id);
+      return reply.status(202).send({ item: run });
+    }
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/analysis-runs/:id/stop",
+    async (request, reply) => {
+      const run = await runService.stopRun(request.params.id);
+      if (!run) return reply.status(404).send({ error: "run_not_found" });
       return reply.status(202).send({ item: run });
     }
   );

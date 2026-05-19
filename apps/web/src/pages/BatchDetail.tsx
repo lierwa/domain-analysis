@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { Square, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import {
@@ -8,6 +8,7 @@ import {
   fetchReport,
   fetchRunCrawlTasks,
   generateBatchReport,
+  stopAnalysisBatch,
   type AnalysisBatch,
   type AnalysisRun
 } from "../lib/api";
@@ -25,7 +26,10 @@ export function BatchDetail({ batch, onDeleted }: BatchDetailProps) {
     queryKey: ["analysis-batch", batch.id],
     queryFn: () => fetchAnalysisBatch(batch.id),
     initialData: batch,
-    refetchInterval: 5000
+    refetchInterval: (query) => {
+      const item = query.state.data as AnalysisBatch | undefined;
+      return item?.status === "collecting" ? 3000 : false;
+    }
   });
   const currentBatch = detailQuery.data ?? batch;
   const runs = currentBatch.runs ?? [];
@@ -40,6 +44,11 @@ export function BatchDetail({ batch, onDeleted }: BatchDetailProps) {
     mutationFn: () => generateBatchReport(currentBatch.id),
     onSuccess: () => detailQuery.refetch(),
     onError: (error) => window.alert(error instanceof Error ? error.message : "Report generation failed")
+  });
+  const stopMutation = useMutation({
+    mutationFn: () => stopAnalysisBatch(currentBatch.id),
+    onSuccess: () => detailQuery.refetch(),
+    onError: (error) => window.alert(error instanceof Error ? error.message : "Stop failed")
   });
 
   function handleDelete() {
@@ -64,15 +73,28 @@ export function BatchDetail({ batch, onDeleted }: BatchDetailProps) {
             </span>
           </div>
         </div>
-        <button
-          type="button"
-          title="Delete batch"
-          disabled={currentBatch.status === "collecting" || deleteMutation.isPending}
-          onClick={handleDelete}
-          className="rounded border border-line p-1.5 text-muted hover:text-red-700 disabled:opacity-40"
-        >
-          <Trash2 size={14} aria-hidden="true" />
-        </button>
+        <div className="flex gap-2">
+          {currentBatch.status === "collecting" && (
+            <button
+              type="button"
+              disabled={stopMutation.isPending}
+              onClick={() => stopMutation.mutate()}
+              className="inline-flex items-center gap-1.5 rounded border border-line px-3 py-1.5 text-xs text-muted hover:text-ink disabled:opacity-50"
+            >
+              <Square size={12} aria-hidden="true" />
+              {stopMutation.isPending ? "Stopping..." : "Stop"}
+            </button>
+          )}
+          <button
+            type="button"
+            title="Delete batch"
+            disabled={currentBatch.status === "collecting" || deleteMutation.isPending}
+            onClick={handleDelete}
+            className="rounded border border-line p-1.5 text-muted hover:text-red-700 disabled:opacity-40"
+          >
+            <Trash2 size={14} aria-hidden="true" />
+          </button>
+        </div>
         {canGenerateReport(currentBatch) && !currentBatch.reportId && (
           <button
             type="button"

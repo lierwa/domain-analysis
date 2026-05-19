@@ -5,6 +5,7 @@ import { registerHealthRoutes } from "./routes/health";
 import { registerModuleRoutes } from "./routes/modules";
 import { registerAnalysisRoutes } from "./routes/analysisRoutes";
 import { registerSettingsRoutes } from "./routes/settingsRoutes";
+import { registerRequestLogging } from "./requestLogging";
 import type { AiInsightAnalyzer } from "./services/analysisInsightService";
 
 // WHY: 业务流程由 analysisRoutes + analysisRunService 统一编排，避免再暴露工程对象 API。
@@ -12,13 +13,33 @@ import type { AiInsightAnalyzer } from "./services/analysisInsightService";
 export interface BuildServerOptions extends FastifyServerOptions {
   db?: AppDb;
   aiInsightAnalyzer?: AiInsightAnalyzer;
+  requestLogSummaryIntervalMs?: number;
+  requestLogSummaryMinCount?: number;
+  requestLogSlowThresholdMs?: number;
 }
 
 export async function buildServer(options: BuildServerOptions = {}) {
+  const {
+    db: providedDb,
+    aiInsightAnalyzer,
+    requestLogSummaryIntervalMs,
+    requestLogSummaryMinCount,
+    requestLogSlowThresholdMs,
+    ...fastifyOptions
+  } = options;
   const app = Fastify({
-    logger: options.logger ?? true
+    ...fastifyOptions,
+    logger: fastifyOptions.logger ?? true,
+    disableRequestLogging: fastifyOptions.disableRequestLogging ?? true
   });
-  const db = options.db ?? createDb();
+  const db = providedDb ?? createDb();
+
+  // WHY: Fastify 默认访问日志会被高频 GET 刷屏；保留 app.log，并用聚合摘要承载请求观测。
+  registerRequestLogging(app, {
+    summaryIntervalMs: requestLogSummaryIntervalMs,
+    summaryMinCount: requestLogSummaryMinCount,
+    slowThresholdMs: requestLogSlowThresholdMs
+  });
 
   await app.register(cors, {
     origin: true
@@ -26,7 +47,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
 
   await registerHealthRoutes(app);
   await registerModuleRoutes(app, db);
-  await registerAnalysisRoutes(app, db, { aiInsightAnalyzer: options.aiInsightAnalyzer });
+  await registerAnalysisRoutes(app, db, { aiInsightAnalyzer, logger: app.log });
   await registerSettingsRoutes(app);
 
   app.setErrorHandler((error, _request, reply) => {

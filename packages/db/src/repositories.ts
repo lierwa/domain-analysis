@@ -205,6 +205,7 @@ export function createCrawlTaskRepository(db: AppDb) {
         "success",
         "failed",
         "no_content",
+        "cancelled",
         "paused",
         "login_required",
         "rate_limited",

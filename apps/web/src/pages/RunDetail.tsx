@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, RefreshCw, Trash2 } from "lucide-react";
+import { ExternalLink, RefreshCw, Square, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { RunStatusBadge } from "../components/RunStatusBadge";
 import { RunStageTabs, type RunStage } from "../components/RunStageTabs";
@@ -10,6 +10,7 @@ import {
   deleteAnalysisRun,
   openXLoginBrowser,
   retryAnalysisRun,
+  stopAnalysisRun,
   type AnalysisRun
 } from "../lib/api";
 import { formatDateTime, shortId } from "../lib/format";
@@ -61,7 +62,7 @@ export function RunDetail({ run, onRefresh, onDeleted }: RunDetailProps) {
       {/* Stage content */}
       <div className="mt-2">
         {stage === "setup" && <SetupTab run={run} />}
-        {stage === "collection" && <CollectionTab runId={run.id} />}
+        {stage === "collection" && <CollectionTab runId={run.id} isCollecting={run.status === "collecting"} />}
         {stage === "content" && <RunContentPanel runId={run.id} />}
         {stage === "insights" && <InsightsTab run={run} onRefresh={handleRefresh} />}
         {stage === "report" && <ReportTab run={run} onRefresh={handleRefresh} />}
@@ -109,6 +110,11 @@ function RunActions({
     onSuccess: onDeleted,
     onError: (error) => window.alert(error instanceof Error ? error.message : "Delete failed")
   });
+  const stopMutation = useMutation({
+    mutationFn: () => stopAnalysisRun(run.id),
+    onSuccess: onRefresh,
+    onError: (error) => window.alert(error instanceof Error ? error.message : "Stop failed")
+  });
 
   function handleDelete() {
     if (run.status === "collecting") return;
@@ -118,6 +124,25 @@ function RunActions({
 
   return (
     <div className="flex gap-2">
+      <button
+        type="button"
+        title="Refresh run"
+        onClick={onRefresh}
+        className="rounded border border-line p-1.5 text-muted hover:text-ink"
+      >
+        <RefreshCw size={14} aria-hidden="true" />
+      </button>
+      {run.status === "collecting" && (
+        <button
+          type="button"
+          disabled={stopMutation.isPending}
+          onClick={() => stopMutation.mutate()}
+          className="inline-flex items-center gap-1.5 rounded border border-line px-3 py-1.5 text-xs text-muted hover:text-ink disabled:opacity-50"
+        >
+          <Square size={12} aria-hidden="true" />
+          {stopMutation.isPending ? "Stopping..." : "Stop"}
+        </button>
+      )}
       <button
         type="button"
         title="Delete run"
@@ -214,11 +239,11 @@ function formatPlatform(platform: AnalysisRun["platform"]) {
 
 // ─── Collection Tab ───────────────────────────────────────────────────────────
 
-function CollectionTab({ runId }: { runId: string }) {
+function CollectionTab({ runId, isCollecting }: { runId: string; isCollecting: boolean }) {
   const tasksQuery = useQuery({
     queryKey: ["run-crawl-tasks", runId],
     queryFn: () => fetchRunCrawlTasks(runId),
-    refetchInterval: 3000
+    refetchInterval: isCollecting ? 3000 : false
   });
 
   if (tasksQuery.isLoading) return <p className="text-sm text-muted">Loading…</p>;
@@ -266,6 +291,7 @@ function CollectionTab({ runId }: { runId: string }) {
 function StatusPill({ status }: { status: string }) {
   const isRunning = status === "running" || status === "pending";
   const isLoginRequired = status === "login_required";
+  const isCancelled = status === "cancelled";
   return (
     <span
       className={`rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -273,6 +299,8 @@ function StatusPill({ status }: { status: string }) {
           ? "bg-blue-100 text-blue-700 animate-pulse"
           : isLoginRequired
             ? "bg-amber-100 text-amber-700"
+          : isCancelled
+            ? "bg-zinc-100 text-zinc-700"
           : status === "success"
             ? "bg-green-100 text-green-700"
             : status === "no_content"
