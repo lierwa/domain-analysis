@@ -128,6 +128,7 @@ export async function initializeDatabase(
       include_keywords TEXT NOT NULL,
       exclude_keywords TEXT NOT NULL,
       platform TEXT NOT NULL DEFAULT 'web',
+      media_policy TEXT NOT NULL DEFAULT 'metadata_only',
       run_limit INTEGER NOT NULL DEFAULT 100,
       collected_count INTEGER NOT NULL DEFAULT 0,
       valid_count INTEGER NOT NULL DEFAULT 0,
@@ -314,6 +315,7 @@ export async function initializeDatabase(
     await addColumnIfMissing(client, "crawl_tasks", "stop_reason TEXT");
     await addColumnIfMissing(client, "crawl_tasks", "last_request_at TEXT");
     await addColumnIfMissing(client, "crawl_tasks", "next_request_at TEXT");
+    await addColumnIfMissing(client, "analysis_runs", "media_policy TEXT NOT NULL DEFAULT 'metadata_only'");
     await addColumnIfMissing(client, "raw_contents", "media_urls TEXT");
     await addColumnIfMissing(client, "analyzed_contents", "analysis_json TEXT");
   } finally {

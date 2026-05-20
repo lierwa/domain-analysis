@@ -9,10 +9,11 @@ import {
   createSourceRepository,
   type AppDb
 } from "@domain-analysis/db";
-import type { AnalysisBatchStatus, AnalysisRunStatus, TaskStatus } from "@domain-analysis/shared";
+import type { AnalysisBatchStatus, AnalysisRunStatus, MediaPolicy, TaskStatus } from "@domain-analysis/shared";
 import { mapCollectionErrorToTaskStatus, TaskQueue } from "@domain-analysis/worker";
 import { buildDeterministicReport } from "./analysisReportBuilder";
 import { logBusinessError, logBusinessInfo, type ServiceLoggingOptions } from "./businessLogger";
+import { queueRunMediaDownloads } from "./runMediaService";
 
 const queue = new TaskQueue();
 const activeRunControllers = new Map<string, AbortController>();
@@ -45,6 +46,7 @@ export function createAnalysisRunService(db: AppDb, options: ServiceLoggingOptio
       excludeKeywords: string[];
       language: string;
       market: string;
+      mediaPolicy?: MediaPolicy;
       limit: number;
     }) {
       let projectId = input.projectId;
@@ -74,6 +76,7 @@ export function createAnalysisRunService(db: AppDb, options: ServiceLoggingOptio
         excludeKeywords: input.excludeKeywords,
         language: input.language,
         market: input.market,
+        mediaPolicy: input.mediaPolicy ?? "metadata_only",
         limit: input.limit
       });
 
@@ -81,6 +84,7 @@ export function createAnalysisRunService(db: AppDb, options: ServiceLoggingOptio
         runId: run.id,
         batchId: run.analysisBatchId,
         platform: run.platform,
+        mediaPolicy: run.mediaPolicy,
         status: run.status,
         targetCount: run.limit
       });
@@ -338,6 +342,7 @@ async function startCollection({
   taskId: string;
   run: {
     platform: "reddit" | "x" | "youtube" | "tiktok" | "pinterest" | "web";
+    mediaPolicy: MediaPolicy;
     includeKeywords: string[];
     excludeKeywords: string[];
     limit: number;
@@ -393,7 +398,14 @@ async function startCollection({
         // WHY: matchedKeywords 记录哪些 includeKeywords 命中，便于 content tab 展示。
         matchedKeywords: run.includeKeywords.filter((kw) =>
           item.text.toLowerCase().includes(kw.toLowerCase())
-        )
+        ),
+        rawJson: {
+          ...(item.rawJson ?? {}),
+          media: {
+            status: run.mediaPolicy === "download_images" ? "pending" : "skipped",
+            assets: []
+          }
+        }
       }))
     );
 
@@ -440,6 +452,24 @@ async function startCollection({
       duplicateCount: inserted.duplicates,
       durationMs: Date.now() - startedAt
     });
+
+    if (run.mediaPolicy === "download_images" && inserted.items.length > 0) {
+      // WHY: 媒体后处理放到异步分支，先保证文本数据和任务状态可用，避免前台“等图”阻塞。
+      // TRADE-OFF: 用户会先看到 pending/processing 状态，待后台完成后再刷新为缩略图。
+      void queueRunMediaDownloads({
+        runId,
+        contentRepo,
+        logger
+      }).catch((error) => {
+        logBusinessError(logger, "analysis.media.queue_failed", {
+          runId,
+          batchId: run.analysisBatchId,
+          taskId,
+          platform: run.platform,
+          errorMessage: error instanceof Error ? error.message : "unknown_media_queue_error"
+        });
+      });
+    }
   } catch (error) {
     if (await isRunCancelled(runId, runRepo)) {
       await ensureTaskCancelled(taskId, taskRepo);

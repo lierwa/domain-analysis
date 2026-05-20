@@ -50,6 +50,7 @@ export const projectStatuses = ["active", "paused", "archived"] as const;
 export const collectionPlanStatuses = ["active", "paused", "archived"] as const;
 export const collectionCadences = ["manual", "hourly", "daily", "weekly"] as const;
 export const collectionRunTriggers = ["manual", "scheduled"] as const;
+export const mediaPolicies = ["metadata_only", "download_images"] as const;
 
 export type TaskStatus = (typeof taskStatuses)[number];
 export type Platform = (typeof platforms)[number];
@@ -61,3 +62,4 @@ export type ProjectStatus = (typeof projectStatuses)[number];
 export type CollectionPlanStatus = (typeof collectionPlanStatuses)[number];
 export type CollectionCadence = (typeof collectionCadences)[number];
 export type CollectionRunTrigger = (typeof collectionRunTriggers)[number];
+export type MediaPolicy = (typeof mediaPolicies)[number];

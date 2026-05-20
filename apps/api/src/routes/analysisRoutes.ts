@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { AppDb } from "@domain-analysis/db";
 import { createAnalysisBatchInputSchema, createAnalysisRunInputSchema } from "@domain-analysis/shared";
@@ -6,6 +7,7 @@ import { createAnalysisBatchService } from "../services/analysisBatchService";
 import { createAnalysisInsightService } from "../services/analysisInsightService";
 import { createAnalysisRunService } from "../services/analysisRunService";
 import { createContentService } from "../services/contentService";
+import { resolveThumbnailAbsolutePath } from "../services/runMediaService";
 import type { AiInsightAnalyzer } from "../services/analysisInsightService";
 import type { BusinessLogger } from "../services/businessLogger";
 
@@ -213,6 +215,25 @@ export async function registerAnalysisRoutes(
         publishedFrom: query.publishedFrom,
         publishedTo: query.publishedTo
       });
+    }
+  );
+
+  app.get<{ Params: { runId: string; rawContentId: string; filename: string } }>(
+    "/api/media/:runId/:rawContentId/:filename",
+    async (request, reply) => {
+      const path = resolveThumbnailAbsolutePath(
+        request.params.runId,
+        request.params.rawContentId,
+        request.params.filename
+      );
+      if (!path) return reply.status(404).send({ error: "media_not_found" });
+      try {
+        const buffer = await readFile(path);
+        reply.header("content-type", "image/jpeg");
+        return reply.send(buffer);
+      } catch {
+        return reply.status(404).send({ error: "media_not_found" });
+      }
     }
   );
 

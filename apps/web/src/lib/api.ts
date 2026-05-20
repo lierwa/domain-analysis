@@ -14,6 +14,7 @@ export type {
 } from "./insightTypes";
 
 export type Platform = "reddit" | "x" | "youtube" | "tiktok" | "pinterest" | "web";
+export type MediaPolicy = "metadata_only" | "download_images";
 
 export type AnalysisRunStatus =
   | "draft"
@@ -66,6 +67,7 @@ export interface AnalysisRun {
   includeKeywords: string[];
   excludeKeywords: string[];
   platform: Platform;
+  mediaPolicy: MediaPolicy;
   limit: number;
   collectedCount: number;
   validCount: number;
@@ -138,6 +140,30 @@ export interface RunContent {
   mediaUrls?: string[] | null;
   matchedKeywords: string[];
   metricsJson: Record<string, unknown> | null;
+  rawJson?: {
+    searchCard?: Record<string, unknown>;
+    detail?: {
+      fetchStatus: "success" | "failed";
+      title?: string;
+      body?: string;
+      mediaUrls?: string[];
+      topComments?: Array<{ author?: string; text: string; score?: number }>;
+      error?: string;
+    };
+    media?: {
+      status?: "pending" | "processing" | "ready" | "failed" | "skipped";
+      assets?: Array<{
+        originalUrl: string;
+        thumbnailUrl: string;
+        thumbnailPath: string;
+        width: number;
+        height: number;
+        format: "jpeg" | "png";
+      }>;
+      errorMessage?: string | null;
+      updatedAt?: string;
+    };
+  } | null;
   publishedAt?: string;
   capturedAt: string;
 }
@@ -199,6 +225,7 @@ export interface CreateAnalysisRunInput {
   goal: string;
   includeKeywords: string[];
   excludeKeywords?: string[];
+  mediaPolicy?: MediaPolicy;
   language: string;
   market: string;
   limit?: number;
@@ -226,6 +253,7 @@ export interface CreateAnalysisBatchInput {
   goal: string;
   includeKeywords: string[];
   excludeKeywords?: string[];
+  mediaPolicy?: MediaPolicy;
   language: string;
   market: string;
   platformLimits: PlatformLimit[];

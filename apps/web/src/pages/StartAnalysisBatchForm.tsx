@@ -24,6 +24,7 @@ export function StartAnalysisBatchForm({ onSuccess, onCancel }: StartAnalysisBat
   const [baseForm, setBaseForm] = useState<Omit<CreateAnalysisBatchInput, "includeKeywords" | "platformLimits">>({
     goal: "",
     excludeKeywords: [],
+    mediaPolicy: "metadata_only",
     language: "en",
     market: "US"
   });
@@ -108,6 +109,23 @@ export function StartAnalysisBatchForm({ onSuccess, onCancel }: StartAnalysisBat
           />
         </Field>
 
+        <Field label="Media handling">
+          <div className="grid grid-cols-2 gap-2 rounded-lg border border-line p-2">
+            <MediaPolicyOption
+              selected={baseForm.mediaPolicy !== "download_images"}
+              title="Metadata only"
+              description="Show media links"
+              onClick={() => setBaseForm((form) => ({ ...form, mediaPolicy: "metadata_only" }))}
+            />
+            <MediaPolicyOption
+              selected={baseForm.mediaPolicy === "download_images"}
+              title="Download first 3"
+              description="Crop thumbnails"
+              onClick={() => setBaseForm((form) => ({ ...form, mediaPolicy: "download_images" }))}
+            />
+          </div>
+        </Field>
+
         <div className="grid grid-cols-2 gap-4">
           <Field label="Language">
             <input
@@ -151,6 +169,31 @@ export function StartAnalysisBatchForm({ onSuccess, onCancel }: StartAnalysisBat
         </div>
       </form>
     </div>
+  );
+}
+
+function MediaPolicyOption({
+  selected,
+  title,
+  description,
+  onClick
+}: {
+  selected: boolean;
+  title: string;
+  description: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded border px-2 py-2 text-left text-xs ${
+        selected ? "border-ink bg-ink text-surface" : "border-line text-muted hover:text-ink"
+      }`}
+    >
+      <p className={`text-sm font-medium ${selected ? "text-surface" : "text-ink"}`}>{title}</p>
+      <p className={selected ? "text-surface/75" : "text-muted"}>{description}</p>
+    </button>
   );
 }
 

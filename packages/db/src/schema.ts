@@ -107,6 +107,7 @@ export const analysisRuns = sqliteTable(
     includeKeywords: text("include_keywords", { mode: "json" }).notNull(),
     excludeKeywords: text("exclude_keywords", { mode: "json" }).notNull(),
     platform: text("platform").notNull().default("web"),
+    mediaPolicy: text("media_policy").notNull().default("metadata_only"),
     limit: integer("run_limit").notNull().default(100),
     collectedCount: integer("collected_count").notNull().default(0),
     validCount: integer("valid_count").notNull().default(0),

@@ -7,6 +7,7 @@ import {
   collectionCadences,
   collectionPlanStatuses,
   collectionRunTriggers,
+  mediaPolicies,
   platforms,
   projectStatuses,
   taskStatuses
@@ -133,6 +134,7 @@ export const analysisRunSchema = z.object({
   includeKeywords: z.array(z.string().min(1)),
   excludeKeywords: z.array(z.string().min(1)),
   platform: z.enum(platforms),
+  mediaPolicy: z.enum(mediaPolicies),
   limit: z.number().int().min(1).max(500),
   collectedCount: z.number().int().min(0),
   validCount: z.number().int().min(0),
@@ -160,6 +162,7 @@ export const runContentSchema = z.object({
   mediaUrls: z.array(z.string().url()).nullable().optional(),
   matchedKeywords: z.array(z.string()),
   metricsJson: z.record(z.unknown()).nullable(),
+  rawJson: z.record(z.unknown()).nullable().optional(),
   publishedAt: isoDateSchema.optional(),
   capturedAt: z.string().min(1)
 });
@@ -184,6 +187,7 @@ export const createAnalysisRunInputSchema = z.object({
   goal: z.string().min(1).max(1000),
   includeKeywords: z.array(z.string().min(1)).min(1),
   excludeKeywords: z.array(z.string().min(1)).default([]),
+  mediaPolicy: z.enum(mediaPolicies).default("metadata_only"),
   language: z.string().min(2).max(12),
   market: z.string().min(2).max(64),
   limit: z.number().int().min(1).max(500).default(100)
@@ -196,6 +200,7 @@ export const createAnalysisBatchInputSchema = z
     goal: z.string().min(1).max(1000),
     includeKeywords: z.array(z.string().min(1)).min(1),
     excludeKeywords: z.array(z.string().min(1)).default([]),
+    mediaPolicy: z.enum(mediaPolicies).default("metadata_only"),
     language: z.string().min(2).max(12),
     market: z.string().min(2).max(64),
     platformLimits: z.array(platformLimitSchema).min(1).max(4)

@@ -6,7 +6,7 @@ import {
   createRunReportRepository,
   type AppDb
 } from "@domain-analysis/db";
-import type { AnalysisBatchPlatform } from "@domain-analysis/shared";
+import type { AnalysisBatchPlatform, MediaPolicy } from "@domain-analysis/shared";
 import { createAnalysisRunService, deriveBatchStatus, refreshBatchFromRuns } from "./analysisRunService";
 import { logBusinessInfo, type ServiceLoggingOptions } from "./businessLogger";
 
@@ -29,6 +29,7 @@ export function createAnalysisBatchService(db: AppDb, options: ServiceLoggingOpt
       excludeKeywords: string[];
       language: string;
       market: string;
+      mediaPolicy?: MediaPolicy;
       platformLimits: Array<{ platform: AnalysisBatchPlatform; limit: number }>;
     }) {
       let projectId = input.projectId;
@@ -67,6 +68,7 @@ export function createAnalysisBatchService(db: AppDb, options: ServiceLoggingOpt
           excludeKeywords: input.excludeKeywords,
           language: input.language,
           market: input.market,
+          mediaPolicy: input.mediaPolicy ?? "metadata_only",
           limit: platformLimit.limit,
           runTrigger: "manual"
         });

@@ -67,6 +67,9 @@ export interface CreateRawContentInput {
   rawJson?: Record<string, unknown>;
 }
 
+export type MediaDownloadStatus = "pending" | "processing" | "ready" | "failed" | "skipped";
+export type MediaAssetFormat = "jpeg" | "png";
+
 const defaultSources: CreateSourceInput[] = [
   { platform: "reddit", name: "Reddit", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 100 },
   { platform: "x", name: "X / Twitter", requiresLogin: false, crawlerType: "cheerio", defaultLimit: 25 },
@@ -276,6 +279,15 @@ export function createRawContentRepository(db: AppDb) {
       return rows.map(mapRawContent);
     },
 
+    async listByRun(runId: string) {
+      const rows = await db
+        .select()
+        .from(rawContents)
+        .where(eq(rawContents.analysisRunId, runId))
+        .orderBy(desc(rawContents.capturedAt));
+      return rows.map(mapRawContent);
+    },
+
     async listPage(input: PageInput) {
       const [countRow] = await db.select({ total: count() }).from(rawContents);
       const total = countRow?.total ?? 0;
@@ -310,6 +322,60 @@ export function createRawContentRepository(db: AppDb) {
         .limit(input.pageSize)
         .offset(toOffset(input));
       return { items: rows.map(mapRawContent), page: createPageMeta(input, total) };
+    },
+
+    async updateRawJson(id: string, rawJson: Record<string, unknown>) {
+      const [row] = await db
+        .update(rawContents)
+        .set({ rawJson })
+        .where(eq(rawContents.id, id))
+        .returning();
+      return row ? mapRawContent(row) : null;
+    },
+
+    async updateMediaDownloadState(
+      id: string,
+      state: {
+        status: MediaDownloadStatus;
+        assets?: Array<{
+          originalUrl: string;
+          thumbnailUrl: string;
+          thumbnailPath: string;
+          width: number;
+          height: number;
+          format: MediaAssetFormat;
+        }>;
+        errorMessage?: string;
+      }
+    ) {
+      const [row] = await db.select().from(rawContents).where(eq(rawContents.id, id));
+      if (!row) return null;
+      const existingRawJson = (row.rawJson as Record<string, unknown> | null) ?? {};
+      const existingMedia = (
+        typeof existingRawJson.media === "object" && existingRawJson.media !== null
+          ? existingRawJson.media as Record<string, unknown>
+          : {}
+      );
+
+      const media = {
+        ...existingMedia,
+        status: state.status,
+        assets: state.assets ?? existingMedia.assets ?? [],
+        errorMessage: state.errorMessage ?? null,
+        updatedAt: new Date().toISOString()
+      };
+
+      const [updated] = await db
+        .update(rawContents)
+        .set({
+          rawJson: {
+            ...existingRawJson,
+            media
+          }
+        })
+        .where(eq(rawContents.id, id))
+        .returning();
+      return updated ? mapRawContent(updated) : null;
     }
   };
 }

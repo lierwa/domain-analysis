@@ -209,9 +209,11 @@ export function createRedditBrowserAdapter(env: NodeJS.ProcessEnv = process.env)
 
 async function collectRedditDetails(items: CollectedRawContent[], env: NodeJS.ProcessEnv) {
   if (!items.length || env.REDDIT_DETAIL_COLLECTION === "off") return items;
-  const details = new Map<string, RedditDetail>();
+  const detailsByUrl = new Map<string, RedditDetail>();
+  const detailsByExternalId = new Map<string, RedditDetail>();
   const browser = createBrowserRuntimeConfig(env);
   const proxyUrl = getRedditProxyUrl(env);
+
   const crawler = new PlaywrightCrawler({
     maxConcurrency: 1,
     maxRequestsPerCrawl: items.length,
@@ -225,15 +227,57 @@ async function collectRedditDetails(items: CollectedRawContent[], env: NodeJS.Pr
     },
     ...(proxyUrl ? { proxyConfiguration: new ProxyConfiguration({ proxyUrls: [proxyUrl] }) } : {}),
     requestHandler: async ({ page, request }) => {
-      details.set(request.url, await readRedditDetail(page).catch(toFailedDetail));
+      const detail = sanitizeRedditDetail(await readRedditDetail(page).catch(toFailedDetail));
+      setRedditDetailMaps(detailsByUrl, detailsByExternalId, request.url, detail);
+      setRedditDetailMaps(detailsByUrl, detailsByExternalId, page.url(), detail);
     },
     failedRequestHandler: async ({ request }, error) => {
-      details.set(request.url, { fetchStatus: "failed", error: error.message });
+      setRedditDetailMaps(detailsByUrl, detailsByExternalId, request.url, {
+        fetchStatus: "failed",
+        error: error.message
+      });
     }
   });
 
   await crawler.run(items.map((item) => item.url));
-  return items.map((item) => mergeRedditDetailIntoContent(item, details.get(item.url)));
+
+  const missingItems = items.filter((item) => !resolveRedditDetail(item, detailsByUrl, detailsByExternalId));
+  if (missingItems.length > 0) {
+    // WHY: 详情页在重定向/短暂导航抖动下，request.url 与内容 URL 可能不完全一致；对缺失项做一次补抓，
+    // 能明显降低 detail_not_collected 的噪音。
+    // TRADE-OFF: 缺失项会增加一次低频请求，但只针对漏抓条目，成本可控。
+    const retryCrawler = new PlaywrightCrawler({
+      maxConcurrency: 1,
+      maxRequestsPerCrawl: missingItems.length,
+      maxRequestsPerMinute: Number(env.REDDIT_DETAIL_RETRY_MAX_REQUESTS_PER_MINUTE ?? 2),
+      sameDomainDelaySecs: Number(env.REDDIT_DETAIL_SAME_DOMAIN_DELAY_SECS ?? 10),
+      requestHandlerTimeoutSecs: 90,
+      launchContext: {
+        useChrome: true,
+        userDataDir: browser.userDataDir,
+        launchOptions: { headless: browser.mode === "headless" }
+      },
+      ...(proxyUrl ? { proxyConfiguration: new ProxyConfiguration({ proxyUrls: [proxyUrl] }) } : {}),
+      requestHandler: async ({ page, request }) => {
+        const detail = sanitizeRedditDetail(await readRedditDetail(page).catch(toFailedDetail));
+        setRedditDetailMaps(detailsByUrl, detailsByExternalId, request.url, detail);
+        setRedditDetailMaps(detailsByUrl, detailsByExternalId, page.url(), detail);
+      },
+      failedRequestHandler: async ({ request }, error) => {
+        setRedditDetailMaps(detailsByUrl, detailsByExternalId, request.url, {
+          fetchStatus: "failed",
+          error: error.message
+        });
+      }
+    });
+
+    await retryCrawler.run(missingItems.map((item) => item.url));
+  }
+
+  return items.map((item) => mergeRedditDetailIntoContent(
+    item,
+    resolveRedditDetail(item, detailsByUrl, detailsByExternalId)
+  ));
 }
 
 function buildBrowserSearchUrls(includeKeywords: string[], excludeKeywords: string[], limitPerRun: number) {
@@ -379,24 +423,26 @@ export function normalizeRedditBrowserRows(
 
 export function mergeRedditDetailIntoContent(item: CollectedRawContent, detail?: RedditDetail): CollectedRawContent {
   if (!detail) return withDetail(item, { fetchStatus: "failed", error: "detail_not_collected" });
-  if (detail.fetchStatus === "failed") return withDetail(item, detail);
+  const normalizedDetail = sanitizeRedditDetail(detail);
+  if (normalizedDetail.fetchStatus === "failed") return withDetail(item, normalizedDetail);
   return {
     ...item,
-    text: mergeText(item.text, [detail.title, detail.body].filter(Boolean).join("\n\n")),
-    mediaUrls: detail.mediaUrls ?? item.mediaUrls,
+    text: mergeText(item.text, [normalizedDetail.title, normalizedDetail.body].filter(Boolean).join("\n\n")),
+    mediaUrls: normalizedDetail.mediaUrls ?? item.mediaUrls,
     rawJson: {
       ...(item.rawJson ?? {}),
-      detail
+      detail: normalizedDetail
     }
   };
 }
 
 function withDetail(item: CollectedRawContent, detail: RedditDetail): CollectedRawContent {
+  const normalizedDetail = sanitizeRedditDetail(detail);
   return {
     ...item,
     rawJson: {
       ...(item.rawJson ?? {}),
-      detail
+      detail: normalizedDetail
     }
   };
 }
@@ -443,6 +489,78 @@ function parseCompactNumber(value: string | undefined) {
   if (Number.isNaN(base)) return 0;
   const multiplier = match[2] === "k" ? 1000 : match[2] === "m" ? 1000000 : 1;
   return Math.round(base * multiplier);
+}
+
+function resolveRedditDetail(
+  item: CollectedRawContent,
+  detailsByUrl: Map<string, RedditDetail>,
+  detailsByExternalId: Map<string, RedditDetail>
+) {
+  const byUrl = detailsByUrl.get(normalizeRedditDetailKey(item.url));
+  if (byUrl) return byUrl;
+  if (!item.externalId) return undefined;
+  return detailsByExternalId.get(item.externalId.replace(/^t3_/, ""));
+}
+
+function setRedditDetailMaps(
+  detailsByUrl: Map<string, RedditDetail>,
+  detailsByExternalId: Map<string, RedditDetail>,
+  url: string,
+  detail: RedditDetail
+) {
+  const key = normalizeRedditDetailKey(url);
+  if (key) detailsByUrl.set(key, detail);
+  const externalId = extractRedditExternalIdFromUrl(url);
+  if (externalId) detailsByExternalId.set(externalId, detail);
+}
+
+function normalizeRedditDetailKey(url: string) {
+  if (!url) return "";
+  try {
+    const normalized = new URL(url, "https://www.reddit.com");
+    normalized.hash = "";
+    normalized.search = "";
+    normalized.pathname = normalized.pathname.replace(/\/+$/, "");
+    return normalized.toString();
+  } catch {
+    return url.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  }
+}
+
+function extractRedditExternalIdFromUrl(url: string) {
+  const normalized = normalizeRedditUrl(url);
+  if (!normalized) return undefined;
+  return normalized.split("/comments/").at(1)?.split("/")[0]?.replace(/^t3_/, "");
+}
+
+function sanitizeRedditDetail(detail: RedditDetail): RedditDetail {
+  if (detail.fetchStatus === "failed") return detail;
+  const topComments = (detail.topComments ?? [])
+    .map((comment) => ({
+      ...comment,
+      text: sanitizeRedditCommentText(comment.text)
+    }))
+    .filter((comment) => comment.text);
+  return {
+    ...detail,
+    title: sanitizeRedditText(detail.title ?? ""),
+    body: sanitizeRedditText(detail.body ?? ""),
+    mediaUrls: detail.mediaUrls ? Array.from(new Set(detail.mediaUrls.filter((url) => /^https?:\/\//.test(url)))) : [],
+    topComments
+  };
+}
+
+function sanitizeRedditCommentText(value: string) {
+  return sanitizeRedditText(value)
+    .replace(/\s+\d+\s*$/, "")
+    .trim();
+}
+
+function sanitizeRedditText(value: string) {
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/SML\.load\([^)]*\);?/gi, "")
+    .trim();
 }
 
 function getRedditProxyUrl(env: NodeJS.ProcessEnv) {

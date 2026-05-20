@@ -12,6 +12,7 @@ const baseRun: AnalysisRun = {
   includeKeywords: ["tattoo design"],
   excludeKeywords: [],
   platform: "x",
+  mediaPolicy: "metadata_only",
   limit: 200,
   collectedCount: 0,
   validCount: 0,

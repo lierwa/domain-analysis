@@ -109,6 +109,7 @@ describe("analysis run collection policy", () => {
         platform: "reddit",
         includeKeywords: ["ChatGPT"],
         excludeKeywords: [],
+        mediaPolicy: "download_images",
         language: "en",
         market: "US",
         limit: 10
@@ -122,7 +123,13 @@ describe("analysis run collection policy", () => {
         expect.arrayContaining([
           expect.objectContaining({
             message: "analysis.run.created",
-            payload: expect.objectContaining({ runId: run.id, platform: "reddit", status: "draft", targetCount: 10 })
+            payload: expect.objectContaining({
+              runId: run.id,
+              platform: "reddit",
+              mediaPolicy: "download_images",
+              status: "draft",
+              targetCount: 10
+            })
           }),
           expect.objectContaining({
             message: "report.generated",
@@ -130,6 +137,29 @@ describe("analysis run collection policy", () => {
           })
         ])
       );
+    } finally {
+      await cleanupDatabaseTempDir(tempDir);
+    }
+  });
+
+  it("defaults run media policy to metadata only", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "domain-analysis-run-service-"));
+    const databaseUrl = `file:${join(tempDir, "test.sqlite")}`;
+    await initializeDatabase(databaseUrl);
+    const db = createDb(databaseUrl);
+
+    try {
+      const service = createAnalysisRunService(db);
+      const run = await service.createRun({
+        goal: "Inspect perfumes",
+        platform: "reddit",
+        includeKeywords: ["perfume"],
+        excludeKeywords: [],
+        language: "en",
+        market: "US",
+        limit: 5
+      });
+      expect(run.mediaPolicy).toBe("metadata_only");
     } finally {
       await cleanupDatabaseTempDir(tempDir);
     }

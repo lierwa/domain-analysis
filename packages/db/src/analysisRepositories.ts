@@ -1,6 +1,7 @@
 import { count, desc, eq } from "drizzle-orm";
 import type {
   AnalysisBatchStatus,
+  MediaPolicy,
   AnalysisReportType,
   AnalysisRunStatus,
   Platform,
@@ -47,6 +48,7 @@ export interface CreateAnalysisRunInput {
   excludeKeywords: string[];
   language: string;
   market: string;
+  mediaPolicy?: MediaPolicy;
   limit: number;
 }
 
@@ -220,6 +222,7 @@ export function createAnalysisRunRepository(db: AppDb) {
           includeKeywords: input.includeKeywords,
           excludeKeywords: input.excludeKeywords,
           platform: input.platform ?? "web",
+          mediaPolicy: input.mediaPolicy ?? "metadata_only",
           limit: input.limit,
           collectedCount: 0,
           validCount: 0,
@@ -434,6 +437,7 @@ function mapRun(row: AnalysisRunRow) {
     includeKeywords: (row.includeKeywords as string[]) ?? [],
     excludeKeywords: (row.excludeKeywords as string[]) ?? [],
     platform: row.platform as Platform,
+    mediaPolicy: row.mediaPolicy as MediaPolicy,
     limit: row.limit,
     collectedCount: row.collectedCount,
     validCount: row.validCount,

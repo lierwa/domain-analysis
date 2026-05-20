@@ -26,8 +26,9 @@ const crawleeMock = vi.hoisted(() => {
   const crawlerOptions: any[] = [];
   const runUrls: string[][] = [];
   let bodyText = "reddit search results";
+  let requestUrlMutator: ((url: string, options: any) => string) | null = null;
 
-  function createPage(index = 0) {
+  function createPage(index = 0, currentUrl = "https://www.reddit.com") {
     const rows = browserRows.map((row) => ({
       ...row,
       id: index === 0 ? row.id : `${row.id}_${index}`,
@@ -49,7 +50,8 @@ const crawleeMock = vi.hoisted(() => {
       }),
       locator: vi.fn(() => ({
         innerText: vi.fn(async () => bodyText)
-      }))
+      })),
+      url: vi.fn(() => currentUrl)
     };
   }
 
@@ -66,8 +68,8 @@ const crawleeMock = vi.hoisted(() => {
           runUrls.push(urls);
           for (const [index, url] of urls.entries()) {
             await options.requestHandler({
-              page: createPage(index),
-              request: { url, errorMessages: [] },
+              page: createPage(index, url),
+              request: { url: requestUrlMutator ? requestUrlMutator(url, options) : url, errorMessages: [] },
               response: { status: () => 200 }
             });
           }
@@ -78,10 +80,14 @@ const crawleeMock = vi.hoisted(() => {
     setBodyText(value: string) {
       bodyText = value;
     },
+    setRequestUrlMutator(mutator: ((url: string, options: any) => string) | null) {
+      requestUrlMutator = mutator;
+    },
     reset() {
       crawlerOptions.length = 0;
       runUrls.length = 0;
       bodyText = "reddit search results";
+      requestUrlMutator = null;
       this.PlaywrightCrawler.mockClear();
       this.ProxyConfiguration.mockClear();
       this.infiniteScroll.mockClear();
@@ -302,6 +308,30 @@ describe("mergeRedditDetailIntoContent", () => {
       }
     });
   });
+
+  it("cleans noisy Reddit comment payload text before persisting detail comments", () => {
+    const [item] = normalizeRedditBrowserRows([
+      {
+        id: "post_1",
+        title: "Tattoo placement advice",
+        href: "/r/tattoo/comments/post_1/tattoo_placement_advice/"
+      }
+    ], [], 10);
+
+    const merged = mergeRedditDetailIntoContent(item!, {
+      fetchStatus: "success",
+      topComments: [
+        {
+          author: "helper",
+          text: "helper • 9h ago Works well. SML.load([\"A\"], 'en-US/', 'auto'); 5",
+          score: 5
+        }
+      ]
+    });
+
+    const comments = (merged.rawJson as { detail?: { topComments?: Array<{ text: string }> } })?.detail?.topComments ?? [];
+    expect(comments[0]?.text).toBe("helper • 9h ago Works well.");
+  });
 });
 
 describe("createRedditPublicJsonAdapter", () => {
@@ -330,5 +360,23 @@ describe("createRedditPublicJsonAdapter", () => {
     const adapter = createRedditPublicJsonAdapter({ https_proxy: "http://127.0.0.1:7890" });
 
     await expect(adapter.collect(query)).rejects.toThrow("reddit_public_rate_limited_403");
+  });
+});
+
+describe("createRedditAdapter detail matching", () => {
+  it("matches detail payload even when crawler request URL and normalized item URL differ by trailing slash", async () => {
+    crawleeMock.setRequestUrlMutator((url, options) => {
+      if (options.maxRequestsPerMinute === 3) return url.endsWith("/") ? url.slice(0, -1) : url;
+      return url;
+    });
+    const adapter = createRedditAdapter({});
+
+    const result = await adapter.collect({ ...query, limitPerRun: 1 });
+    const item = (Array.isArray(result) ? result : result.items)[0];
+    const detail = item?.rawJson && typeof item.rawJson === "object"
+      ? (item.rawJson as { detail?: { fetchStatus?: string } }).detail
+      : undefined;
+
+    expect(detail?.fetchStatus).toBe("success");
   });
 });
