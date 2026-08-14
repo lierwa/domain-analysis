@@ -3,21 +3,21 @@
 这是当前阶段、已验证事实、阻塞项和下一步的单一权威来源。
 
 更新日期：2026-08-14
-当前阶段：阶段 1——四项可行性验证（1A 已通过，1B 首轮加工链已通过）
-总体状态：阶段 0、1A 已完成；1B 已真实打通规则抽取、PDF/XLSX/单位处理和本地 Codex 图片＋文本候选，身份隔离、冲突 fixture 与人工发布门仍待完成；尚未开始业务代码重构
+当前阶段：阶段 2——项目与可恢复流水线骨架（typed contract 与新产品库 migration 已完成，进入 Product Module）
+总体状态：阶段 0、1A～1D 全部完成；DBOS、数据库边界、Product/Pipeline contract 和 4 表新产品库已通过；下一步实现草稿保存/确认的深 Product Module
 
 ## 1. 当前 Git 与环境基线
 
 - 仓库：`/Users/guojunxi/Desktop/work/domain-analysis`
 - 分支：`master`
-- 本轮文档修改前 HEAD：`91ec1fb23999e68512cc69ee381056018c88a033`
-- 本轮文档修改前上游显示：`master...origin/master`
+- 本轮修改前 HEAD：`787597e84ed3fee74ff3e3bc90a0e3c6fb0bde03`
+- 本轮修改前本地/上游一致：`HEAD == origin/master`，ahead/behind `0 0`
 - Node：`v21.7.3`
 - npm：`10.5.0`
 - `node_modules`：已通过锁文件恢复；本轮新增并精确锁定官方 `@openai/codex-sdk@0.147.0`
 - CodeGraph：已初始化；59 个文件、527 个节点，`codegraph status` 显示索引为最新
 
-这些信息是 2026-08-13 的本地核对结果。新上下文必须重新验证，不能永久当作当前事实。
+Git 信息是 2026-08-14 本地核对结果；Node/npm 基线来自 2026-08-13。新上下文必须重新验证，不能永久当作当前事实。
 
 ## 2. 已确认的产品与工程决定
 
@@ -30,7 +30,7 @@
 - 每个非平凡任务必须对应路线图阶段和最终架构目标；局部问题不能脱离架构直接堆补丁。
 - 每次开发结束必须更新本文件并记录架构影响；模块职责、事实源、依赖方向或公共 contract 变化时同步更新 `ARCHITECTURE.md`，没有变化时明确记录而不制造文档噪音。
 - 跨电脑接续只以已提交并推送的 Git 内容为准；聊天、模型记忆和本机未跟踪文件不算共同事实源。
-- 当前阶段不授权全面业务代码重构。
+- 当前阶段只授权阶段 2 的隔离 migration、正式 contract 和最小骨架收敛，不授权无关全面重构。
 - 通用能力一律先采用最合适的成熟开源库或官方实现；调研后确无合适方案时必须停下并请用户决定，未经确认不得自行实现替代品。
 - 项目自身实现仅限产品特有领域规则、成熟组件的薄 adapter 和已验证组件的流程组装；“MVP 简化版”不能作为自研通用能力的理由。
 - MVP 直接复用用户本机已安装并登录的 Codex CLI 完成知识加工，不接通用模型 API，也不要求本地推理服务。
@@ -86,7 +86,7 @@
 - Knowledge Factory 通过 `CodexExecutionPort` 使用薄 `CodexSdkAdapter`；官方 SDK 在内部驱动 Codex CLI，SDK/CLI 类型不泄漏到领域 module；
 - 现有工程底盘保留，旧 Social Intelligence 产品核心重构或淘汰。
 
-技术组件仍为候选，见 `RESEARCH.md`。不得把 Restate、Temporal、SQLite FTS5、DuckDB、Orama 或 Crawlee 的候选状态描述为已选定。
+SQLite＋FTS5 单文件知识包已按 ADR-0006 接受，京东 adapter 已按 ADR-0004 接受 Crawlee＋Patchright，正式编排器已按 ADR-0007 接受 DBOS。DuckDB、Orama、Temporal、Restate、向量数据库和 Great Expectations 不进入 MVP 当前依赖。
 
 ## 5. 决策记录与待人工事项
 
@@ -134,12 +134,12 @@ R-010/R-011 已完成产品口径调查和隔离验证：覆盖总体拆成合�
 
 ## 6. 下一步唯一执行顺序
 
-1. 在 R-014 接入 I05/I06 已脱敏京东投影，验证不同主体隔离和下架/缺资料状态；用受控 fixture 验证真实样本当前没有的冲突分支。
-2. 为候选增加审核接受/拒绝记录和发布失败关闭门，完成 1B；隔离脚本在阶段门前不升级成生产加工框架。
-3. 1B 通过后按 `ROADMAP.md` 依次执行 1C、1D；淘宝继续登记为后续新 Provider，当前不插入核心可行性链路，也不复制京东页面规则。
-4. 只有阶段 1 仍证明必要时才按 R-004 方案执行隔离 migration 原型，不升级依赖、不修改真实数据库、不先删除手写 DDL。
+1. 实现深 Product Module：调用者提交完整草稿，module 内部用 RFC 8785 开源实现生成哈希、分配版本并原子保存/确认；不暴露四张表的 CRUD。
+2. 把新产品库 migration 接入新的 Workbench 启动链；默认新文件路径，旧库保持不动，旧 `initializeDatabase()` 不再扩展。
+3. 实现薄 DBOS Pipeline adapter，用冻结输入身份作为 workflowID；不复制步骤历史、不自行实现队列/信号/恢复。
+4. 用不可变资料提交跑通最小连续运行并真实终止恢复；随后才接 Workbench 页面。淘宝仍不插入阶段 2 核心链路。
 
-R-007 依赖治理已从当前执行顺序移出，未来必须作为独立、可回退的工作处理。不得跳过阶段 1A～1D 直接全面重构数据库、UI 或 worker。下一次需要用户介入的正常节点是专用 Profile 登录失效、出现验证码或发布许可需要拍板，不再追加产品访谈问题。
+R-007 依赖治理已从当前执行顺序移出，未来必须作为独立、可回退的工作处理。阶段 2 按上述顺序连续推进，不以汇报、提交或推送作为停工点。下一次需要用户介入的正常节点是专用 Profile 登录失效、出现验证码、权限审批或会改变产品方向的决定，不再追加产品访谈问题。
 
 ## 7. 验证记录
 
@@ -327,6 +327,52 @@ R-007 依赖治理已从当前执行顺序移出，未来必须作为独立、�
 - R-014 Node 测试 6/6 通过，最终候选产物独立 SHA-256 复核一致；隔离生产依赖审计为 0。业务代码、根生产依赖、真实数据库和浏览器 Profile 均未修改。
 - 根 `npm test` 首次把 `docs/development/pocs/**` 的 Node 原生测试误交给 Vitest；按 Vitest 官方 `--exclude` 参数明确测试边界后，根业务测试 12 个文件、52 项全部通过，R-001/R-014 仍由各自 `node --test` 独立通过。根类型检查和生产构建同时通过。
 - 本轮服务阶段 1B 与 Knowledge Factory 证据化候选目标；架构影响：无变化。现有 Raw Material 白名单边界、确定性规则优先、Codex 只产待审核候选和人工发布门得到实证，尚无理由修改总体模块职责。
+- I05/I06 真实脱敏投影补入确定性抽取后，分别归到独立的美的/海尔型号；S06 的 `discontinued` 和 description 缺失被保留。Codex 输入使用显式主型号字段白名单，两个其他主体没有进入模型上下文。
+- 受控双值 fixture 生成 `X001` 待审核冲突；真实样本继续为 0 冲突。审核 Zod contract 同时约束 claim 接受/拒绝、冲突解决和 unknown 确认，真实候选无审核记录时发布门实测失败。
+- 新版真实 Codex thread `019fffe0-50c0-7772-a102-e5b780d806d6` 生成 10 条 claim 和 3 条 unknown，稳定 ID、证据白名单、输入哈希和 SDK 告警均入库；R-014 测试 11/11 通过。
+- 阶段 1B 通过；架构影响：澄清但无模块变化。模型输出仍只能到 `review_required`，发布权属于人工审核 contract。下一步已进入 1C，不等待额外人工确认。
+
+### 2026-08-14 R-015 知识包与离线查询对照
+
+- 先查 SQLite/FTS5、DuckDB FTS/extension、DuckDB Node Neo、Orama Mandarin/持久化官方资料；DuckDB FTS 因首次扩展下载不满足离线门，未自研扩展分发器。
+- SQLite＋FTS5 与 DuckDB＋Orama 均通过 9 项冻结查询、跨目录复制、只读写入失败、哈希校验、原子切换和回滚；查询期间不调用网络、模型或 embedding。
+- Orama 官方持久化插件 3.1.18 恢复后实测丢失 Mandarin tokenizer；改用 Orama 核心官方 `save/load` 后通过，没有编写兼容层。该候选仍因双产物一致性成本被拒绝。
+- 1000 商品/2000 claim 放大 fixture 中，SQLite 为 1.77 MB、构建 2675.27 ms、查询 4.85 ms；DuckDB＋Orama 为 4.60 MB、构建 1740.56 ms、查询 25.29 ms。两边全文结果统一限制 10 条，避免口径偏差。
+- 接受 ADR-0006：MVP 知识包为 SQLite＋FTS5 单文件，Runtime 只读、哈希校验、原子指针激活和保留旧包回滚；不引入 DuckDB、Orama、向量数据库或 Great Expectations。
+- R-015 测试 3/3 通过，隔离依赖审计 0 漏洞；对照产物 SHA-256 为 `e75d490266d4a0671661f79e8df37eb133fdc3d6c515d2b243109d7748a890cf`。
+- 阶段 1C 通过；架构影响：改变。`ARCHITECTURE.md` 已把知识包物理存储从候选更新为 SQLite＋FTS5；下一步已直接进入 1D 第二品类迁移。
+
+### 2026-08-14 R-016 第二品类零分支迁移
+
+- TCL 65T7G 官方页通过同一 R-001 公共网页 Provider 采集：HTTP 200、`loaded`、公开快照；只增加 S07 来源数据，采集实现未改。
+- 官方页覆盖身份、144Hz、1000 nit、96% DCI-P3、分区控光、画质机制、游戏接口和场景；正文把一处型号写成 T7E，该异常保留为 `unknown`，未静默纠正。
+- 电视定义通过 LinkML 1.11.1；R-016 测试 2/2 通过，同一 R-015 Schema/SQLite Runtime 完成型号、中文全文、144Hz、五层知识、证据和 unknown 查询。
+- 阶段 1 全回归：R-001 4/4、R-014 11/11、R-015 3/3、R-016 2/2；根测试 12 文件/52 项、typecheck、build 均通过。
+- 阶段 1D 通过，四项可行性验证全部完成；架构影响：澄清。品类中立边界由候选变为实证，没有新增电视模块、表列、Runtime 方法或流程分支。
+
+### 2026-08-14 R-017 可恢复编排器对照
+
+- 先比较 Temporal、DBOS、Hatchet、Restate、Inngest、Trigger.dev、Kestra 与现有队列；Restate/Inngest 因许可证拒绝，Hatchet/Trigger.dev/Kestra 因额外平台部件拒绝，未自研工作流能力。
+- Temporal 1.22.0 在 Worker 与服务均终止后，从 CLI SQLite 文件恢复等待状态；`collect` 和 `package` 各执行一次。其本轮依赖约 170 MB、CLI 约 128 MB，且单文件 `start-dev` 不是生产入口。
+- DBOS 4.25.14 在首进程 `SIGKILL` 后从 PostgreSQL 恢复；同 ID 幂等、三次步骤重试、取消、恢复和消息幂等均通过，2/2 测试通过；本轮 `@dbos-inc` scope 约 2.2 MB。
+- 接受 ADR-0007：Pipeline adapter 使用 DBOS，系统库为 PostgreSQL；不扩展 `p-queue`，不自研队列/事件日志/重放/信号。临时 PostgreSQL 已停止。
+- 架构影响：改变。`ARCHITECTURE.md` 新增 DBOS 执行历史边界；Workbench 业务库处置仍由 R-004 决定，未授权双写或数据库迁移。下一步已直接进入 R-004。
+
+### 2026-08-14 R-018 Drizzle migration 与业务库边界
+
+- 根旧 Kit 因 npm workspace 提升问题找不到 db workspace ORM；相同锁定版本隔离共址后成功生成，未误判为 Schema 错误。
+- 旧 ORM 命中 GHSA-gpj5-g38j-94v9 high。隔离升级到 ORM 0.45.2、Kit 0.31.7、libSQL 0.17.4 后同一 snapshot 无变化，migration contract 3/3 通过。
+- 空库重复 migration 只记录一次；9 表/9 索引/外键/默认值与 `schema.ts` 一致；失败 SQL 整批回滚。旧手写 DDL 库明确失败，未自研 baseline/repair。
+- 根依赖完成同版本最小升级；根 generate、12 文件/52 测试、五 workspace typecheck、build 全通过。生产 audit 仍有历史 23 项，但 Drizzle 公告已消失；未运行自动修复。
+- 接受 ADR-0008：Workbench 业务库保留 SQLite，新产品使用新文件和正式 migration；DBOS PostgreSQL 只保存执行历史，禁止跨库双写。架构影响：改变。下一步直接进入 Product/Pipeline typed contract。
+
+### 2026-08-14 阶段 2 typed contract 与新产品库
+
+- 按 `codebase-design` 把 Product 冻结输入收敛为项目、品类定义版本、确认范围版本和搜集板版本；跨对象引用、市场、来源策略、已纳入目标和确认时间由一个共享 Zod contract 校验。
+- Pipeline module 对调用者只暴露 `start / command / get`；生命周期、当前阶段、阶段执行和人工事项分离，DBOS workflow/step/message 类型未泄漏。
+- 新产品库只建 4 张业务表，版本内容保存在严格 contract 下的 JSON 列；没有 Pipeline/TaskAttempt 复制表。Drizzle 正式 migration 已生成到 `drizzle/product-knowledge/`，默认新文件 `data/product-knowledge-workbench.sqlite`。
+- 新增 contract/migration 测试 10/10；`npm ci` 从锁文件干净恢复成功。根全量现为 15 文件/62 测试，五 workspace typecheck 和 build 全通过。
+- 架构影响：澄清。`codebase-design` 使 SQLite 作为 module 内部本地依赖直接用临时库测试，没有新增假想 DatabasePort；下一步进入 Product Module，不等待额外确认。
 
 ## 8. 结束上下文更新模板
 

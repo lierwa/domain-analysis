@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { assertKnownEvidenceReferences, buildCodexJsonSchema } from "./candidate-schema.mjs";
-import { assertNoBlockingErrorItems } from "./run-codex-candidates.mjs";
+import { assertNoBlockingErrorItems, buildPrimaryCandidateInput } from "./run-codex-candidates.mjs";
 
 const reference = { sourceObjectId: "source-1", snapshotSha256: "a".repeat(64), locator: "page:1" };
 const baseOutput = {
@@ -34,4 +34,22 @@ test("Codex 本轮含未知错误条目时拒收", () => {
 test("Codex 旧 connectors 配置警告只记录不阻断", () => {
   const message = "`[features].connectors` is deprecated. Use `[features].apps` instead.";
   assert.deepEqual(assertNoBlockingErrorItems([{ type: "error", message }]), [message]);
+});
+
+test("Codex 输入只包含主型号证据，不携带其他京东主体", () => {
+  const source = {
+    schemaVersion: "v3",
+    modelKey: "MIDEA:MR-457WUSPZE",
+    variants: [],
+    evidence: [],
+    comparison: {},
+    marketplaceSubjects: [{ modelKey: "HAIER:BCD-505WGHTD14S8U1" }],
+  };
+  assert.deepEqual(buildPrimaryCandidateInput(source), {
+    schemaVersion: "v3",
+    modelKey: "MIDEA:MR-457WUSPZE",
+    variants: [],
+    evidence: [],
+    comparison: {},
+  });
 });

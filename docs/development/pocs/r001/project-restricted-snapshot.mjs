@@ -6,6 +6,7 @@ import * as cheerio from "cheerio";
 import { z } from "zod";
 
 import { sha256, writeImmutableJson } from "../lib/poc-artifact.mjs";
+import { createProductProjectionSchema } from "../lib/product-projection-schema.mjs";
 
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const sourceMetadataSchema = z
@@ -31,24 +32,7 @@ const sourceMetadataSchema = z
   })
   .strict();
 
-const factSchema = z.object({ value: z.string().min(1), selector: z.string().min(1) }).strict();
-const namedFactSchema = factSchema.extend({ name: z.string().min(1) }).strict();
-const projectionSchema = z
-  .object({
-    schemaVersion: z.literal("r001-product-projection-v1"),
-    privacyClass: z.literal("sanitized"),
-    source: z.literal("jd"),
-    sampleId: z.string().min(1),
-    state: z.enum(["loaded", "discontinued"]),
-    sourceUrl: z.string().url(),
-    capturedAt: z.string().datetime(),
-    sourceSnapshot: z.object({ htmlSha256: hashSchema, screenshotSha256: hashSchema }).strict(),
-    title: factSchema,
-    description: factSchema.optional(),
-    highlights: z.array(namedFactSchema),
-    attributes: z.array(namedFactSchema).min(1),
-  })
-  .strict();
+const projectionSchema = createProductProjectionSchema(z);
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main();

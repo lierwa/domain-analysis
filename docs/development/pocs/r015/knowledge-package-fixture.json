@@ -1,0 +1,98 @@
+{
+  "schemaVersion": "r015-controlled-knowledge-package-v1",
+  "fixture": true,
+  "packageVersion": "controlled-cn-products-2026-08-14.1",
+  "products": [
+    {
+      "productId": "product:midea:mr-457wuspze",
+      "categoryCode": "refrigerator",
+      "manufacturer": "美的",
+      "model": "MR-457WUSPZE",
+      "aliases": ["美的436L十字门冰箱", "MR457"]
+    },
+    {
+      "productId": "product:haier:bcd-505wghtd14s8u1",
+      "categoryCode": "refrigerator",
+      "manufacturer": "海尔",
+      "model": "BCD-505WGHTD14S8U1",
+      "aliases": ["海尔505L十字门冰箱"]
+    },
+    {
+      "productId": "product:tcl:65t7g",
+      "categoryCode": "television",
+      "manufacturer": "TCL",
+      "model": "65T7G",
+      "aliases": ["TCL 65英寸 Mini LED电视"]
+    }
+  ],
+  "claims": [
+    {
+      "claimId": "claim:midea:volume",
+      "productId": "product:midea:mr-457wuspze",
+      "propertyKey": "product.total_volume_l",
+      "numericValue": 436,
+      "unit": "L",
+      "textValue": "总容积436L",
+      "knowledgeLayer": "specification",
+      "state": "published",
+      "evidenceRefs": ["evidence:midea:official:volume"]
+    },
+    {
+      "claimId": "claim:midea:purification",
+      "productId": "product:midea:mr-457wuspze",
+      "propertyKey": "purification.pt_module",
+      "textValue": "PT净味抗菌模块用于吸附并分解异味",
+      "knowledgeLayer": "mechanism",
+      "state": "published",
+      "evidenceRefs": ["evidence:midea:manual:p10"]
+    },
+    {
+      "claimId": "claim:haier:volume",
+      "productId": "product:haier:bcd-505wghtd14s8u1",
+      "propertyKey": "product.total_volume_l",
+      "numericValue": 505,
+      "unit": "L",
+      "textValue": "总容积505L",
+      "knowledgeLayer": "specification",
+      "state": "published",
+      "evidenceRefs": ["evidence:haier:jd:volume"]
+    },
+    {
+      "claimId": "claim:haier:noise",
+      "productId": "product:haier:bcd-505wghtd14s8u1",
+      "propertyKey": "product.noise_db",
+      "textValue": "噪音值存在待解决差异",
+      "knowledgeLayer": "specification",
+      "state": "conflict",
+      "evidenceRefs": ["evidence:haier:jd:noise"]
+    },
+    {
+      "claimId": "claim:tcl:refresh-rate",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "television.refresh_rate_hz",
+      "numericValue": 144,
+      "unit": "Hz",
+      "textValue": "144Hz刷新率 Mini LED显示技术",
+      "knowledgeLayer": "specification",
+      "state": "published",
+      "evidenceRefs": ["evidence:tcl:official:refresh-rate"]
+    },
+    {
+      "claimId": "claim:tcl:hdmi-version",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "television.hdmi_version",
+      "textValue": "当前证据未确认HDMI版本",
+      "knowledgeLayer": "specification",
+      "state": "unknown",
+      "evidenceRefs": ["evidence:tcl:official:catalog"]
+    }
+  ],
+  "evidence": [
+    { "evidenceId": "evidence:midea:official:volume", "sourceKind": "brand_web", "locator": "fixture:midea:official:volume" },
+    { "evidenceId": "evidence:midea:manual:p10", "sourceKind": "brand_manual", "locator": "fixture:midea:manual:p10" },
+    { "evidenceId": "evidence:haier:jd:volume", "sourceKind": "marketplace_projection", "locator": "fixture:haier:jd:volume" },
+    { "evidenceId": "evidence:haier:jd:noise", "sourceKind": "marketplace_projection", "locator": "fixture:haier:jd:noise" },
+    { "evidenceId": "evidence:tcl:official:refresh-rate", "sourceKind": "brand_web", "locator": "fixture:tcl:official:refresh-rate" },
+    { "evidenceId": "evidence:tcl:official:catalog", "sourceKind": "brand_web", "locator": "fixture:tcl:official:catalog" }
+  ]
+}

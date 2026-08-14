@@ -9,8 +9,11 @@ import { extractText } from "unpdf";
 import { z } from "zod";
 
 import { sha256, writeImmutableJson } from "../lib/poc-artifact.mjs";
+import { createProductProjectionSchema } from "../lib/product-projection-schema.mjs";
 import { sampleInputs, unitHints } from "./sample-inputs.mjs";
 
+const primaryModelKey = "MIDEA:MR-457WUSPZE";
+const productProjectionSchema = createProductProjectionSchema(z);
 const normalizedValueSchema = z
   .object({ value: z.number(), unit: z.string().min(1) })
   .strict();
@@ -27,9 +30,9 @@ const evidenceSchema = z
   .strict();
 const outputSchema = z
   .object({
-    schemaVersion: z.literal("r014-deterministic-extraction-v2"),
+    schemaVersion: z.literal("r014-deterministic-extraction-v3"),
     createdAt: z.string().datetime(),
-    modelKey: z.literal("MIDEA:MR-457WUSPZE"),
+    modelKey: z.literal(primaryModelKey),
     variants: z.array(z.object({ sourceObjectId: z.string(), color: z.string(), fields: z.number() })),
     evidence: z.array(evidenceSchema).min(1),
     comparison: z.object({
@@ -38,6 +41,19 @@ const outputSchema = z
       onlyInFirst: z.array(z.string()),
       onlyInSecond: z.array(z.string()),
     }),
+    marketplaceSubjects: z.array(
+      z
+        .object({
+          sourceObjectId: z.string().min(1),
+          modelKey: z.string().min(1),
+          state: z.enum(["loaded", "discontinued"]),
+          sourceSnapshotSha256: z.string().regex(/^[a-f0-9]{64}$/),
+          attributeCount: z.number().int().positive(),
+          missingFields: z.array(z.literal("description")),
+          relationToPrimary: z.enum(["same_subject", "separate_subject"]),
+        })
+        .strict(),
+    ),
   })
   .strict();
 
@@ -47,13 +63,16 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
 async function main() {
   const variants = await Promise.all(sampleInputs.variants.map(extractVariant));
-  const manualEvidence = await extractManual(sampleInputs.manual);
-  const registryEvidence = await extractRegistry(sampleInputs.registry);
+  const [manualEvidence, registryEvidence, marketplaceSubjects] = await Promise.all([
+    extractManual(sampleInputs.manual),
+    extractRegistry(sampleInputs.registry),
+    Promise.all(sampleInputs.marketplace.map(extractMarketplaceSubject)),
+  ]);
   assertSameModel(variants, registryEvidence);
   const output = outputSchema.parse({
-    schemaVersion: "r014-deterministic-extraction-v2",
+    schemaVersion: "r014-deterministic-extraction-v3",
     createdAt: new Date().toISOString(),
-    modelKey: "MIDEA:MR-457WUSPZE",
+    modelKey: primaryModelKey,
     variants: variants.map(({ sourceObjectId, color, evidence }) => ({
       sourceObjectId,
       color,
@@ -61,6 +80,7 @@ async function main() {
     })),
     evidence: [...variants.flatMap(({ evidence }) => evidence), ...manualEvidence, registryEvidence],
     comparison: compareVariantFields(variants[0], variants[1]),
+    marketplaceSubjects,
   });
 
   const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -69,6 +89,28 @@ async function main() {
   await mkdir(outputRoot, { recursive: true });
   const artifact = await writeImmutableJson(path.join(outputRoot, "extraction.json"), output);
   console.log(JSON.stringify({ attemptId, evidence: output.evidence.length, artifact }, null, 2));
+}
+
+export async function extractMarketplaceSubject(input) {
+  const projection = productProjectionSchema.parse(JSON.parse(await readFile(input.path, "utf8")));
+  return summarizeMarketplaceProjection(input, projection);
+}
+
+export function summarizeMarketplaceProjection(input, projection) {
+  const brand = requiredAttribute(projection, "品牌");
+  const model = requiredAttribute(projection, "能效网规格型号");
+  if (!brand.includes(input.brand) || model !== input.model) {
+    throw new Error(`${input.id} 京东投影身份不匹配`);
+  }
+  return {
+    sourceObjectId: input.sourceObjectId,
+    modelKey: input.modelKey,
+    state: projection.state,
+    sourceSnapshotSha256: projection.sourceSnapshot.htmlSha256,
+    attributeCount: projection.attributes.length,
+    missingFields: projection.description ? [] : ["description"],
+    relationToPrimary: input.modelKey === primaryModelKey ? "same_subject" : "separate_subject",
+  };
 }
 
 export async function extractVariant(input) {
@@ -165,6 +207,12 @@ function assertSameModel(variants, registryEvidence) {
   if (models.some((model) => model !== "MR-457WUSPZE") || !registryEvidence.rawValue.includes("MR-457WUSPZE")) {
     throw new Error("官网变体与监管型号不能形成强键");
   }
+}
+
+function requiredAttribute(projection, name) {
+  const value = projection.attributes.find((attribute) => attribute.name === name)?.value;
+  if (!value) throw new Error(`${projection.sampleId} 缺少身份字段：${name}`);
+  return value;
 }
 
 function excerpt(text, term) {

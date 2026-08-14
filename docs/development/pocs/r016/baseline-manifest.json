@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "r016-category-neutral-baseline-v1",
+  "frozenBeforeTelevisionPackage": true,
+  "files": {
+    "../r001/capture-source.mjs": "bf728153dcb55225c264c2c2bc3abea426a67353a833ab23d99cd91de2a3644c",
+    "../r015/package-fixture.mjs": "5238a307acaa89ed74c23ea5c3523c13a5a66bab806d27603209a7552b78715d",
+    "../r015/sqlite-candidate.mjs": "99a8cde4e26effe23ac6e703e93aba70bd4215dfe9bcd60d9d006fb3c7f092d4",
+    "../r015/package-pointer.mjs": "966cc8b1929825e5c35017a501b63dd60fa63f24caf3afb6ce1af163f33f77d7"
+  }
+}

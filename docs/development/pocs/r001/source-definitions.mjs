@@ -27,6 +27,11 @@ export const sourceDefinitions = {
         url: "https://www.haier.com/cooling/20260104_284765.shtml",
         expectedText: "BCD-502WGHFDC9JWU1",
       },
+      {
+        id: "S07",
+        url: "https://www.tcl.com/cn/zh/tvs/65-inch-t7g",
+        expectedText: "65T7G",
+      },
     ],
   },
 };

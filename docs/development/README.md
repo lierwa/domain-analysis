@@ -80,7 +80,7 @@
 
 ## 7. 当前开发入口
 
-当前阶段和下一步以 `PROGRESS.md` 为准。固定 18 项产品问题已全部确认，R-010 市场总体 contract、R-011 质量 contract 和阶段 1A～1D 原型 contract 已完成。用户已由 ADR-0004 改为教育研究用途的京东网页采集路线；隔离的 Crawlee＋Patchright 已打通正常/下架商品页，ADR-0005 的 Cheerio 白名单投影＋Zod 严格门已产生不含整页原文和个性化容器的可加工资料。阶段 1A 继续验证恢复和代表性来源闭环。淘宝登记为京东闭环后的下一来源。阶段 1 四项原型全部通过前，禁止全面重构旧代码或把候选写入生产依赖。
+当前阶段和下一步以 `PROGRESS.md` 为准。固定 18 项产品问题已全部确认，阶段 1A～1D 全部通过。阶段 2 已接受 DBOS、Drizzle migration 和 SQLite/PostgreSQL 分工；Product/Pipeline typed contract、4 表新产品库和首份 migration 已通过 62 项根测试。当前直接实现 Product Module，淘宝仍登记为京东闭环后的下一来源。隔离 POC 依赖不得未经阶段收敛直接写入生产依赖。
 
 ## 8. 历史文档处置
 

@@ -1,0 +1,126 @@
+{
+  "schemaVersion": "r015-controlled-knowledge-package-v1",
+  "fixture": true,
+  "packageVersion": "r016-cn-television-tcl-65t7g-2026-08-14.1",
+  "products": [
+    {
+      "productId": "product:tcl:65t7g",
+      "categoryCode": "television",
+      "manufacturer": "TCL",
+      "model": "65T7G",
+      "aliases": ["TCL T7G 65英寸", "TCL 65英寸高刷电视"]
+    }
+  ],
+  "claims": [
+    {
+      "claimId": "claim:tcl:65t7g:identity",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "product.model_identity",
+      "textValue": "TCL 官方产品页将该 65 英寸规格标识为 65T7G",
+      "knowledgeLayer": "identity",
+      "state": "published",
+      "evidenceRefs": ["evidence:tcl:65t7g:title"]
+    },
+    {
+      "claimId": "claim:tcl:65t7g:screen-size",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "television.screen_size_inch",
+      "numericValue": 65,
+      "unit": "in",
+      "textValue": "屏幕规格 65 英寸",
+      "knowledgeLayer": "specification",
+      "state": "published",
+      "evidenceRefs": ["evidence:tcl:65t7g:title"]
+    },
+    {
+      "claimId": "claim:tcl:65t7g:refresh-rate",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "television.refresh_rate_hz",
+      "numericValue": 144,
+      "unit": "Hz",
+      "textValue": "官方页声明全通道 4K 144Hz",
+      "knowledgeLayer": "specification",
+      "state": "published",
+      "evidenceRefs": ["evidence:tcl:65t7g:headline"]
+    },
+    {
+      "claimId": "claim:tcl:65t7g:peak-brightness",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "television.peak_brightness_nit",
+      "numericValue": 1000,
+      "unit": "nit",
+      "textValue": "官方页声明峰值亮度可达 1000 尼特",
+      "knowledgeLayer": "specification",
+      "state": "published",
+      "evidenceRefs": ["evidence:tcl:65t7g:brightness"]
+    },
+    {
+      "claimId": "claim:tcl:65t7g:color-gamut",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "television.color_gamut_dci_p3_percent",
+      "numericValue": 96,
+      "unit": "%",
+      "textValue": "官方页声明 96% DCI-P3 色域",
+      "knowledgeLayer": "specification",
+      "state": "published",
+      "evidenceRefs": ["evidence:tcl:65t7g:gamut"]
+    },
+    {
+      "claimId": "claim:tcl:65t7g:local-dimming",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "television.local_dimming",
+      "textValue": "全阵列百级分区背光通过分区控光呈现更丰富的亮暗细节",
+      "knowledgeLayer": "mechanism",
+      "state": "published",
+      "evidenceRefs": ["evidence:tcl:65t7g:local-dimming"]
+    },
+    {
+      "claimId": "claim:tcl:65t7g:picture-engine",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "television.picture_engine",
+      "textValue": "Q 画质引擎感知画面内容并调校明暗、亮度、色温和对比度",
+      "knowledgeLayer": "mechanism",
+      "state": "published",
+      "evidenceRefs": ["evidence:tcl:65t7g:picture-engine"]
+    },
+    {
+      "claimId": "claim:tcl:65t7g:gaming-features",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "television.gaming_features",
+      "numericValue": 3,
+      "unit": "HDMI",
+      "textValue": "3 路 HDMI 2.1 支持 144Hz 信号、VRR 和 ALLM",
+      "knowledgeLayer": "function",
+      "state": "published",
+      "evidenceRefs": ["evidence:tcl:65t7g:hdmi"]
+    },
+    {
+      "claimId": "claim:tcl:65t7g:use-case",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "decision.television_use_case_fit",
+      "textValue": "体育与游戏场景可优先核对 4K 144Hz、VRR、ALLM；画质比较还需同时查看分区控光、峰值亮度和色域，外接设备必须支持相应信号",
+      "knowledgeLayer": "decision",
+      "state": "published",
+      "evidenceRefs": ["evidence:tcl:65t7g:headline", "evidence:tcl:65t7g:local-dimming", "evidence:tcl:65t7g:brightness", "evidence:tcl:65t7g:gamut", "evidence:tcl:65t7g:hdmi"]
+    },
+    {
+      "claimId": "claim:tcl:65t7g:source-model-anomaly",
+      "productId": "product:tcl:65t7g",
+      "propertyKey": "source.model_text_consistency",
+      "textValue": "65T7G 官方页的 4K 144Hz 说明段落写成 T7E，不能自动把该段型号文字视为 65T7G 强身份事实",
+      "knowledgeLayer": "decision",
+      "state": "unknown",
+      "evidenceRefs": ["evidence:tcl:65t7g:model-anomaly"]
+    }
+  ],
+  "evidence": [
+    { "evidenceId": "evidence:tcl:65t7g:title", "sourceKind": "brand_web", "locator": "https://www.tcl.com/cn/zh/tvs/65-inch-t7g#capture-text-sha256=674917f9b94e0739ccbd70577a87c3f47da9ea23d6e43ba5ae5e0eaad5feecfd&lines=14-20" },
+    { "evidenceId": "evidence:tcl:65t7g:headline", "sourceKind": "brand_web", "locator": "https://www.tcl.com/cn/zh/tvs/65-inch-t7g#capture-text-sha256=674917f9b94e0739ccbd70577a87c3f47da9ea23d6e43ba5ae5e0eaad5feecfd&lines=21-29" },
+    { "evidenceId": "evidence:tcl:65t7g:local-dimming", "sourceKind": "brand_web", "locator": "https://www.tcl.com/cn/zh/tvs/65-inch-t7g#capture-text-sha256=674917f9b94e0739ccbd70577a87c3f47da9ea23d6e43ba5ae5e0eaad5feecfd&lines=42-45" },
+    { "evidenceId": "evidence:tcl:65t7g:brightness", "sourceKind": "brand_web", "locator": "https://www.tcl.com/cn/zh/tvs/65-inch-t7g#capture-text-sha256=674917f9b94e0739ccbd70577a87c3f47da9ea23d6e43ba5ae5e0eaad5feecfd&lines=58-60" },
+    { "evidenceId": "evidence:tcl:65t7g:gamut", "sourceKind": "brand_web", "locator": "https://www.tcl.com/cn/zh/tvs/65-inch-t7g#capture-text-sha256=674917f9b94e0739ccbd70577a87c3f47da9ea23d6e43ba5ae5e0eaad5feecfd&lines=78-81" },
+    { "evidenceId": "evidence:tcl:65t7g:picture-engine", "sourceKind": "brand_web", "locator": "https://www.tcl.com/cn/zh/tvs/65-inch-t7g#capture-text-sha256=674917f9b94e0739ccbd70577a87c3f47da9ea23d6e43ba5ae5e0eaad5feecfd&lines=83-86" },
+    { "evidenceId": "evidence:tcl:65t7g:hdmi", "sourceKind": "brand_web", "locator": "https://www.tcl.com/cn/zh/tvs/65-inch-t7g#capture-text-sha256=674917f9b94e0739ccbd70577a87c3f47da9ea23d6e43ba5ae5e0eaad5feecfd&lines=116-121" },
+    { "evidenceId": "evidence:tcl:65t7g:model-anomaly", "sourceKind": "brand_web", "locator": "https://www.tcl.com/cn/zh/tvs/65-inch-t7g#capture-text-sha256=674917f9b94e0739ccbd70577a87c3f47da9ea23d6e43ba5ae5e0eaad5feecfd&lines=67-70" }
+  ]
+}

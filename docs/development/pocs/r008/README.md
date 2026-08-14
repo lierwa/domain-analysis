@@ -1,6 +1,6 @@
 # R-008 隔离原型
 
-状态：非生产、待真实资料验证
+状态：非生产、已完成真实电视小样本迁移验证
 
 本目录验证成熟开源建模工具能否让冰箱与电视共用同一商品知识 Schema。品类差异必须是版本化数据，不允许演变成 `RefrigeratorModel`、品类数据库列或品类专用 Runtime API。
 
@@ -8,7 +8,7 @@
 
 - `product-knowledge.linkml.yaml`：唯一通用 LinkML 建模样例；
 - `refrigerator-category-definition.yaml`：冰箱品类知识定义数据样例；
-- `television-category-definition.yaml`：用于检查迁移成本的电视数据样例，不代表电视专业字段已完成调研；
+- `television-category-definition.yaml`：已用 TCL 65T7G 官方页补充真实电视小样本，仍不代表电视市场知识已完整；
 - `valid-research-brief.yaml` / `invalid-research-brief.yaml`：用途访谈的接受与拒绝样例；
 - `render-form.mjs`：调用 RJSF 验证生成 Schema 能否被现成表单库消费；
 - `generate-scenarios.py` / `calculate-sample-sizes.py`：调用成熟库验证组合覆盖和抽检计算方法；
@@ -37,9 +37,9 @@
 
 ## 已验证与仍待验证
 
-已验证：LinkML `1.11.1` 能让冰箱和电视数据使用同一 Schema；用途访谈能生成 JSON Schema，并由 `json-schema-to-typescript` 与 RJSF 消费；组合覆盖和抽检计算可由成熟库承担。
+已验证：LinkML `1.11.1` 能让冰箱和电视数据使用同一 Schema；R-016 已把 TCL 官方页的身份、规格、功能、机制和决策知识用同一知识包/Runtime 跑通；用途访谈能生成 JSON Schema，并由 `json-schema-to-typescript` 与 RJSF 消费；组合覆盖和抽检计算可由成熟库承担。
 
-仍待验证：真实官方资料能否稳定映射；共享属性字典如何治理；功能、机制和决策知识是否足够支撑专业导购；生产 TypeScript 组件是否存在成熟方案；“主流品牌/型号”总体如何有证据地定义。
+仍待验证：多品牌真实官方资料能否稳定映射；共享属性字典如何治理；功能、机制和决策知识是否足够支撑专业导购；生产 TypeScript 组件是否存在成熟方案；“主流品牌/型号”总体如何有证据地定义。
 
 ## 可复现命令
 

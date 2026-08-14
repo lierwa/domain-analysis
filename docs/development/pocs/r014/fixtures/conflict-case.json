@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "r014-controlled-conflict-fixture-v1",
+  "fixture": true,
+  "subjectKey": "TEST:PRODUCT-001",
+  "facts": [
+    {
+      "propertyKey": "spec.powerConsumption",
+      "value": "0.85 kWh/day",
+      "evidence": [
+        {
+          "sourceObjectId": "fixture:source-a",
+          "snapshotSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "locator": "fixture:row=1"
+        }
+      ]
+    },
+    {
+      "propertyKey": "spec.powerConsumption",
+      "value": "0.95 kWh/day",
+      "evidence": [
+        {
+          "sourceObjectId": "fixture:source-b",
+          "snapshotSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "locator": "fixture:row=2"
+        }
+      ]
+    }
+  ]
+}

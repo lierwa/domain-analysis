@@ -37,7 +37,7 @@ const conflictValueSchema = z
 
 export const codexOutputSchema = z
   .object({
-    schemaVersion: z.literal("r014-codex-candidates-v1"),
+    schemaVersion: z.literal("r014-codex-candidates-v2"),
     subject: z
       .object({ manufacturer: z.literal("美的"), model: z.literal("MR-457WUSPZE") })
       .strict(),
@@ -45,6 +45,7 @@ export const codexOutputSchema = z
     conflicts: z.array(
       z
         .object({
+          conflictId: z.string().regex(/^X\d{3}$/),
           propertyKey: z.string().min(1),
           values: z.array(conflictValueSchema).min(2),
           status: z.literal("review_required"),
@@ -54,6 +55,7 @@ export const codexOutputSchema = z
     unknowns: z.array(
       z
         .object({
+          unknownId: z.string().regex(/^U\d{3}$/),
           question: z.string().min(1),
           reason: z.string().min(1),
           status: z.literal("unknown"),

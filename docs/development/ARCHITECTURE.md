@@ -1,7 +1,7 @@
 # Agent 知识生产平台工程架构基线
 
-状态：提议基线，等待阶段 1 原型验证后冻结
-版本：V0.2
+状态：阶段 1 已验证，阶段 2 实施基线
+版本：V0.3
 更新日期：2026-08-14
 
 ## 1. 文档职责
@@ -26,6 +26,8 @@ Workbench 负责知识生产，Runtime 负责知识消费。两者使用相同�
 flowchart LR
     Web["Workbench Web"] --> Http["Workbench HTTP Adapter"]
     Http --> Pipeline["Pipeline Controller"]
+    Pipeline --> Orchestrator["DBOS Pipeline Adapter"]
+    Orchestrator --> OrchestratorDb["PostgreSQL<br/>执行历史"]
 
     Pipeline --> Acquisition["Acquisition Module"]
     Acquisition --> Provider["Source Provider Seam"]
@@ -88,6 +90,7 @@ flowchart LR
 | React/Vite/TanStack Query、AppShell、分页 | 保留 | 替换业务页面和 contract，不重写通用 UI 基础 |
 | `packages/shared` 的 Zod 使用方式 | 保留方法，重建内容 | 继续作为跨进程 typed contract 权威源，移除 Reddit/Social 语义 |
 | Drizzle＋SQLite/libSQL | 保留为 Workbench 控制库候选 | 需要正式 migration，不能继续手写重复 DDL |
+| SQLite＋FTS5 单文件知识包 | 接受为 MVP Runtime 存储 | 一个不可变文件承载结构化事实、关系、证据和全文索引；见 ADR-0006 |
 | repository 注入和内存 SQLite 测试方式 | 保留 | 作为本地可替代依赖，通过 module interface 测试 |
 | Crawlee 与保守采集策略 | 保留为获准网页来源候选 | 必须先证明来源授权，不代表现有 adapter 可复用 |
 | `BrowserRuntimeConfig` 的人工挑战禁止规则 | 保留停止约束，重做边界 | 人工接管不能把未获授权的网页自动化变成合规入口 |
@@ -98,7 +101,7 @@ flowchart LR
 | `RawContent` | 拆分 | 拆成 `SourceObject`、`CaptureSnapshot`、原始资源和 `EvidenceReference` |
 | `cleaned_contents` / `analyzed_contents` | 淘汰出新主流程 | 替换为候选知识、知识结论、处理版本和审核决定 |
 | `reports` 和 deterministic 社交报告 | 淘汰出新主流程 | 替换为评测结果、候选知识包和发布信息 |
-| 进程内 `TaskQueue` 与 `setInterval` scheduler | 不作为正式编排器 | 无法满足崩溃恢复、长等待和人工信号；选型进入调研门 |
+| 进程内 `TaskQueue` 与 `setInterval` scheduler | 由 DBOS adapter 替换 | 无法满足崩溃恢复、长等待和人工信号；R-017 已接受 DBOS，见 ADR-0007 |
 | Reddit/X adapter 和 Social Intelligence UI | 不进入新主流程 | 仅作 adapter/测试组织参考，不作为京东或知识平台语义 |
 | 未合并远程分支的浏览器/恢复代码 | 只读参考 | 不整体合并；逐项验证后提取可复用模式和测试 |
 | 未合并分支的 `AiInsightAnalyzer`、批处理与证据校验 | 提取 interface 和处理模式 | 该分支实际依赖 Vercel AI SDK 与 API Key；不直接合并 Provider 实现，改为官方 Codex SDK adapter |
@@ -114,6 +117,8 @@ flowchart LR
 
 `ProductKnowledgeModel` 是所有商品共用的稳定领域语义；`CategoryKnowledgeDefinition` 是版本化数据。新增品类不得要求修改领域 interface、迁移数据库或增加品类子类。
 
+阶段 2 的共享 contract 把项目、品类定义、确认范围和搜集板组合为一个可校验冻结快照，跨对象引用、市场和来源策略在 module interface 处一次校验。物理库只含 4 张版本业务表；调用者不能逐表拼装“已确认”状态。
+
 ### 5.2 Pipeline Module
 
 负责一次流水线运行的阶段推进、生命周期、重试、取消和人工介入。
@@ -125,7 +130,7 @@ flowchart LR
 - 查询运行、阶段、任务尝试和待人工事项；
 - 返回 typed 状态，不要求调用方理解内部编排器。
 
-编排器是该 module 的实现细节，最终选型必须通过调研与恢复原型验证。
+编排器是该 module 的实现细节。MVP adapter 使用 DBOS Transact；`workflowID` 由冻结输入身份确定，直接复用其持久步骤、消息、取消、恢复、重试和历史 API，不自建队列或事件日志。DBOS 类型和状态不得穿透 Pipeline interface，见 ADR-0007。
 
 ### 5.3 Acquisition Module
 
@@ -175,6 +180,8 @@ Knowledge Factory 只接收可加工资料投影，并解释稳定商品知识�
 
 Runtime 通过稳定版本指针原子激活已校验的不可变知识包；不得直接读取 Workbench 的在途数据。
 
+MVP 的只读存储 adapter 使用 SQLite＋FTS5 单文件。包构建后以 SHA-256 校验并改为只读，连接启用 `query_only`；新包通过冻结查询后只原子替换版本指针，旧文件不原地覆盖。该物理实现不进入领域 interface，见 ADR-0006。
+
 通用 interface 提供包身份、精确查询、结构化筛选、全文检索、关系导航和证据查看，不包含京东、冰箱或具体下游 Agent 专用方法。查询能力按已确认顺序组合，语义检索只能是可选 adapter；购物比较等能力由知识包数据声明。
 
 ## 6. 依赖方向
@@ -192,7 +199,11 @@ Runtime 通过稳定版本指针原子激活已校验的不可变知识包；不
 
 ### 7.1 Workbench 控制库
 
-保存项目、范围版本、板块、运行、阶段、任务尝试、审核、评测和包版本元数据。它是可变控制面，不是知识包。
+保存项目、范围版本、板块、审核、评测和包版本元数据。它是可变业务控制面，不是知识包；运行、阶段和尝试历史由 DBOS 执行库负责。
+
+阶段 2 首份正式 Schema 先落项目、品类定义版本、确认范围版本和搜集板版本 4 张表；Pipeline 执行历史不在此重复建表。后续审核、评测和包元数据按对应阶段 contract 增加，不提前建空表。
+
+DBOS PostgreSQL 系统库是流水线执行历史的事实源，Workbench 只通过 Pipeline adapter 读取和投影领域状态，不读取系统表或维护第二套步骤日志。R-018 已决定其余业务表继续 Drizzle＋SQLite/libSQL；新产品库使用新文件和正式 migration，旧产品库不覆盖、不自动 baseline。两个存储禁止双写执行历史，见 ADR-0008。
 
 ### 7.2 原始资料区
 
@@ -204,7 +215,7 @@ Runtime 通过稳定版本指针原子激活已校验的不可变知识包；不
 
 保存可下载、可校验、不可原地修改的包版本。包必须离开 Workbench 工作目录后仍能被 Runtime 加载。
 
-知识包的物理存储、全文检索和压缩格式仍为候选状态，见 `RESEARCH.md`。
+知识包的物理存储和全文检索已接受 SQLite＋FTS5 单文件；压缩与分发格式仍为候选状态，见 ADR-0006 和 `RESEARCH.md`。
 
 ## 8. 状态建模
 
@@ -231,13 +242,13 @@ Runtime 通过稳定版本指针原子激活已校验的不可变知识包；不
 - 受限采集快照不得进入 Codex；只有通过白名单投影、严格 Schema 和敏感容器漏洞检查的可加工资料才能被任务引用。
 - Codex 登录材料属于用户本机凭据，项目只能通过官方能力使用或检查状态，不能读取、复制、上传或持久化认证文件。
 
-## 10. 架构冻结条件
+## 10. 阶段 1 架构验证结果
 
-以下四项全部通过后，才冻结详细 interface、Schema、物理包格式和正式技术栈：
+以下四项已全部通过，因此冻结品类中立 module 边界、知识 contract、Provider seam 和 SQLite＋FTS5 知识包方向：
 
 1. 品牌官网/说明书、监管数据和京东网页采集的字段覆盖、懒加载、异常状态、敏感数据隔离与原始资料保真验证；
 2. 混乱资料的规则＋模型＋人工审核闭环；
 3. 无模型、无网络条件下的知识包复制、查询、证据查看和版本回滚；
 4. 冰箱与第二商品品类小样本共用同一生产 Schema、数据库结构、Provider contract、Runtime API 和通用流水线；切换只提交版本化品类数据与验收数据。
 
-在此之前，本文件定义模块职责和依赖方向，技术组件保持候选状态。
+R-001/R-014/R-015/R-016 分别提供验证证据。Workbench 业务数据库 migration、正式 Pipeline interface 和 UI contract 仍须在阶段 2 收敛；未完成项不能反向推翻已验证的品类数据化和 Runtime 边界。

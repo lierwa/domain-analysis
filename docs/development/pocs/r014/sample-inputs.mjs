@@ -54,6 +54,30 @@ export const sampleInputs = {
     row: 479,
     model: "MR-457WUSPZE",
   },
+  marketplace: [
+    {
+      id: "I05",
+      sourceObjectId: "jd:100062957294",
+      modelKey: "MIDEA:MR-531WSPZE",
+      brand: "美的",
+      model: "MR-531WSPZE",
+      path: path.join(
+        dataRoot,
+        "r001/sanitized-attempts-patchright/2026-08-14T08-19-43.912Z-641021a4/S05/projection.json",
+      ),
+    },
+    {
+      id: "I06",
+      sourceObjectId: "jd:100044587428",
+      modelKey: "HAIER:BCD-505WGHTD14S8U1",
+      brand: "海尔",
+      model: "BCD-505WGHTD14S8U1",
+      path: path.join(
+        dataRoot,
+        "r001/sanitized-attempts-patchright/2026-08-14T08-20-25.615Z-a2245b0b/S06/projection.json",
+      ),
+    },
+  ],
 };
 
 export const unitHints = {

@@ -1,0 +1,21 @@
+{
+  "name": "domain-analysis-r015-offline-package-poc",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.22.0 <23"
+  },
+  "scripts": {
+    "compare": "node run-comparison.mjs",
+    "test": "node --test *.test.mjs"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "1.5.5-r.4",
+    "@libsql/client": "0.17.4",
+    "@orama/orama": "3.1.18",
+    "@orama/stopwords": "3.1.18",
+    "@orama/tokenizers": "3.1.18",
+    "write-file-atomic": "8.0.0",
+    "zod": "3.25.76"
+  }
+}

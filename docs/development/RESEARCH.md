@@ -77,147 +77,77 @@
 
 ### R-002 可恢复流水线编排
 
-状态：已接受（产品/领域口径；生产来源枚举属于阶段 1A）
+状态：已接受（DBOS Transact 4.25.14；见 ADR-0007 和 R-017）
 目标阶段：2
 
 问题：如何支持多阶段执行、崩溃恢复、长时间等待、人工信号、取消、重试、幂等和可观察历史，同时保持本地部署复杂度可接受。
 
-候选：
+调查结果：
 
-- Restate Workflow：单二进制、TypeScript SDK、durable promise 和人工信号；
-- Temporal TypeScript SDK：成熟 durable execution、Signal、Update 和 Workflow 测试；
-- 现有数据库状态＋任务执行器只作为对照基线，不默认允许扩展成自研工作流引擎；
-- BullMQ 只解决任务队列，不能单独满足完整人机协同流水线。
+- Restate Server 的 BSL 1.1 明确不是 Open Source，Inngest 为 SSPL；拒绝。
+- Hatchet、Trigger.dev、Kestra 均增加比当前模块化单体更多的常驻平台部件；不进入原型。
+- Temporal MIT 且恢复能力成熟；R-017 真实停止并重启 Worker 和服务后，从 SQLite 文件继续等待，两个外部步骤各执行一次。但本轮依赖约 170 MB、CLI 约 128 MB，且 `start-dev` 不是生产入口。
+- DBOS MIT、嵌入 Node、要求 PostgreSQL。R-017 强制终止 Node 进程后恢复通过；同 ID 幂等、三次步骤重试、取消、恢复和人工消息也实测通过；本轮 `@dbos-inc` scope 约 2.2 MB。
+- 现有 `p-queue + setInterval` 崩溃丢任务，只作失败基线；BullMQ 只解决队列，不满足完整人工等待与重放。
 
-官方资料：
-
-- https://docs.restate.dev/tour/workflows
-- https://docs.restate.dev/develop/ts/services
-- https://docs.restate.dev/develop/ts/testing
-- https://docs.temporal.io/develop/typescript/workflows/message-passing
-- https://docs.temporal.io/develop/typescript/best-practices/testing-suite
-- https://docs.temporal.io/cli/command-reference/server
-
-必须原型验证：
-
-- 本地安装和启动成本；
-- 进程和编排器重启后的恢复；
-- 登录等待、审核等待和发布批准信号；
-- 同一输入幂等、阶段重试、取消和版本升级；
-- 测试隔离、时间跳跃、可观察历史；
-- 开发机和目标 Linux 环境的资源消耗。
-
-尚未决策。不得继续扩展 `p-queue + setInterval` 为自研正式编排器。
+结论：MVP 采用 DBOS，领域通过 Pipeline port 隔离；`workflowID` 使用冻结输入身份作为幂等键。DBOS 系统库只作执行历史事实源，Workbench 数据库处置继续进入 R-004，不自行双写。官方资料：https://docs.dbos.dev/typescript/tutorials/workflow-tutorial 、https://docs.dbos.dev/typescript/tutorials/workflow-management 、https://docs.dbos.dev/typescript/tutorials/workflow-communication 、https://docs.temporal.io/develop/typescript/workflows/message-passing 。
 
 ### R-003 知识包结构化存储与全文检索
 
-状态：调研中（质量分层已确认；工具选型仍需原型）
+状态：已接受（SQLite＋FTS5 单文件；见 ADR-0006 和 R-015）
 目标阶段：1C、5
 
 问题：如何用可复制、离线、只读、可验证的包同时支持结构化筛选、关系查询、全文检索和证据返回。
 
-候选：
+已对照候选：
 
 - SQLite＋FTS5，单文件同时保存结构化数据和全文索引；
 - DuckDB Node Neo＋Orama，结构化分析和全文索引分离；
-- DuckDB 自带全文扩展，需验证扩展的离线可用性和 Node 打包。
+- DuckDB 自带全文扩展。
 
 官方资料：
 
 - https://www.sqlite.org/onefile.html
 - https://www.sqlite.org/fts5.html
-- https://duckdb.org/docs/lts/clients/node_neo/overview
+- https://duckdb.org/docs/current/core_extensions/full_text_search.html
+- https://duckdb.org/docs/current/extensions/installing_extensions.html
+- https://duckdb.org/docs/stable/clients/node_neo/overview
 - https://docs.orama.com/docs/orama-js
+- https://docs.orama.com/docs/orama-js/supported-languages/using-chinese-with-orama
+- https://docs.orama.com/docs/orama-js/plugins/plugin-data-persistence
 
-必须原型验证：
+R-015 实测：
 
 - 中文、型号、别名和短字符串检索；
 - 精确查询、组合筛选、排序、关系和证据联查；
 - 由 R-008 生成的版本化验收集及放大数据集的大小、构建时间和查询延迟；
-- macOS 构建后复制到 Linux 或另一台机器加载；
+- macOS 构建后复制到独立目录只读加载；
 - 只读打开、校验、版本切换和回滚；
 - 无网络条件下不下载扩展、不调用模型或 embedding。
 
-当前倾向：先用 SQLite FTS5 做最小对照原型，因为单文件可降低包内双存储复杂度；该倾向不是已接受决策。
+结论：3 商品/6 claim 与 1000 商品/2000 claim 两档均完成 9 项冻结查询。放大档 SQLite 为 1.77 MB、查询 4.85 ms；DuckDB＋Orama 为 4.60 MB、查询 25.29 ms。DuckDB 构建更快，但 SQLite 单文件消除事实库/搜索索引双写一致性，且无首次扩展下载，因此接受 SQLite＋FTS5。DuckDB FTS 因官方扩展下载门拒绝；DuckDB＋Orama 因双产物成本和官方持久化插件恢复 Mandarin tokenizer 的实测缺陷拒绝。不自写 tokenizer/插件兼容层，也不引入向量数据库。
+
+当前 Zod、数据库约束、哈希、只读连接和冻结查询已覆盖 R-011 硬门，未出现 Great Expectations 才能解决的缺口，故不新增 Python 质量基础设施。物理 Schema 与 Node binding 封装在 adapter 内，第二品类仍须通过 1D 零分支门。
 
 ### R-004 Workbench 数据库与迁移
 
-状态：已接受（领域 contract 与 1A 可行性；完整多品牌总体留到阶段 3）
+状态：已接受（Drizzle Kit/ORM migration＋SQLite 业务库；见 R-018、ADR-0008）
 目标阶段：0、2
 
 问题：如何继续利用 Drizzle＋SQLite/libSQL，同时替换当前手写 DDL 和 schema 双重事实源，建立可测试的正式迁移流程。
 
-当前代码事实：
+事实与候选：`schema.ts` 和 `initializeDatabase()` 手写 DDL 已漂移，后者额外把 `sources.platform` 设为唯一。接受 Drizzle Kit `generate`＋ORM libSQL `migrate`，拒绝 `push` 和自研 migration manager。官方依据：https://orm.drizzle.team/docs/migrations 、https://orm.drizzle.team/docs/drizzle-kit-generate 、https://orm.drizzle.team/docs/drizzle-kit-migrate 。
 
-- `packages/db/src/schema.ts` 已定义 9 张表及索引，repository 全部通过该 schema 使用 Drizzle。
-- `packages/db/src/client.ts` 的 `initializeDatabase()` 又维护了一份约 170 行 `CREATE TABLE IF NOT EXISTS` 手写 DDL；API 启动和所有数据库测试都调用这份 DDL。
-- 两份事实已经出现漂移：手写 DDL 把 `sources.platform` 声明为 `UNIQUE`，Drizzle schema 没有相同约束。
-- `packages/db/drizzle.config.ts` 已配置 schema、SQLite dialect、数据库 URL 和输出目录；db workspace 已有 `drizzle-kit generate` script。
-- 当前没有 `drizzle/` migration 产物、`migrate` script 或 `__drizzle_migrations` 历史；已安装版本为 `drizzle-orm@0.32.2`、`drizzle-kit@0.23.2`、`@libsql/client@0.7.0`。
+R-018 证据：
 
-候选：
+- 旧 `drizzle-kit@0.23.2` 在 npm workspace 因官方已知的提升问题找不到 db workspace 的 ORM；相同版本隔离共址后成功生成，证明不是 Schema 错误。
+- `drizzle-orm@0.32.2` 命中 GHSA-gpj5-g38j-94v9 high；修复版为 0.45.2。隔离升级到 ORM 0.45.2、Kit 0.31.7、已由 R-015 验证的 libSQL 0.17.4 后，同一 snapshot 无变化，3/3 migration contract 通过。
+- 空库首次和重复执行均只记录一条 migration；9 表、9 索引、外键和默认值与 `schema.ts` 一致；同平台多来源可写入，证明手写唯一约束不是事实源。
+- 注入失败 SQL 后整批回滚，未留下半张表或错误 migration log。
+- 官方 migrator 对旧手写 DDL 库以 `table already exists` 失败关闭，不自动 baseline；因此拒绝自研 repair，旧产品库保持不动，新产品库使用新路径和正式 migration。
+- 根依赖最小升级后 Drizzle generate、12 文件/52 测试、五 workspace typecheck 和 build 全部通过；生产 audit 不再包含 Drizzle 公告。
 
-- Drizzle Kit `generate`＋`migrate`：由 TypeScript schema 生成版本化 SQL，并由官方 migration log 判断待执行项；当前项目已经安装和配置，无需引入新库。
-- Drizzle ORM 的 libSQL migrator：复用同一批 Drizzle migration，在应用启动时执行；是否优于显式 CLI migration 需要用本地启动和失败恢复原型验证。
-- `@libsql/client` 继续只承担数据库 driver，不把 `executeMultiple` 扩展成自研 migration manager。
-- `drizzle-kit push` 只作为临时 schema 试验对照，不作为需要版本历史和升级审计的正式流程。
-
-官方证据：
-
-- Drizzle 明确把 TypeScript schema 作为查询和 migration 的事实源：https://orm.drizzle.team/docs/sql-schema-declaration
-- `drizzle-kit generate` 会比较 schema 与上一份 snapshot 并生成 SQL migration：https://orm.drizzle.team/docs/drizzle-kit-generate
-- `drizzle-kit migrate` 会读取 migration 文件、查询已执行历史、只执行未应用项并写入 migration log：https://orm.drizzle.team/docs/drizzle-kit-migrate
-- 官方 SQLite/libSQL 指南同时给出 `generate`＋`migrate` 流程：https://orm.drizzle.team/docs/get-started/sqlite-new
-- 当前项目的 Drizzle ORM 0.32／Kit 0.23 组合来自同一官方 release，已具备相关命令：https://orm.drizzle.team/docs/latest-releases/drizzle-orm-v0320
-
-当前倾向：选择项目已有的 Drizzle Kit/ORM migration 能力，让 `schema.ts` 成为单一结构事实源；删除手写 DDL 只能在生成的初始 migration、空库、旧 DDL 库和测试库全部验证后进行。该倾向不涉及升级 Drizzle 版本。
-
-#### R-004 隔离原型方案
-
-Baseline Impact：
-
-- touched modules：仅 `packages/db` 的 migration 产物、初始化 seam 和 migration contract test；
-- owning fact source：`packages/db/src/schema.ts`；
-- public interface changed：原型阶段否；
-- new protocol/adapter/fallback：否，直接使用现有 Drizzle migration；
-- compatibility or legacy path changed：原型阶段否；
-- dependency change：否；
-- tests and real-surface validation：隔离 SQLite 文件、db/API tests、全量 test/typecheck/build。
-
-输入：
-
-1. 当前 `schema.ts`；
-2. 一个全新临时 SQLite 文件；
-3. 一个由当前 `initializeDatabase()` 创建的旧 DDL 临时文件，只用于识别切换行为；
-4. 当前空的 `data/` 基线。若发现真实用户数据库或业务数据，立即停止，不对其执行原型。
-
-执行对照：
-
-1. 使用项目现有 `drizzle-kit@0.23.2` 从 `schema.ts` 生成初始 migration，不升级依赖；
-2. 用 Drizzle Kit CLI `migrate` 应用到空库，并重复执行一次；
-3. 用 Drizzle ORM libSQL migrator 对另一空库执行同一 migration；
-4. 分别验证 9 张表、索引、外键、默认值和 `sources.platform` 唯一约束；
-5. 对旧 DDL 临时库只记录官方 migrator 的真实行为，不自动补写 baseline、repair 或兼容分支；
-6. 在隔离库注入一条必然失败的 migration，观察事务、migration log 和 API 启动失败边界；
-7. 验证文件备份后迁移、恢复备份和再次启动。
-
-通过门：
-
-- lockfile 和依赖版本零变化；
-- migration 产物由 `schema.ts` 生成且进入版本控制，手写 DDL 不再成为第二事实源；
-- 空库首次迁移成功，重复迁移不重复执行；
-- CLI 与 libSQL migrator 对 schema 和 migration log 的结果一致，随后再按本地直接启动体验选择一个正式入口；
-- 失败 migration 不得让 API 带着未知 schema 继续启动；部分提交、回滚和恢复结果有测试证据；
-- 现有 52 个测试、类型检查和构建继续通过，并新增 migration contract test。
-
-停止条件：
-
-- 工具要求升级依赖、重建 lockfile 或引入新 migration 库；
-- 发现真实用户库、非空业务数据或无法验证的旧 schema；
-- 官方 migrator 无法满足失败可见、重复执行或 migration log 需求；
-- 旧库切换需要自研 baseline/repair 机制。出现任一项都停止并向用户提交证据和候选，不自行实现兼容基础设施。
-
-原型完成前保持“调研中”，不得先改 `initializeDatabase()`，也不得生成或应用真实数据库 migration。
+结论：Workbench 业务库继续使用 SQLite/libSQL，DBOS PostgreSQL 只保存执行历史，避免迁移所有现有 repository/test。阶段 2 已生成 4 表新产品库首份正式 migration；新启动链只用官方 migrator。旧 `initializeDatabase()` 暂留以保持旧产品可运行，但不得扩展到新表。
 
 ### R-005 Codex CLI 接入与结构化知识加工
 
@@ -479,7 +409,7 @@ R-008 已完成文档与隔离能力门，并支撑 Q003/Q004 的方向确认；
 结论：Microsoft Presidio 官方明确自动检测不保证找全敏感信息，中文又需额外 NLP/识别器，不作为主门：https://github.com/microsoft/presidio 、https://microsoft.github.io/presidio/installation/ 。选择已在工程依赖链的 Cheerio CSS 选择器白名单投影＋Zod 严格未知字段拒绝：https://cheerio.js.org/docs/basics/selecting/ 、https://v3.zod.dev/ 。S05/S06 实测投影 34/26 个商品属性，不携带整页原文或已知个性化容器；决策见 ADR-0005。
 
 ### R-014 混乱资料加工与证据化候选知识
-状态：调研中（确定性抽取与 Codex 首轮通过，身份隔离/冲突 fixture/发布门待验）；目标阶段 1B；开源比较、实测与剩余门见 `pocs/r014/README.md`。
+状态：已接受（隔离 POC 通过）；目标阶段 1B；主体隔离、受控冲突、稳定审核 ID、真实 Codex 候选和未经审核禁止发布均已验证，证据见 `pocs/r014/README.md`。
 
 ## 5. 新调研条目模板
 

@@ -27,6 +27,7 @@ async function main() {
 
   const [inputText, image] = await Promise.all([readFile(inputPath, "utf8"), readFile(imagePath)]);
   const source = JSON.parse(inputText);
+  const modelInput = buildPrimaryCandidateInput(source);
   const codex = new Codex();
   const thread = codex.startThread({
     workingDirectory: projectRoot,
@@ -37,23 +38,27 @@ async function main() {
   });
   const turn = await thread.run(
     [
-      { type: "text", text: buildPrompt(source) },
+      { type: "text", text: buildPrompt(modelInput) },
       { type: "local_image", path: imagePath },
     ],
     { outputSchema: buildCodexJsonSchema() },
   );
   const nonBlockingSdkWarnings = assertNoBlockingErrorItems(turn.items);
   const candidates = codexOutputSchema.parse(JSON.parse(turn.finalResponse));
-  assertKnownEvidenceReferences(candidates, source.evidence);
+  assertKnownEvidenceReferences(candidates, modelInput.evidence);
 
   const attemptId = new Date().toISOString().replaceAll(":", "-");
   const outputRoot = path.join(dataRoot, "codex", attemptId);
   await mkdir(outputRoot, { recursive: true });
   const artifact = await writeImmutableJson(path.join(outputRoot, "candidates.json"), {
-    schemaVersion: "r014-codex-run-v2",
+    schemaVersion: "r014-codex-run-v3",
     createdAt: new Date().toISOString(),
     threadId: thread.id,
-    input: { extractionSha256: sha256(inputText), imageSha256: sha256(image) },
+    input: {
+      extractionSha256: sha256(inputText),
+      modelInputSha256: sha256(JSON.stringify(modelInput)),
+      imageSha256: sha256(image),
+    },
     usage: turn.usage,
     itemTypes: turn.items.map(({ type }) => type),
     nonBlockingSdkWarnings,
@@ -69,6 +74,16 @@ async function main() {
       artifact,
     }, null, 2),
   );
+}
+
+export function buildPrimaryCandidateInput(source) {
+  return {
+    schemaVersion: source.schemaVersion,
+    modelKey: source.modelKey,
+    variants: source.variants,
+    evidence: source.evidence,
+    comparison: source.comparison,
+  };
 }
 
 export function assertNoBlockingErrorItems(items) {
@@ -92,6 +107,7 @@ function buildPrompt(source) {
 4. 监管表证明备案与能效等级，不自动证明当前在售；PDF 参数若声明以铭牌为准，必须写入 limitations。
 5. 生成 6 至 10 条高价值候选，覆盖身份、核心规格、能效备案、使用条件或机制；证据不够的内容进入 unknowns。
 6. conflicts 只能包含同一身份、同一属性、不同值且都有直接证据的情况；没有就返回空数组。
+7. claimId 使用 C001 起的连续编号，conflictId 使用 X001 起的连续编号，unknownId 使用 U001 起的连续编号。
 
 输入证据：
 ${JSON.stringify(source)}`;

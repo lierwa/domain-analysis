@@ -1,7 +1,7 @@
-id: category-definition-cn-television-poc-v1
+id: category-definition-cn-television-poc-v2
 category_code: television
 label: 电视
-version: 0.1.0-poc
+version: 0.2.0-poc
 market: CN
 source_authority_policy:
   - brand_official_site
@@ -67,6 +67,41 @@ attributes:
     value_kind: decimal
     filterable: true
     comparable: true
+  - code: television.peak_brightness_nit
+    label: 峰值亮度
+    description: 品牌官方声明的峰值亮度；测试条件和营销口径必须随证据保留。
+    knowledge_layer: specification
+    value_kind: decimal
+    filterable: true
+    comparable: true
+  - code: television.color_gamut_dci_p3_percent
+    label: DCI-P3 色域覆盖率
+    description: 品牌官方按 DCI-P3 口径声明的色域百分比，不与其他色域标准直接混比。
+    knowledge_layer: specification
+    value_kind: decimal
+    filterable: true
+    comparable: true
+  - code: television.local_dimming
+    label: 分区控光
+    description: 通过分区背光独立调节明暗的功能；分区数量和控制算法分别保留证据。
+    knowledge_layer: mechanism
+    value_kind: text
+    filterable: true
+    comparable: true
+  - code: television.gaming_features
+    label: 游戏输入功能
+    description: HDMI、VRR、ALLM 等外接游戏设备能力及其官方限定条件。
+    knowledge_layer: function
+    value_kind: text
+    filterable: true
+    comparable: true
+  - code: decision.television_use_case_fit
+    label: 观看与游戏场景适配
+    description: 由有证据的显示、控光和输入能力组成场景建议，不把单个营销参数当作最终结论。
+    knowledge_layer: decision
+    value_kind: text
+    filterable: false
+    comparable: true
 decision_dimensions:
   - code: installation_fit
     label: 安装适配
@@ -82,12 +117,18 @@ decision_dimensions:
       - television.display_resolution
       - television.panel_technology
       - television.refresh_rate_hz
+      - television.peak_brightness_nit
+      - television.color_gamut_dci_p3_percent
+      - television.local_dimming
+      - decision.television_use_case_fit
   - code: device_connectivity
     label: 设备连接
     description: 根据外接设备数量和能力要求核对接口信息。
     related_attribute_codes:
       - television.hdmi_port_count
+      - television.gaming_features
 competency_questions:
   - 哪些型号满足给定安装空间和屏幕尺寸需求？
   - 两个型号在显示技术、刷新率和接口上有什么可追溯差异？
   - 某项营销术语对应哪些官方规格，哪些部分仍不能直接比较？
+  - 高刷、分区控光、峰值亮度和色域分别支撑什么场景，证据有哪些限定或文案异常？

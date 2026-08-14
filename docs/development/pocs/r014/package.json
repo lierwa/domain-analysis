@@ -8,6 +8,7 @@
   "scripts": {
     "extract": "node extract-deterministic.mjs",
     "run:codex": "node run-codex-candidates.mjs",
+    "verify:review": "node verify-review-gate.mjs",
     "test": "node --test *.test.mjs"
   },
   "dependencies": {
