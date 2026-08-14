@@ -80,7 +80,7 @@
 
 ## 7. 当前开发入口
 
-当前阶段和下一步以 `PROGRESS.md` 为准。固定 18 项产品问题已全部确认，阶段 1A～1D 全部通过。阶段 2 已接受 DBOS、Drizzle migration 和 SQLite/PostgreSQL 分工；Product/Pipeline typed contract、4 表新产品库和首份 migration 已通过 62 项根测试。当前直接实现 Product Module，淘宝仍登记为京东闭环后的下一来源。隔离 POC 依赖不得未经阶段收敛直接写入生产依赖。
+当前阶段和下一步以 `PROGRESS.md` 为准。固定 18 项产品问题已全部确认，阶段 1A～1D 全部通过。阶段 2 的 Product/Pipeline contract、独立产品库、Product Module、DBOS adapter 和真实 `SIGKILL` 恢复均已通过；根回归为 19 个文件、75 项测试。当前直接接 Workbench 基础页面；淘宝仍登记为京东闭环后的下一来源。
 
 ## 8. 历史文档处置
 

@@ -92,6 +92,8 @@
 
 结论：MVP 采用 DBOS，领域通过 Pipeline port 隔离；`workflowID` 使用冻结输入身份作为幂等键。DBOS 系统库只作执行历史事实源，Workbench 数据库处置继续进入 R-004，不自行双写。官方资料：https://docs.dbos.dev/typescript/tutorials/workflow-tutorial 、https://docs.dbos.dev/typescript/tutorials/workflow-management 、https://docs.dbos.dev/typescript/tutorials/workflow-communication 、https://docs.temporal.io/develop/typescript/workflows/message-passing 。
 
+阶段 2 正式化证据：生产 workspace 精确锁定 `@dbos-inc/dbos-sdk@4.25.14`；真实 PostgreSQL 上的暂停/恢复、人工消息、取消、同 ID 幂等、自动重试和显式阶段重试 3/3 通过。官方 `resumeWorkflow` 不清除已持久化失败 step，因此显式阶段重试采用 `forkWorkflow(startStep)` 并保留旧运行；未新增本地重试表。独立子进程在等待人工时被 `SIGKILL`，新进程恢复后 6 个阶段各执行一次且已提交资料哈希不变。该证据关闭 R-002 的生产 adapter 风险，不改变 ADR-0007 选型。
+
 ### R-003 知识包结构化存储与全文检索
 
 状态：已接受（SQLite＋FTS5 单文件；见 ADR-0006 和 R-015）
@@ -410,6 +412,18 @@ R-008 已完成文档与隔离能力门，并支撑 Q003/Q004 的方向确认；
 
 ### R-014 混乱资料加工与证据化候选知识
 状态：已接受（隔离 POC 通过）；目标阶段 1B；主体隔离、受控冲突、稳定审核 ID、真实 Codex 候选和未经审核禁止发布均已验证，证据见 `pocs/r014/README.md`。
+
+### R-019 商品输入的稳定内容指纹
+
+状态：已接受（`canonicalize@3.0.0`）；目标阶段：2
+
+问题：品类定义、确认范围和搜集板需要跨版本比较内容，普通 `JSON.stringify` 会让对象字段顺序影响哈希；项目不得自研 JSON 规范化算法。
+
+调研与依据：RFC 8785 定义 JSON Canonicalization Scheme，并在 Appendix G 列出 JavaScript 开源实现 `canonicalize`。npm 当前版本 `3.0.0`，Apache-2.0，内置 TypeScript 声明且无运行时依赖。官方资料：https://www.rfc-editor.org/rfc/rfc8785.html 、https://www.npmjs.com/package/canonicalize 。
+
+验证结果：Product Module 在共享 Zod 契约通过后用该库规范化，再计算 Node `crypto` SHA-256；相同内容跨两个数据库版本的三份哈希全部一致。临时 SQLite 集成测试同时证明项目和三份版本输入在插入冲突时整笔回滚。
+
+结论：接受 `canonicalize@3.0.0`，不实现自定义 key 排序、序列化或哈希协议。该库只封装在 Project Module 内，未来替换不会改变外部 interface 或数据库字段。
 
 ## 5. 新调研条目模板
 

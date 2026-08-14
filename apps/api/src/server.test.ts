@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import type { ProductKnowledgeWorkbench } from "@domain-analysis/workbench";
+import { describe, expect, it, vi } from "vitest";
 import { buildServer } from "./server";
 
 describe("api server", () => {
@@ -27,5 +28,15 @@ describe("api server", () => {
     expect(response.statusCode).toBe(400);
 
     await app.close();
+  });
+
+  it("closes the product workbench with the API lifecycle", async () => {
+    const close = vi.fn();
+    const workbench = { close } as unknown as ProductKnowledgeWorkbench;
+    const app = await buildServer({ logger: false, workbench });
+
+    await app.close();
+
+    expect(close).toHaveBeenCalledOnce();
   });
 });

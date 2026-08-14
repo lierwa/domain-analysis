@@ -1,6 +1,7 @@
 import cors from "@fastify/cors";
 import Fastify, { type FastifyServerOptions } from "fastify";
 import { createDb, type AppDb } from "@domain-analysis/db";
+import type { ProductKnowledgeWorkbench } from "@domain-analysis/workbench";
 import { registerHealthRoutes } from "./routes/health";
 import { registerModuleRoutes } from "./routes/modules";
 import { registerAnalysisRoutes } from "./routes/analysisRoutes";
@@ -9,6 +10,7 @@ import { registerAnalysisRoutes } from "./routes/analysisRoutes";
 
 export interface BuildServerOptions extends FastifyServerOptions {
   db?: AppDb;
+  workbench?: ProductKnowledgeWorkbench;
 }
 
 export async function buildServer(options: BuildServerOptions = {}) {
@@ -16,6 +18,10 @@ export async function buildServer(options: BuildServerOptions = {}) {
     logger: options.logger ?? true
   });
   const db = options.db ?? createDb();
+
+  if (options.workbench) {
+    app.addHook("onClose", async () => options.workbench!.close());
+  }
 
   await app.register(cors, {
     origin: true

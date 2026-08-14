@@ -3,8 +3,8 @@
 这是当前阶段、已验证事实、阻塞项和下一步的单一权威来源。
 
 更新日期：2026-08-14
-当前阶段：阶段 2——项目与可恢复流水线骨架（typed contract 与新产品库 migration 已完成，进入 Product Module）
-总体状态：阶段 0、1A～1D 全部完成；DBOS、数据库边界、Product/Pipeline contract 和 4 表新产品库已通过；下一步实现草稿保存/确认的深 Product Module
+当前阶段：阶段 2——项目与可恢复流水线骨架（DBOS adapter 与强杀恢复已完成，进入 Workbench 基础页面）
+总体状态：阶段 0、1A～1D 全部完成；项目、独立产品库、持久流水线和真实恢复均已通过；下一步接 Product HTTP adapter 与基础页面
 
 ## 1. 当前 Git 与环境基线
 
@@ -134,10 +134,9 @@ R-010/R-011 已完成产品口径调查和隔离验证：覆盖总体拆成合�
 
 ## 6. 下一步唯一执行顺序
 
-1. 实现深 Product Module：调用者提交完整草稿，module 内部用 RFC 8785 开源实现生成哈希、分配版本并原子保存/确认；不暴露四张表的 CRUD。
-2. 把新产品库 migration 接入新的 Workbench 启动链；默认新文件路径，旧库保持不动，旧 `initializeDatabase()` 不再扩展。
-3. 实现薄 DBOS Pipeline adapter，用冻结输入身份作为 workflowID；不复制步骤历史、不自行实现队列/信号/恢复。
-4. 用不可变资料提交跑通最小连续运行并真实终止恢复；随后才接 Workbench 页面。淘宝仍不插入阶段 2 核心链路。
+1. 把 Product Module 接入薄 HTTP adapter 和 Workbench 基础页面，支持完整草稿保存、确认和读取；页面不逐表提交。
+2. 展示 Pipeline typed 状态和人工事项；没有真实阶段 handler 前不提供会启动空流水线的按钮。
+3. 完成阶段 2 页面验证后进入阶段 3 官方来源搜集板块。淘宝仍不插入当前核心链路。
 
 R-007 依赖治理已从当前执行顺序移出，未来必须作为独立、可回退的工作处理。阶段 2 按上述顺序连续推进，不以汇报、提交或推送作为停工点。下一次需要用户介入的正常节点是专用 Profile 登录失效、出现验证码、权限审批或会改变产品方向的决定，不再追加产品访谈问题。
 
@@ -373,6 +372,32 @@ R-007 依赖治理已从当前执行顺序移出，未来必须作为独立、�
 - 新产品库只建 4 张业务表，版本内容保存在严格 contract 下的 JSON 列；没有 Pipeline/TaskAttempt 复制表。Drizzle 正式 migration 已生成到 `drizzle/product-knowledge/`，默认新文件 `data/product-knowledge-workbench.sqlite`。
 - 新增 contract/migration 测试 10/10；`npm ci` 从锁文件干净恢复成功。根全量现为 15 文件/62 测试，五 workspace typecheck 和 build 全通过。
 - 架构影响：澄清。`codebase-design` 使 SQLite 作为 module 内部本地依赖直接用临时库测试，没有新增假想 DatabasePort；下一步进入 Product Module，不等待额外确认。
+
+### 2026-08-14 Product Module
+
+- 新增 `@domain-analysis/workbench`，外部只暴露 `saveDraft / confirm / get`；调用者提交完整草稿，不接触 4 张表的 CRUD。
+- module 内部用 `canonicalize@3.0.0` 按 RFC 8785 规范化内容，再生成 SHA-256；相同语义内容跨版本保持同一指纹，没有自研 JSON 规范化算法。
+- 项目、品类定义、确认范围和搜集板在一个 Drizzle 事务内保存或确认；乐观 revision 冲突、读取时严格契约复验和数据库 `null` 边界均在 module 内收敛。
+- 真实临时 SQLite 集成测试 6/6 通过，覆盖保存/确认/读取、稳定哈希、旧版本 supersede、并发旧 revision 拒绝、整笔回滚和 typed not-found。
+- 根全量回归通过：16 个测试文件、68 项测试；6 个 workspace typecheck 和 build 全部通过，Web 生产构建完成。生产依赖审计仍为历史 23 项，新增无依赖的 `canonicalize` 未增加生产风险项。
+- 架构影响：澄清。Project Module 已成为深 module，版本、哈希、事务和表结构全部隐藏；下一步直接接新产品库 Workbench 启动链，不等待提交或汇报确认。
+
+### 2026-08-14 Workbench 新产品库启动链
+
+- 新增 `openProductKnowledgeWorkbench()` 组合根：先运行 Drizzle 官方 migrator，再暴露 Product Module；数据库 client 随 Fastify `onClose` 生命周期关闭。
+- API 配置新增独立 `PRODUCT_KNOWLEDGE_DATABASE_URL`，默认指向 `data/product-knowledge-workbench.sqlite`；旧 `DATABASE_URL` 和 `initializeDatabase()` 未修改、未扩表。
+- 重启集成测试通过：首次启动保存电视项目，关闭并重复 migration 后仍能读取；证明新库不是一次性测试对象。
+- 真实 API 启动通过：`/health` 返回 200；临时旧库保留原 9 张表，新产品库独立生成 4 张业务表和 `__drizzle_migrations`。第一次沙箱内启动被 `tsx` IPC 权限拒绝，按权限边界在沙箱外原命令复验成功。
+- 架构影响：澄清。两库隔离和 migration 入口从设计变为真实启动事实；下一步直接实现 DBOS Pipeline adapter。
+
+### 2026-08-14 DBOS Pipeline adapter 与进程恢复
+
+- Workbench 精确锁定已在 R-017 验证的 `@dbos-inc/dbos-sdk@4.25.14`；外部仍只见 `start / command / get`，DBOS workflow、step、message 和 PostgreSQL 类型没有进入共享 contract。
+- 冻结输入经 RFC 8785 规范化后生成稳定 `workflowID`；6 个业务 handler 直接运行在 DBOS durable step 中。暂停/恢复和人工事项使用持久消息，取消使用官方管理 API，业务 SQLite 没有新增 Pipeline/Task 表。
+- 真实 PostgreSQL 集成测试 3/3 通过：暂停/恢复/人工处理、同输入幂等、取消、三次自动重试和显式失败阶段重试。DBOS 已持久化的失败 step 不用 `resumeWorkflow` 假覆盖；按官方 `forkWorkflow(startStep)` 保留旧失败运行，新运行记录 `forkedFromRunId`。
+- `SIGKILL` 恢复测试通过：首进程提交不可变资料并进入人工审核后被强杀；第二进程连接同一 DBOS schema 后完成后续阶段，资料 SHA-256 不变，6 个阶段各执行一次。
+- 带真实 PostgreSQL 的根全量回归通过：19 个测试文件、75 项测试；6 个 workspace typecheck 和 build 全部通过。生产 audit 仍是历史 23 项，没有来自 `@dbos-inc/dbos-sdk` 或 `canonicalize` 的新增公告。
+- 架构影响：澄清。DBOS 执行历史事实源、人工消息、取消、恢复和 fork 重试已经从 POC 变成正式 adapter；下一步接 Workbench 基础页面，不等待提交或汇报确认。
 
 ## 8. 结束上下文更新模板
 

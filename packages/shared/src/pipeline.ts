@@ -75,6 +75,7 @@ export const pipelineInterventionSchema = z.object({
 export const pipelineRunViewSchema = z.object({
   id: idSchema,
   workflowId: idSchema,
+  forkedFromRunId: idSchema.optional(),
   input: frozenPipelineInputSchema,
   lifecycleStatus: z.enum(pipelineLifecycleStatuses),
   currentStage: z.enum(pipelineStages).optional(),

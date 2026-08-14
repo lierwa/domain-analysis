@@ -51,6 +51,16 @@ export const decisionDimensionSchema = z.object({
   relatedAttributeCodes: z.array(z.string().min(1)).min(1),
 }).strict();
 
+const categoryDefinitionContentObjectSchema = z.object({
+  sourceAuthorityPolicy: z.array(z.enum(sourceAuthorityTypes)).min(1),
+  attributes: z.array(categoryAttributeSchema).min(1),
+  decisionDimensions: z.array(decisionDimensionSchema).min(1),
+  competencyQuestions: z.array(z.string().min(1).max(500)).min(1),
+}).strict();
+
+export const categoryDefinitionContentSchema = categoryDefinitionContentObjectSchema
+  .superRefine(validateDefinitionContent);
+
 export const categoryDefinitionVersionSchema = z.object({
   id: idSchema,
   projectId: idSchema,
@@ -59,14 +69,18 @@ export const categoryDefinitionVersionSchema = z.object({
   market: z.string().min(2).max(64),
   version: versionSchema,
   status: z.enum(versionStatuses),
-  sourceAuthorityPolicy: z.array(z.enum(sourceAuthorityTypes)).min(1),
-  attributes: z.array(categoryAttributeSchema).min(1),
-  decisionDimensions: z.array(decisionDimensionSchema).min(1),
-  competencyQuestions: z.array(z.string().min(1).max(500)).min(1),
   contentHash: sha256Schema,
   createdAt: isoDateSchema,
   confirmedAt: isoDateSchema.optional(),
-}).strict().superRefine((definition, context) => {
+}).merge(categoryDefinitionContentObjectSchema).strict().superRefine((definition, context) => {
+  validateDefinitionContent(definition, context);
+  requireConfirmedAt(definition, context);
+});
+
+function validateDefinitionContent(
+  definition: z.infer<typeof categoryDefinitionContentObjectSchema>,
+  context: z.RefinementCtx,
+) {
   const attributeCodes = new Set(definition.attributes.map((attribute) => attribute.code));
   const duplicateCount = definition.attributes.length - attributeCodes.size;
   if (duplicateCount > 0) {
@@ -83,8 +97,7 @@ export const categoryDefinitionVersionSchema = z.object({
       }
     }
   }
-  requireConfirmedAt(definition, context);
-});
+}
 
 export const scopeTargetSchema = z.object({
   key: z.string().min(1).max(200),
@@ -96,6 +109,15 @@ export const scopeTargetSchema = z.object({
   reason: z.string().min(1).max(1000),
 }).strict();
 
+export const confirmedScopeContentSchema = z.object({
+  populationLayers: z.array(z.enum([
+    "regulatory_registry",
+    "official_current_catalog",
+    "licensed_market_priority",
+  ])).min(1),
+  targets: z.array(scopeTargetSchema).min(1),
+}).strict();
+
 export const confirmedScopeVersionSchema = z.object({
   id: idSchema,
   projectId: idSchema,
@@ -103,16 +125,10 @@ export const confirmedScopeVersionSchema = z.object({
   market: z.string().min(2).max(64),
   version: versionSchema,
   status: z.enum(versionStatuses),
-  populationLayers: z.array(z.enum([
-    "regulatory_registry",
-    "official_current_catalog",
-    "licensed_market_priority",
-  ])).min(1),
-  targets: z.array(scopeTargetSchema).min(1),
   contentHash: sha256Schema,
   createdAt: isoDateSchema,
   confirmedAt: isoDateSchema.optional(),
-}).strict().superRefine((scope, context) => {
+}).merge(confirmedScopeContentSchema).strict().superRefine((scope, context) => {
   requireConfirmedAt(scope, context);
   const keys = scope.targets.map((target) => target.key);
   if (new Set(keys).size !== keys.length) {
@@ -136,17 +152,20 @@ export const collectionLaneSchema = z.object({
   ])).min(1),
 }).strict();
 
+export const collectionBoardContentSchema = z.object({
+  lanes: z.array(collectionLaneSchema).min(1),
+}).strict();
+
 export const collectionBoardVersionSchema = z.object({
   id: idSchema,
   projectId: idSchema,
   confirmedScopeVersionId: idSchema,
   version: versionSchema,
   status: z.enum(versionStatuses),
-  lanes: z.array(collectionLaneSchema).min(1),
   contentHash: sha256Schema,
   createdAt: isoDateSchema,
   confirmedAt: isoDateSchema.optional(),
-}).strict().superRefine(requireConfirmedAt);
+}).merge(collectionBoardContentSchema).strict().superRefine(requireConfirmedAt);
 
 export const productKnowledgeProjectSchema = z.object({
   id: idSchema,
@@ -158,6 +177,26 @@ export const productKnowledgeProjectSchema = z.object({
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema,
 }).strict();
+
+export const productProjectDraftInputSchema = z.object({
+  projectId: idSchema.optional(),
+  expectedRevision: z.number().int().positive().optional(),
+  name: z.string().min(1).max(160),
+  knowledgeTopic: z.string().min(1).max(500),
+  market: z.string().min(2).max(64),
+  categoryDefinition: z.object({
+    categoryCode: z.string().regex(/^[a-z][a-z0-9_-]+$/),
+    label: z.string().min(1).max(120),
+  }).merge(categoryDefinitionContentObjectSchema).strict(),
+  confirmedScope: confirmedScopeContentSchema,
+  collectionBoard: collectionBoardContentSchema,
+}).strict().superRefine((draft, context) => {
+  if (Boolean(draft.projectId) !== Boolean(draft.expectedRevision)) {
+    context.addIssue({ code: "custom", message: "更新草稿必须同时提供 projectId 和 expectedRevision" });
+  }
+  validateDefinitionContent(draft.categoryDefinition, context);
+  validateCollectionLanes(draft.categoryDefinition, draft.confirmedScope, draft.collectionBoard, context);
+});
 
 export const confirmedProjectSnapshotSchema = z.object({
   project: productKnowledgeProjectSchema.extend({ status: z.literal("ready") }),
@@ -183,16 +222,29 @@ export const confirmedProjectSnapshotSchema = z.object({
   const targetKeys = new Set(snapshot.confirmedScope.targets
     .filter((target) => target.disposition === "included")
     .map((target) => target.key));
-  const allowedSources = new Set(snapshot.categoryDefinition.sourceAuthorityPolicy);
-  for (const [index, lane] of snapshot.collectionBoard.lanes.entries()) {
-    if (lane.targetKeys.some((key) => !targetKeys.has(key))) {
+  validateCollectionLanes(snapshot.categoryDefinition, snapshot.confirmedScope,
+    snapshot.collectionBoard, context, targetKeys);
+});
+
+function validateCollectionLanes(
+  definition: { sourceAuthorityPolicy: readonly string[] },
+  scope: { targets: Array<{ key: string; disposition: string }> },
+  board: { lanes: Array<{ targetKeys: string[]; sourceAuthorityType: string }> },
+  context: z.RefinementCtx,
+  includedTargetKeys = new Set(scope.targets
+    .filter((target) => target.disposition === "included")
+    .map((target) => target.key)),
+) {
+  const allowedSources = new Set(definition.sourceAuthorityPolicy);
+  for (const [index, lane] of board.lanes.entries()) {
+    if (lane.targetKeys.some((key) => !includedTargetKeys.has(key))) {
       context.addIssue({ code: "custom", path: ["collectionBoard", "lanes", index], message: "搜集板引用了未纳入范围的目标" });
     }
     if (!allowedSources.has(lane.sourceAuthorityType)) {
       context.addIssue({ code: "custom", path: ["collectionBoard", "lanes", index], message: "搜集板使用了品类策略外来源" });
     }
   }
-});
+}
 
 function requireConfirmedAt(
   value: { status: (typeof versionStatuses)[number]; confirmedAt?: string },
@@ -208,7 +260,7 @@ export type CategoryDefinitionVersion = z.infer<typeof categoryDefinitionVersion
 export type ConfirmedScopeVersion = z.infer<typeof confirmedScopeVersionSchema>;
 export type CollectionBoardVersion = z.infer<typeof collectionBoardVersionSchema>;
 export type ConfirmedProjectSnapshot = z.infer<typeof confirmedProjectSnapshotSchema>;
-export type CategoryDefinitionContent = Pick<CategoryDefinitionVersion,
-  "sourceAuthorityPolicy" | "attributes" | "decisionDimensions" | "competencyQuestions">;
-export type ConfirmedScopeContent = Pick<ConfirmedScopeVersion, "populationLayers" | "targets">;
-export type CollectionBoardContent = Pick<CollectionBoardVersion, "lanes">;
+export type CategoryDefinitionContent = z.infer<typeof categoryDefinitionContentSchema>;
+export type ConfirmedScopeContent = z.infer<typeof confirmedScopeContentSchema>;
+export type CollectionBoardContent = z.infer<typeof collectionBoardContentSchema>;
+export type ProductProjectDraftInput = z.infer<typeof productProjectDraftInputSchema>;

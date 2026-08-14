@@ -77,7 +77,7 @@ flowchart LR
 - 可恢复的多阶段知识生产流水线；
 - 规则、Codex 和人工审核闭环；
 - Codex SDK 知识加工 adapter 及其业务 contract、超时、取消和失败恢复；
-- 稳定商品知识 Schema 与数据化品类定义；
+- 数据化品类定义的完整编辑和审核页面；
 - 知识包构建、校验、发布和版本生命周期；
 - 独立 Runtime 和 Agent 查询演示。
 
@@ -113,11 +113,13 @@ flowchart LR
 
 负责商品知识项目、品类知识定义、用途说明和已确认范围的版本生命周期。
 
-外部 interface 只暴露创建、修订、确认、归档和读取已冻结版本；不暴露数据库表或页面表单形状。
+阶段 2 已实现的外部 interface 只暴露 `saveDraft / confirm / get`；归档在出现真实产品入口时再补，不提前扩大接口。调用者提交完整草稿，不暴露数据库表、逐表 CRUD 或页面表单形状。
 
 `ProductKnowledgeModel` 是所有商品共用的稳定领域语义；`CategoryKnowledgeDefinition` 是版本化数据。新增品类不得要求修改领域 interface、迁移数据库或增加品类子类。
 
 阶段 2 的共享 contract 把项目、品类定义、确认范围和搜集板组合为一个可校验冻结快照，跨对象引用、市场和来源策略在 module interface 处一次校验。物理库只含 4 张版本业务表；调用者不能逐表拼装“已确认”状态。
+
+Project Module 直接使用本地可替代的 Drizzle/SQLite，不增加只有一个实现的 `DatabasePort`。内部用 RFC 8785 `canonicalize` 生成稳定内容指纹，并在一个事务内完成项目与三份输入版本的保存或确认；版本分配、乐观并发、旧版本替代和数据库空值差异均不泄漏给调用者。
 
 ### 5.2 Pipeline Module
 
@@ -130,7 +132,9 @@ flowchart LR
 - 查询运行、阶段、任务尝试和待人工事项；
 - 返回 typed 状态，不要求调用方理解内部编排器。
 
-编排器是该 module 的实现细节。MVP adapter 使用 DBOS Transact；`workflowID` 由冻结输入身份确定，直接复用其持久步骤、消息、取消、恢复、重试和历史 API，不自建队列或事件日志。DBOS 类型和状态不得穿透 Pipeline interface，见 ADR-0007。
+编排器是该 module 的实现细节。正式 adapter 精确锁定 DBOS Transact 4.25.14；`workflowID` 由冻结输入身份确定，6 个业务阶段直接进入 durable step，暂停/恢复和人工事项使用持久消息，取消使用管理 API。最新领域视图保存在 DBOS workflow event 中，业务 SQLite 不复制步骤日志。
+
+已持久化失败 step 的显式重试使用 DBOS 官方 `forkWorkflow(startStep)`：旧失败运行不可变保留，新运行暴露 `forkedFromRunId`。不得用本地映射、覆盖历史或把 `resumeWorkflow` 伪装成失败 step 重试。DBOS 类型和状态不得穿透 Pipeline interface，见 ADR-0007。
 
 ### 5.3 Acquisition Module
 
@@ -205,6 +209,8 @@ MVP 的只读存储 adapter 使用 SQLite＋FTS5 单文件。包构建后以 SHA
 
 DBOS PostgreSQL 系统库是流水线执行历史的事实源，Workbench 只通过 Pipeline adapter 读取和投影领域状态，不读取系统表或维护第二套步骤日志。R-018 已决定其余业务表继续 Drizzle＋SQLite/libSQL；新产品库使用新文件和正式 migration，旧产品库不覆盖、不自动 baseline。两个存储禁止双写执行历史，见 ADR-0008。
 
+`openProductKnowledgeWorkbench()` 是新产品业务库的组合根：API 启动时先对独立路径运行 Drizzle migrator，再创建 Project Module；Fastify 关闭时一并关闭 libSQL client。旧 `initializeDatabase()` 只服务旧产品兼容入口，不得扩展新表。
+
 ### 7.2 原始资料区
 
 保存 HTML、JSON、图片、截图、响应摘要和来源上下文。采用不可变快照；控制库保存身份、路径、哈希、时间和状态。
@@ -251,4 +257,4 @@ DBOS PostgreSQL 系统库是流水线执行历史的事实源，Workbench 只通
 3. 无模型、无网络条件下的知识包复制、查询、证据查看和版本回滚；
 4. 冰箱与第二商品品类小样本共用同一生产 Schema、数据库结构、Provider contract、Runtime API 和通用流水线；切换只提交版本化品类数据与验收数据。
 
-R-001/R-014/R-015/R-016 分别提供验证证据。Workbench 业务数据库 migration、正式 Pipeline interface 和 UI contract 仍须在阶段 2 收敛；未完成项不能反向推翻已验证的品类数据化和 Runtime 边界。
+R-001/R-014/R-015/R-016 分别提供验证证据。Workbench 业务数据库 migration、正式 Product/Pipeline interface 和 DBOS 强杀恢复已在阶段 2 收敛；基础 UI contract 仍未完成，不能反向推翻已验证的品类数据化和 Runtime 边界。

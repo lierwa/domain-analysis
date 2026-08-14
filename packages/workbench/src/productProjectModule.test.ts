@@ -1,0 +1,185 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import {
+  categoryDefinitionVersions,
+  createProductKnowledgeDb,
+  migrateProductKnowledgeDatabase,
+} from "@domain-analysis/db";
+import type { ProductProjectDraftInput } from "@domain-analysis/shared";
+import { eq } from "drizzle-orm";
+import { describe, expect, it } from "vitest";
+
+import {
+  createProductProjectModule,
+  ProductProjectError,
+} from "./productProjectModule";
+
+describe("ProductProjectModule", () => {
+  it("atomically saves, confirms and reads a complete project version", async () => {
+    const db = await temporaryDatabase();
+    const module = createProductProjectModule(db, deterministicOptions());
+
+    const draft = await module.saveDraft(createDraft());
+    expect(draft.project).toMatchObject({ id: "project-1", revision: 1, status: "draft" });
+    expect(draft.categoryDefinition.contentHash).toMatch(/^[a-f0-9]{64}$/);
+
+    const confirmed = await module.confirm(draft.project.id, draft.project.revision);
+    expect(confirmed.project.status).toBe("ready");
+    expect(confirmed.categoryDefinition.status).toBe("confirmed");
+
+    const reloaded = await module.get(draft.project.id);
+    expect(reloaded).toEqual(confirmed);
+    expect("content" in reloaded!.categoryDefinition).toBe(false);
+  });
+
+  it("preserves project creation time and stable content hashes across revisions", async () => {
+    const db = await temporaryDatabase();
+    const options = deterministicOptions([
+      "2026-08-14T01:00:00.000Z",
+      "2026-08-14T02:00:00.000Z",
+    ]);
+    const module = createProductProjectModule(db, options);
+    const first = await module.saveDraft(createDraft());
+    const second = await module.saveDraft({
+      ...createDraft(),
+      projectId: first.project.id,
+      expectedRevision: first.project.revision,
+    });
+
+    expect(second.project).toMatchObject({
+      revision: 2,
+      createdAt: "2026-08-14T01:00:00.000Z",
+      updatedAt: "2026-08-14T02:00:00.000Z",
+    });
+    expect(second.categoryDefinition.contentHash).toBe(first.categoryDefinition.contentHash);
+    expect(second.confirmedScope.contentHash).toBe(first.confirmedScope.contentHash);
+    expect(second.collectionBoard.contentHash).toBe(first.collectionBoard.contentHash);
+
+    const oldDefinition = await db.query.categoryDefinitionVersions.findFirst({
+      where: eq(categoryDefinitionVersions.id, first.categoryDefinition.id),
+    });
+    expect(oldDefinition?.status).toBe("superseded");
+  });
+
+  it("rejects stale revisions without overwriting the current project", async () => {
+    const db = await temporaryDatabase();
+    const module = createProductProjectModule(db, deterministicOptions());
+    const first = await module.saveDraft(createDraft());
+    await module.saveDraft({
+      ...createDraft(),
+      projectId: first.project.id,
+      expectedRevision: 1,
+      name: "冰箱知识项目 v2",
+    });
+
+    await expect(module.saveDraft({
+      ...createDraft(),
+      projectId: first.project.id,
+      expectedRevision: 1,
+      name: "过期写入",
+    })).rejects.toMatchObject({ code: "revision_conflict" });
+    expect((await module.get(first.project.id))?.project.name).toBe("冰箱知识项目 v2");
+  });
+
+  it("validates the whole collection board before writing", async () => {
+    const db = await temporaryDatabase();
+    const module = createProductProjectModule(db, deterministicOptions());
+    const invalid = createDraft();
+    invalid.collectionBoard.lanes[0]!.targetKeys = ["brand:not-in-scope"];
+
+    await expect(module.saveDraft(invalid)).rejects.toThrow("搜集板引用了未纳入范围的目标");
+    expect(await module.get("project-1")).toBeNull();
+  });
+
+  it("rolls back the project when a version insert fails", async () => {
+    const db = await temporaryDatabase();
+    const first = createProductProjectModule(db, deterministicOptions());
+    await first.saveDraft(createDraft());
+    const conflicting = createProductProjectModule(db, {
+      now: () => new Date("2026-08-14T03:00:00.000Z"),
+      createId: (kind) => kind === "project" ? "project-2" : `${kind}-1`,
+    });
+
+    await expect(conflicting.saveDraft({ ...createDraft(), name: "第二个项目" })).rejects.toThrow();
+    expect(await conflicting.get("project-2")).toBeNull();
+  });
+
+  it("returns a typed not-found error when confirming a missing project", async () => {
+    const db = await temporaryDatabase();
+    const module = createProductProjectModule(db, deterministicOptions());
+
+    await expect(module.confirm("missing", 1)).rejects.toBeInstanceOf(ProductProjectError);
+    await expect(module.confirm("missing", 1)).rejects.toMatchObject({ code: "not_found" });
+  });
+});
+
+function createDraft(): ProductProjectDraftInput {
+  return {
+    name: "冰箱知识项目",
+    knowledgeTopic: "中国市场冰箱专业导购知识",
+    market: "CN",
+    categoryDefinition: {
+      categoryCode: "refrigerator",
+      label: "冰箱",
+      sourceAuthorityPolicy: ["brand_official_site", "brand_flagship_store"],
+      attributes: [{
+        code: "capacity.total",
+        label: "总容积",
+        description: "产品标称总容积",
+        knowledgeLayer: "specification",
+        valueKind: "decimal",
+        canonicalUnitCode: "L",
+        externalMappings: [],
+        filterable: true,
+        comparable: true,
+      }],
+      decisionDimensions: [{
+        code: "household.capacity",
+        label: "家庭容量适配",
+        description: "按家庭人数判断容量是否适合",
+        relatedAttributeCodes: ["capacity.total"],
+      }],
+      competencyQuestions: ["三口之家需要多大容量？"],
+    },
+    confirmedScope: {
+      populationLayers: ["official_current_catalog"],
+      targets: [{
+        key: "brand:haier",
+        kind: "brand",
+        label: "海尔",
+        evidenceReferenceIds: ["evidence-1"],
+        disposition: "included",
+        reason: "官方在售主流品牌",
+      }],
+    },
+    collectionBoard: {
+      lanes: [{
+        id: "lane-official-site",
+        sourceAuthorityType: "brand_official_site",
+        accessMode: "public_web",
+        targetKeys: ["brand:haier"],
+        knowledgeLayers: ["identity", "specification"],
+        refreshPolicy: "weekly",
+        stopConditions: ["login_required", "verification_required"],
+      }],
+    },
+  };
+}
+
+function deterministicOptions(timestamps = ["2026-08-14T01:00:00.000Z"]) {
+  const counters = { project: 0, definition: 0, scope: 0, board: 0 };
+  let timeIndex = 0;
+  return {
+    now: () => new Date(timestamps[Math.min(timeIndex++, timestamps.length - 1)]!),
+    createId: (kind: keyof typeof counters) => `${kind}-${++counters[kind]}`,
+  };
+}
+
+async function temporaryDatabase() {
+  const directory = await mkdtemp(path.join(tmpdir(), "product-project-module-"));
+  const databaseUrl = `file:${path.join(directory, "database.sqlite")}`;
+  await migrateProductKnowledgeDatabase(databaseUrl);
+  return createProductKnowledgeDb(databaseUrl);
+}
