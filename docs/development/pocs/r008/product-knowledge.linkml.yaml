@@ -1,0 +1,492 @@
+id: https://domain-analysis.local/schema/product-knowledge-poc
+name: product_knowledge_poc
+title: 数据驱动商品知识模型隔离原型
+description: >-
+  用于验证一套商品知识模型能否同时承载多个品类的数据定义与用途访谈。
+  品类切换只更换版本化数据，不新增品类类或生产 Schema；该模型不是生产契约。
+license: https://www.apache.org/licenses/LICENSE-2.0
+version: 0.1.0-poc
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  schema: http://schema.org/
+  dap: https://domain-analysis.local/schema/
+
+default_prefix: dap
+default_range: string
+
+imports:
+  - linkml:types
+
+enums:
+  KnowledgePurpose:
+    description: 这份知识需要支持的业务用途，而不是模型或爬虫配置。
+    permissible_values:
+      shopping_comparison:
+        description: 比较多个候选商品的差异。
+      purchase_guidance:
+        description: 根据使用条件给出选购建议。
+      fact_lookup:
+        description: 查询型号、规格和来源事实。
+      change_tracking:
+        description: 识别价格、库存和页面状态变化。
+
+  FreshnessNeed:
+    description: 对价格、库存等时点信息的目标更新频率。
+    permissible_values:
+      snapshot:
+        description: 一次性研究快照。
+      monthly:
+        description: 按月更新时点信息。
+      weekly:
+        description: 按周更新时点信息。
+      daily:
+        description: 按日更新时点信息。
+
+  QualityRisk:
+    description: 用户可理解的质量风险等级；统计参数仍由验收策略计算。
+    permissible_values:
+      exploratory:
+        description: 用于探索和原型，不允许对外声明稳定质量。
+      balanced:
+        description: 用于 MVP 发布，需要代表性场景和可解释抽检。
+      strict:
+        description: 用于高风险发布，需要更严格的分层与统计保证。
+
+  ClaimStatus:
+    description: 属性结论从采集到人工确认过程中的可追溯状态。
+    permissible_values:
+      observed:
+        description: 来源直接给出且已定位证据。
+      transformed:
+        description: 由确定性规则转换且保留原值。
+      model_candidate:
+        description: Codex 生成、尚未通过发布门。
+      human_confirmed:
+        description: 人工确认且保留决定记录。
+      conflicting:
+        description: 多个证据无法自动消解。
+      unknown:
+        description: 当前资料不足，禁止编造。
+
+  AvailabilityStatus:
+    description: 某个销售要约在采集时点观察到的可售状态。
+    permissible_values:
+      in_stock:
+        description: 采集时点可售。
+      out_of_stock:
+        description: 采集时点缺货。
+      discontinued:
+        description: 页面明确表示已下架或停售。
+      unknown:
+        description: 当前证据不足以确定可售状态。
+
+  AttributeValueKind:
+    description: 商品属性值在通用知识模型中的数据类型。
+    permissible_values:
+      text:
+        description: 文本值。
+      decimal:
+        description: 带可选单位的数值。
+      boolean:
+        description: 布尔值。
+      enum:
+        description: 来自品类知识定义的受控枚举值。
+
+  KnowledgeLayer:
+    description: 属性在专业商品知识中的职责层次。
+    permissible_values:
+      identity:
+        description: 品牌、系列、型号和变体身份。
+      specification:
+        description: 可直接比较的规格参数。
+      function:
+        description: 商品具备的功能或能力。
+      mechanism:
+        description: 功能背后的技术原理或实现方式。
+      decision:
+        description: 将用户需求映射到筛选、比较或解释的知识。
+      commercial_observation:
+        description: 价格、库存等带时点的商业观察。
+
+  SourceAuthorityKind:
+    description: 首轮允许作为商品知识证据的官方来源类型。
+    permissible_values:
+      brand_official_site:
+        description: 品牌官方网站或官方产品资料。
+      official_direct_retail:
+        description: 平台官方自营渠道。
+      brand_flagship_store:
+        description: 经确认的品牌官方旗舰店。
+      official_manual:
+        description: 品牌官方说明书或技术文档。
+      regulatory_source:
+        description: 政府、监管或正式标准来源。
+
+classes:
+  KnowledgeUseBrief:
+    tree_root: true
+    description: 引导访谈形成的结构化用途说明；它选择知识重点，不定义字段或爬虫实现。
+    attributes:
+      id:
+        description: 本次用途说明的稳定标识。
+        identifier: true
+        required: true
+      product_knowledge_model_id:
+        description: 使用的稳定商品知识模型身份。
+        required: true
+      product_knowledge_model_version:
+        description: 使用的商品知识模型版本。
+        required: true
+      knowledge_topic:
+        description: 用户能直接表达的知识主题，例如京东冰箱。
+        required: true
+      category_definition_ref:
+        description: 系统选择并向用户说明的品类知识定义引用。
+        required: true
+      knowledge_purposes:
+        description: 知识需要支持的业务用途。
+        range: KnowledgePurpose
+        multivalued: true
+        required: true
+        minimum_cardinality: 1
+      source_platforms:
+        description: 允许访问的来源平台。
+        multivalued: true
+        required: true
+        minimum_cardinality: 1
+      competency_questions:
+        description: 知识包必须能回答的代表性问题。
+        multivalued: true
+        required: true
+        minimum_cardinality: 1
+      freshness_need:
+        description: 时点信息需要多频繁更新。
+        range: FreshnessNeed
+        required: true
+      quality_risk:
+        description: 用户选择的业务风险等级，不要求用户填写统计参数。
+        range: QualityRisk
+        required: true
+      unresolved_questions:
+        description: 系统无法替用户判断、必须保留为未解决的问题。
+        multivalued: true
+      created_at:
+        description: 用途说明被创建的时间。
+        range: datetime
+        required: true
+
+  CategoryAttributeDefinition:
+    description: 品类引用的属性字典项；它是版本化数据，不是数据库列或 TypeScript 类。
+    attributes:
+      code:
+        description: 跨品类可复用的稳定属性代码。
+        identifier: true
+        required: true
+      label:
+        description: 面向维护者展示的属性名称。
+        required: true
+      description:
+        description: 属性语义和边界说明。
+        required: true
+      knowledge_layer:
+        description: 属性在规格、功能、机制或决策知识中的职责。
+        range: KnowledgeLayer
+        required: true
+      value_kind:
+        description: 属性规范值的通用数据类型。
+        range: AttributeValueKind
+        required: true
+      canonical_unit_code:
+        description: 可选的 UN/CEFACT 等规范单位代码。
+      aliases:
+        description: 不同品牌或来源中的等价表达。
+        multivalued: true
+      allowed_values:
+        description: 枚举属性允许的规范值；非枚举属性保持空值。
+        multivalued: true
+      external_mappings:
+        description: Schema.org、ETIM 或其他已核准标准的外部映射。
+        multivalued: true
+      filterable:
+        description: 是否允许 Runtime 进行结构化条件筛选。
+        range: boolean
+        required: true
+      comparable:
+        description: 是否允许进入同类商品对比维度。
+        range: boolean
+        required: true
+
+  DecisionDimensionDefinition:
+    description: 导购流程中的需求或比较维度，引用属性字典而不写入工作流代码。
+    attributes:
+      code:
+        description: 决策维度稳定代码。
+        identifier: true
+        required: true
+      label:
+        description: 用户可理解的维度名称。
+        required: true
+      description:
+        description: 该维度解决的选购问题及边界。
+        required: true
+      related_attribute_codes:
+        description: 支撑筛选、比较或解释的属性代码。
+        multivalued: true
+        required: true
+        minimum_cardinality: 1
+
+  CategoryKnowledgeDefinition:
+    tree_root: true
+    description: 一个商品品类使用哪些共享属性和决策维度的版本化数据定义；切换品类不得修改通用 schema。
+    attributes:
+      id:
+        description: 品类知识定义的稳定标识。
+        identifier: true
+        required: true
+      category_code:
+        description: 商品品类稳定代码。
+        required: true
+      label:
+        description: 品类展示名称。
+        required: true
+      version:
+        description: 品类知识定义版本。
+        required: true
+      market:
+        description: 定义适用的市场范围。
+        required: true
+      source_authority_policy:
+        description: 允许进入事实层的官方来源类型。
+        range: SourceAuthorityKind
+        multivalued: true
+        required: true
+        minimum_cardinality: 1
+      attributes:
+        description: 从共享属性字典中选择或新增的品类属性定义。
+        range: CategoryAttributeDefinition
+        multivalued: true
+        inlined_as_list: true
+        required: true
+        minimum_cardinality: 1
+      decision_dimensions:
+        description: 下游专业导购可以使用的需求、解释和比较维度。
+        range: DecisionDimensionDefinition
+        multivalued: true
+        inlined_as_list: true
+        required: true
+        minimum_cardinality: 1
+      competency_questions:
+        description: 该品类知识包必须能够回答的代表性专业问题。
+        multivalued: true
+        required: true
+        minimum_cardinality: 1
+
+  SourceObject:
+    description: 外部来源中具有相对稳定身份的对象。
+    attributes:
+      id:
+        description: 来源对象的项目内稳定标识。
+        identifier: true
+        required: true
+      platform:
+        description: 来源平台标识。
+        required: true
+      authority_kind:
+        description: 来源必须符合品类知识定义声明的官方来源策略。
+        range: SourceAuthorityKind
+        required: true
+      external_id:
+        description: 来源平台提供或经规则确定的外部对象标识。
+        required: true
+      url:
+        description: 来源对象的规范 URL。
+        range: uri
+        required: true
+
+  EvidenceReference:
+    description: 将知识结论定位回不可变采集快照的引用。
+    attributes:
+      id:
+        description: 证据引用的稳定标识。
+        identifier: true
+        required: true
+      source_object_id:
+        description: 被引用的来源对象标识。
+        required: true
+      snapshot_id:
+        description: 不可变采集快照标识。
+        required: true
+      locator:
+        description: DOM、JSON、图片区域或其他可重放定位信息。
+        required: true
+      captured_at:
+        description: 证据被采集的时间。
+        range: datetime
+        required: true
+
+  AttributeClaim:
+    description: 带原值、标准值、状态和证据的属性结论。
+    attributes:
+      attribute_code:
+        description: 来自共享属性字典和品类知识定义的属性代码。
+        required: true
+      raw_value:
+        description: 来源中保留的原始值。
+        required: true
+      normalized_text:
+        description: 经过确定性规则规范化的文本值。
+      normalized_number:
+        description: 经过确定性规则规范化的数值。
+        range: decimal
+      unit_code:
+        description: 与规范化数值配套的单位代码。
+      status:
+        description: 当前属性结论的处理状态。
+        range: ClaimStatus
+        required: true
+      evidence_refs:
+        description: 支持该属性结论的证据引用。
+        range: EvidenceReference
+        multivalued: true
+        inlined_as_list: true
+        required: true
+        minimum_cardinality: 1
+
+  ProductKnowledgeClaim:
+    description: 关于商品功能、机制、适用条件或取舍的可追溯专业知识结论。
+    attributes:
+      id:
+        description: 知识结论稳定标识。
+        identifier: true
+        required: true
+      subject_id:
+        description: 结论所描述的型号、功能或其他知识对象标识。
+        required: true
+      predicate_code:
+        description: 来自共享知识词汇的稳定关系代码。
+        required: true
+      knowledge_layer:
+        description: 该结论属于功能、机制、决策或其他知识层。
+        range: KnowledgeLayer
+        required: true
+      statement:
+        description: 规范化后的专业结论，不得省略证据中的限定条件。
+        required: true
+      applicability_conditions:
+        description: 结论成立的型号、规格、市场、标准版本或使用条件。
+        multivalued: true
+      status:
+        description: 结论从观察到人工确认的可追溯状态。
+        range: ClaimStatus
+        required: true
+      evidence_refs:
+        description: 支持该专业结论的证据引用。
+        range: EvidenceReference
+        multivalued: true
+        inlined_as_list: true
+        required: true
+        minimum_cardinality: 1
+
+  ProductModel:
+    class_uri: schema:ProductModel
+    description: 厂商型号或型号规格说明，不等于某个平台上的销售要约。
+    attributes:
+      id:
+        description: 厂商型号的项目内稳定标识。
+        identifier: true
+        required: true
+      name:
+        description: 厂商型号的展示名称。
+        slot_uri: schema:name
+        required: true
+      brand:
+        description: 品牌名称或标识。
+        slot_uri: schema:brand
+        required: true
+      category_definition_id:
+        description: 解释该型号属性代码和决策维度的品类知识定义标识。
+        required: true
+      manufacturer_model_number:
+        description: 厂商给出的型号编号。
+        slot_uri: schema:mpn
+      gtins:
+        description: 可选的全球贸易项目代码集合。
+        slot_uri: schema:gtin
+        multivalued: true
+      etim_class_code:
+        description: 可选的 ETIM 产品类代码；未确定时保持空值。
+        pattern: ^EC[0-9]{6}$
+      attribute_claims:
+        description: 使用共享属性代码表达的可追溯参数结论。
+        range: AttributeClaim
+        multivalued: true
+        inlined_as_list: true
+      knowledge_claims:
+        description: 与该型号相关的功能、机制、适用条件和取舍结论。
+        range: ProductKnowledgeClaim
+        multivalued: true
+        inlined_as_list: true
+
+  Offer:
+    class_uri: schema:Offer
+    description: 某一来源平台在某个时间观察到的销售要约。
+    attributes:
+      id:
+        description: 销售要约的项目内稳定标识。
+        identifier: true
+        required: true
+      source_object_id:
+        description: 要约所对应的来源对象标识。
+        required: true
+      product_model_id:
+        description: 要约所指向的厂商型号标识。
+        required: true
+      seller:
+        description: 要约卖家。
+        slot_uri: schema:seller
+      sku:
+        description: 来源平台中的可售单元标识。
+        slot_uri: schema:sku
+      price:
+        description: 采集时点观察到的价格数值。
+        slot_uri: schema:price
+        range: decimal
+      currency:
+        description: ISO 4217 三字母货币代码。
+        slot_uri: schema:priceCurrency
+        pattern: ^[A-Z]{3}$
+      availability:
+        description: 采集时点观察到的可售状态。
+        slot_uri: schema:availability
+        range: AvailabilityStatus
+      observed_at:
+        description: 要约事实被观察到的时间。
+        range: datetime
+        required: true
+      evidence_refs:
+        description: 支持要约事实的证据引用。
+        range: EvidenceReference
+        multivalued: true
+        inlined_as_list: true
+        required: true
+        minimum_cardinality: 1
+
+  ProductKnowledgeDataset:
+    description: 商品知识数据集样例容器。
+    attributes:
+      category_definitions:
+        description: 数据集使用的版本化品类知识定义。
+        range: CategoryKnowledgeDefinition
+        multivalued: true
+        inlined_as_list: true
+      models:
+        description: 公共商品型号集合。
+        range: ProductModel
+        multivalued: true
+        inlined_as_list: true
+      offers:
+        description: 与型号分离的时点销售要约集合。
+        range: Offer
+        multivalued: true
+        inlined_as_list: true

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@domain-analysis/shared": "0.1.0",
+    "@openai/codex-sdk": "0.147.0",
     "crawlee": "^3.16.0",
     "p-queue": "^8.0.1"
   }

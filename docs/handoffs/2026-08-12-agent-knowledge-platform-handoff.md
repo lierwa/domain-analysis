@@ -1,5 +1,7 @@
 # Agent 知识生产平台接续开发交接
 
+> 历史快照：本文记录 2026-08-12 的原始交接，不再作为当前需求和执行入口。固定品牌/型号数量、固定准确率、普通第三方来源、单品类模板和京东普通账号网页自动化均已被后续决定取代；京东来源边界以 R-001 与 ADR-0003 为准。继续开发必须先读 `docs/development/PROGRESS.md`、`REQUIREMENTS-ALIGNMENT.md` 和 `RESEARCH.md`，不得从本文恢复旧门槛。
+
 日期：2026-08-12
 目标仓库：`/Users/guojunxi/Desktop/work/domain-analysis`
 当前远程：`https://github.com/lierwa/domain-analysis.git`

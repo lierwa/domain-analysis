@@ -1,0 +1,93 @@
+id: category-definition-cn-television-poc-v1
+category_code: television
+label: 电视
+version: 0.1.0-poc
+market: CN
+source_authority_policy:
+  - brand_official_site
+  - official_direct_retail
+  - brand_flagship_store
+  - official_manual
+  - regulatory_source
+attributes:
+  - code: product.width_mm
+    label: 宽度
+    description: 商品机身宽度，不包含未明确声明的底座或安装预留空间。
+    knowledge_layer: specification
+    value_kind: decimal
+    canonical_unit_code: MMT
+    external_mappings:
+      - schema:width
+    filterable: true
+    comparable: true
+  - code: product.height_mm
+    label: 高度
+    description: 商品机身高度，底座状态必须由证据限定。
+    knowledge_layer: specification
+    value_kind: decimal
+    canonical_unit_code: MMT
+    external_mappings:
+      - schema:height
+    filterable: true
+    comparable: true
+  - code: television.screen_size_inch
+    label: 屏幕尺寸
+    description: 官方资料声明的屏幕对角线尺寸。
+    knowledge_layer: specification
+    value_kind: decimal
+    canonical_unit_code: INH
+    filterable: true
+    comparable: true
+  - code: television.display_resolution
+    label: 显示分辨率
+    description: 官方资料声明的物理或标称显示分辨率，具体口径需保留原始表达。
+    knowledge_layer: specification
+    value_kind: text
+    filterable: true
+    comparable: true
+  - code: television.panel_technology
+    label: 面板与显示技术
+    description: 品牌官方使用的面板或显示技术名称，规范化时保留品牌术语映射。
+    knowledge_layer: mechanism
+    value_kind: text
+    filterable: true
+    comparable: true
+  - code: television.refresh_rate_hz
+    label: 刷新率
+    description: 官方资料声明的刷新率；原生、插帧和营销口径不得混为一个值。
+    knowledge_layer: specification
+    value_kind: decimal
+    canonical_unit_code: HTZ
+    filterable: true
+    comparable: true
+  - code: television.hdmi_port_count
+    label: HDMI 接口数量
+    description: 官方资料声明的 HDMI 物理接口数量，版本与能力另行保留证据。
+    knowledge_layer: specification
+    value_kind: decimal
+    filterable: true
+    comparable: true
+decision_dimensions:
+  - code: installation_fit
+    label: 安装适配
+    description: 根据观看空间和安装方式核对尺寸条件。
+    related_attribute_codes:
+      - product.width_mm
+      - product.height_mm
+      - television.screen_size_inch
+  - code: picture_use_case
+    label: 画质与使用场景
+    description: 根据影视、体育或游戏需求组织显示规格和技术解释。
+    related_attribute_codes:
+      - television.display_resolution
+      - television.panel_technology
+      - television.refresh_rate_hz
+  - code: device_connectivity
+    label: 设备连接
+    description: 根据外接设备数量和能力要求核对接口信息。
+    related_attribute_codes:
+      - television.hdmi_port_count
+competency_questions:
+  - 哪些型号满足给定安装空间和屏幕尺寸需求？
+  - 两个型号在显示技术、刷新率和接口上有什么可追溯差异？
+  - 某项营销术语对应哪些官方规格，哪些部分仍不能直接比较？

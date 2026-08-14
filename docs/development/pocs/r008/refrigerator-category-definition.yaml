@@ -1,0 +1,113 @@
+id: category-definition-cn-refrigerator-poc-v2
+category_code: refrigerator
+label: 冰箱
+version: 0.2.0-poc
+market: CN
+source_authority_policy:
+  - brand_official_site
+  - official_direct_retail
+  - brand_flagship_store
+  - official_manual
+  - regulatory_source
+attributes:
+  - code: product.width_mm
+    label: 宽度
+    description: 商品机身宽度，不包含未明确声明的安装预留空间。
+    knowledge_layer: specification
+    value_kind: decimal
+    canonical_unit_code: MMT
+    external_mappings:
+      - schema:width
+      - etim:EF000008
+    filterable: true
+    comparable: true
+  - code: product.height_mm
+    label: 高度
+    description: 商品机身高度。
+    knowledge_layer: specification
+    value_kind: decimal
+    canonical_unit_code: MMT
+    external_mappings:
+      - schema:height
+      - etim:EF000040
+    filterable: true
+    comparable: true
+  - code: product.depth_mm
+    label: 深度
+    description: 商品机身深度，不混入开门后占用空间。
+    knowledge_layer: specification
+    value_kind: decimal
+    canonical_unit_code: MMT
+    external_mappings:
+      - schema:depth
+      - etim:EF000049
+    filterable: true
+    comparable: true
+  - code: refrigerator.total_capacity_l
+    label: 总有效容积
+    description: 官方资料声明的总有效容积。
+    knowledge_layer: specification
+    value_kind: decimal
+    canonical_unit_code: LTR
+    external_mappings:
+      - etim:EF008002
+    filterable: true
+    comparable: true
+  - code: refrigerator.cooling_method
+    label: 制冷方式
+    description: 规范化后的主要制冷方式。
+    knowledge_layer: mechanism
+    value_kind: enum
+    allowed_values:
+      - direct_cooling
+      - air_cooling
+      - mixed_cooling
+    filterable: true
+    comparable: true
+  - code: refrigerator.annual_energy_consumption_kwh
+    label: 年耗电量
+    description: 官方能效或产品资料声明的年耗电量。
+    knowledge_layer: specification
+    value_kind: decimal
+    canonical_unit_code: KWH
+    external_mappings:
+      - etim:EF011860
+    filterable: true
+    comparable: true
+  - code: refrigerator.energy_efficiency_class
+    label: 能效等级
+    description: 在适用市场和标准版本下声明的能效等级。
+    knowledge_layer: specification
+    value_kind: text
+    external_mappings:
+      - etim:EF016321
+    filterable: true
+    comparable: true
+decision_dimensions:
+  - code: installation_fit
+    label: 安装适配
+    description: 判断机身尺寸是否满足用户空间约束，并明确未包含的预留条件。
+    related_attribute_codes:
+      - product.width_mm
+      - product.height_mm
+      - product.depth_mm
+  - code: household_capacity
+    label: 容量需求
+    description: 根据使用人数和储存习惯比较有效容积，不由单一价格替代。
+    related_attribute_codes:
+      - refrigerator.total_capacity_l
+  - code: energy_use
+    label: 能耗
+    description: 在相同市场标准和时点下解释并比较能效信息。
+    related_attribute_codes:
+      - refrigerator.annual_energy_consumption_kwh
+      - refrigerator.energy_efficiency_class
+  - code: cooling_experience
+    label: 制冷与储存体验
+    description: 解释制冷机制对结霜、温度均匀性和使用体验的影响边界。
+    related_attribute_codes:
+      - refrigerator.cooling_method
+competency_questions:
+  - 哪些型号满足给定安装尺寸和容量需求？
+  - 两个型号在容量、制冷方式和能耗上有什么可追溯差异？
+  - 某项参数来自哪份官方资料，适用哪个型号或规格？

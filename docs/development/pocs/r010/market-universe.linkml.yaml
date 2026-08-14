@@ -1,0 +1,252 @@
+id: https://domain-analysis.local/schema/market-universe-poc
+name: market_universe_poc
+title: 商品市场总体版本隔离原型
+description: >-
+  验证不同商品品类能否用同一结构记录监管身份、官方在售总体、
+  市场优先级、来源许可和未知项；该模型不是生产契约。
+license: https://www.apache.org/licenses/LICENSE-2.0
+version: 0.1.0-poc
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  dap: https://domain-analysis.local/schema/
+
+default_prefix: dap
+default_range: string
+
+imports:
+  - linkml:types
+
+enums:
+  UniverseLayer:
+    description: 构造市场总体时相互独立的数据职责层。
+    permissible_values:
+      compliance_identity:
+        description: 监管备案或标准清单中的合规身份发现层。
+      official_active_assortment:
+        description: 同一快照窗口内可由官方来源证明在售的品牌和型号层。
+      market_priority:
+        description: 只有取得许可清晰的市场监测数据后才启用的优先级层。
+
+  UniverseSourceKind:
+    description: 可参与总体构造的官方或已授权来源类型。
+    permissible_values:
+      regulatory_registry:
+        description: 政府、监管或正式备案来源。
+      brand_official_catalog:
+        description: 品牌官网或品牌官方商城产品目录。
+      official_manual_catalog:
+        description: 品牌官方说明书或支持中心目录。
+      platform_official_direct:
+        description: 平台明确标识的官方自营商品入口。
+      verified_brand_flagship:
+        description: 通过品牌反链、平台资质或授权证据核实的官方旗舰店。
+      licensed_market_monitor:
+        description: 许可证和使用范围明确的市场监测数据。
+
+  VerificationStatus:
+    description: 来源、品牌或型号候选的核验状态。
+    permissible_values:
+      verified:
+        description: 已满足来源核验规则。
+      pending:
+        description: 证据不足，不能进入正式总体。
+      excluded:
+        description: 已确认不满足来源或范围规则。
+
+  RedistributionStatus:
+    description: 来源数据在产品中的允许使用和分发边界。
+    permissible_values:
+      permitted:
+        description: 已确认可按许可分发所需数据。
+      lookup_only:
+        description: 仅用于本地查验和生成引用，不把原始数据并入可分发知识包。
+      licensed_internal:
+        description: 仅在已获授权的内部范围内使用。
+      unknown:
+        description: 尚未取得明确许可，默认禁止再分发。
+
+  ModelActivityStatus:
+    description: 厂商型号在总体快照时点的官方在售状态。
+    permissible_values:
+      active:
+        description: 快照时点由官方来源明确显示在售或有货。
+      inactive:
+        description: 快照时点由官方来源明确显示下架、停售或无有效销售入口。
+      unknown:
+        description: 当前证据只能证明型号存在，不能证明是否在售。
+
+  UniverseLifecycleStatus:
+    description: 市场总体版本能否作为正式覆盖率分母的生命周期。
+    permissible_values:
+      structural_sample:
+        description: 只验证结构，不可计算或声明市场覆盖率。
+      candidate:
+        description: 来源和总体仍在审核，不能作为正式分母。
+      frozen:
+        description: 已批准作为某次流水线和覆盖报告的版本化分母。
+
+classes:
+  UniverseSource:
+    description: 构造市场总体时使用的一个可审计来源版本。
+    attributes:
+      id:
+        description: 来源记录的稳定标识。
+        identifier: true
+        required: true
+      layer:
+        description: 该来源服务的总体数据层。
+        range: UniverseLayer
+        required: true
+      kind:
+        description: 该来源的官方或授权类型。
+        range: UniverseSourceKind
+        required: true
+      publisher:
+        description: 来源发布主体。
+        required: true
+      url:
+        description: 来源页面或数据入口的规范地址。
+        range: uri
+        required: true
+      observed_at:
+        description: 本项目核验来源状态的时间。
+        range: datetime
+        required: true
+      verification_status:
+        description: 来源是否已满足对应核验规则。
+        range: VerificationStatus
+        required: true
+      verification_evidence:
+        description: 为何把该入口视为官方来源的可复核说明。
+        multivalued: true
+        required: true
+        minimum_cardinality: 1
+      redistribution_status:
+        description: 原始来源数据是否允许进入可分发产物。
+        range: RedistributionStatus
+        required: true
+      freshness_note:
+        description: 更新时间、快照边界或来源自身的历史范围。
+        required: true
+
+  BrandCandidate:
+    description: 在一个总体版本中发现并核验的消费品牌或品牌系。
+    attributes:
+      id:
+        description: 品牌候选的项目内稳定标识。
+        identifier: true
+        required: true
+      display_name:
+        description: 面向维护者显示的品牌名称。
+        required: true
+      verification_status:
+        description: 品牌身份是否已被官方来源核实。
+        range: VerificationStatus
+        required: true
+      evidence_source_ids:
+        description: 支撑品牌身份的来源记录标识。
+        multivalued: true
+        required: true
+        minimum_cardinality: 1
+
+  ModelCandidate:
+    description: 厂商型号候选；销售页面、卖家和 Offer 不产生新的型号身份。
+    attributes:
+      id:
+        description: 厂商型号候选的项目内稳定标识。
+        identifier: true
+        required: true
+      brand_id:
+        description: 该型号所属的已核验品牌标识。
+        required: true
+      manufacturer_model_number:
+        description: 品牌或生产者公开的厂商型号编号。
+        required: true
+      activity_status:
+        description: 快照时点可由官方证据支持的在售状态。
+        range: ModelActivityStatus
+        required: true
+      identity_source_ids:
+        description: 支撑型号身份存在的来源记录标识。
+        multivalued: true
+        required: true
+        minimum_cardinality: 1
+      active_evidence_source_ids:
+        description: 支撑当前在售判断的官方来源；未知时保持空值。
+        multivalued: true
+      inclusion_basis:
+        description: 型号被纳入当前层次的可审计理由。
+        required: true
+
+  UniverseUnknown:
+    description: 不能静默丢弃的许可、身份、在售状态或覆盖缺口。
+    attributes:
+      code:
+        description: 未知项的稳定代码。
+        identifier: true
+        required: true
+      description:
+        description: 未知事实或证据缺口的具体说明。
+        required: true
+      blocking_scope:
+        description: 该未知项阻止哪些指标或发布声明。
+        required: true
+
+  MarketUniverseVersion:
+    tree_root: true
+    description: 某个市场、品类和快照时点的可审计总体版本。
+    attributes:
+      id:
+        description: 市场总体版本的稳定标识。
+        identifier: true
+        required: true
+      market:
+        description: 总体适用的目标市场。
+        required: true
+      category_code:
+        description: 总体适用的商品品类稳定代码。
+        required: true
+      snapshot_date:
+        description: 总体中所有时点判断对齐的快照日期。
+        range: date
+        required: true
+      lifecycle_status:
+        description: 该版本是否只用于结构验证或可成为正式分母。
+        range: UniverseLifecycleStatus
+        required: true
+      standard_versions:
+        description: 同一快照窗口适用的监管或行业标准版本。
+        multivalued: true
+      source_records:
+        description: 构造本总体版本使用的来源及其核验、许可状态。
+        range: UniverseSource
+        multivalued: true
+        inlined_as_list: true
+        required: true
+        minimum_cardinality: 1
+      inclusion_rules:
+        description: 品牌和型号进入总体的版本化规则。
+        multivalued: true
+        required: true
+        minimum_cardinality: 1
+      exclusion_rules:
+        description: 品牌、型号和来源被排除的版本化规则。
+        multivalued: true
+        required: true
+        minimum_cardinality: 1
+      brands:
+        description: 本版本发现并核验的品牌候选。
+        range: BrandCandidate
+        multivalued: true
+        inlined_as_list: true
+      models:
+        description: 本版本发现并核验的厂商型号候选。
+        range: ModelCandidate
+        multivalued: true
+        inlined_as_list: true
+      unknowns:
+        description: 阻止覆盖声明或需要后续处理的未知项。
+        range: UniverseUnknown
+        multivalued: true
+        inlined_as_list: true

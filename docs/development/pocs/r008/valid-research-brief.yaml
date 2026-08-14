@@ -1,0 +1,20 @@
+id: brief-jd-refrigerator-shopping-v1
+product_knowledge_model_id: product-knowledge
+product_knowledge_model_version: 0.2.0-poc
+knowledge_topic: 京东冰箱商品知识
+category_definition_ref: refrigerator/0.2.0-poc
+knowledge_purposes:
+  - shopping_comparison
+  - purchase_guidance
+  - fact_lookup
+source_platforms:
+  - jd
+competency_questions:
+  - 哪些型号在给定尺寸限制下可放入用户厨房？
+  - 两个型号在容量、能耗、制冷方式和当前价格上有什么差异？
+  - 某个价格或库存结论是在什么时间、从哪个页面观察到的？
+freshness_need: weekly
+quality_risk: balanced
+unresolved_questions:
+  - 京东在售候选总体是否能通过稳定入口完整枚举？
+created_at: '2026-08-14T10:00:00+08:00'

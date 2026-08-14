@@ -1,0 +1,3 @@
+claim_id,model_id,knowledge_layer,claim_status,evidence_ref,captured_at,conflict_visible
+claim:haier-bcd-500:volume,model:haier:bcd-500,marketing_copy,guessed,,2026/08/14,no
+claim:haier-bcd-500:volume,model:haier:bcd-500,specification,source_fact,evidence:missing,2026-08-14T01:00:00Z,false

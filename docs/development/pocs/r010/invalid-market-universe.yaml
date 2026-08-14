@@ -1,0 +1,8 @@
+id: invalid-universe
+market: CN
+category_code: home_refrigerator
+snapshot_date: not-a-date
+lifecycle_status: complete
+source_records: []
+inclusion_rules: []
+exclusion_rules: []
