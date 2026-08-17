@@ -1,431 +1,854 @@
-# 技术调研与开源方案决策登记
+# 技术调研登记
 
 状态：持续维护
-更新日期：2026-08-14
+更新日期：2026-08-17
 
-## 1. 强制流程
+本文件只记录技术问题、成熟候选、官方依据、原型结果、接受/拒绝/替代状态和退出成本。阶段进度看 `PROGRESS.md`，模块边界看 `ARCHITECTURE.md`，详细历史样本看对应 `pocs/` 与 ADR。
 
-涉及架构、技术选型、新基础能力或公共 interface 时，按以下顺序执行：
+## 1. 当前结论索引
 
-1. 定义产品问题和不可取消的约束；
-2. 检索官方文档、官方仓库和成熟开源实现；
-3. 登记候选、许可证、维护状态、Node/TypeScript 支持、部署与安全成本；
-4. 设计针对本项目真实风险的最小原型；
-5. 记录实测证据、失败和退出成本；
-6. 标记为接受、拒绝或继续调研；
-7. 只有已接受候选才能进入正式架构；难以反转的决定再写 ADR。
+| 编号 | 主题 | 当前状态 |
+| --- | --- | --- |
+| R-001/R-012 | 京东与官网浏览器访问 | 只接受来源访问/状态能力；整页产物结论已替代 |
+| R-002/R-017 | durable Pipeline | 接受 DBOS Transact 4.25.14；6.3 父/子 Queue 生产 seam 已通过 |
+| R-003/R-015 | 知识包存储/全文 | 接受 SQLite＋FTS5；R-034 新证据/第二品类复核通过 |
+| R-004/R-021 | Workbench 数据库/migration | 接受 PostgreSQL＋Drizzle，DBOS 独立 schema |
+| R-005 | Codex SDK/模型 | 窄候选用途接受；新用途必须重新讨论/原型 |
+| R-006 | 内容寻址 | 只接受 cacache 保存最小 EvidenceItem 字节 |
+| R-007 | 依赖复现/安全 | 持续维护 |
+| R-008 | 跨品类商品模型 | 方向接受；生产共享模型/字典仍未完成 |
+| R-009/R-010 | 来源、身份、市场总体 | 6.1 覆盖定义调研完成；生产 contract 与真实完整枚举等待 6.2+ |
+| R-011 | 质量/人工频次 | contract 接受；数值待真实样本 |
+| R-013/R-023/R-024/R-025 | 快照、投影、旧 Acquisition contract | 已由 R-026/ADR-0011 替代；局部组件保留 |
+| R-014 | PDF/XLSX/单位/候选 | 局部组件证据保留；旧输入 contract 已替代 |
+| R-019 | 稳定内容指纹 | 接受 RFC 8785 canonicalize |
+| R-020 | DBOS 替代品 | Resonate 等候选未过等价门，拒绝 |
+| R-022 | Product/Pipeline 应用接线 | 原则接受，等待新 contract 换接 |
+| R-026 | 目的驱动采集/最小证据/媒体 | 静态 HTML/JSON、PDF 页、XLSX 行和整图字节门已 POC；动态/图片正式投影/异常矩阵继续 |
+| R-027 | 死代码清算 | 使用 CodeGraph＋真实 entry；不新增 Knip |
+| R-028 | 本地 Chat Timeline | 接受 `assistant-ui` ExternalStoreRuntime；生产接线与 PC 验收已通过 |
+| R-029 | Codex 交互运行时与 Pi 边界 | 接受：官方稳定 `codex exec --ephemeral` 真实验收证明全局 Session 零新增；Workbench 持有全部继续上下文；MVP 不引入 Pi |
+| R-030 | 商品底层知识来源与质量门 | 代表性来源证明范围与许可门已形成；生产白名单和真实纵切片未冻结 |
+| R-031 | 跨品类来源数据集 contract 与导出 | 已接受并通过冰箱＋电视 PostgreSQL/API/PC 纵切片；真实来源矩阵待补 |
+| R-032 | 来源访问限速、取消与熔断 | 真实 60 秒、DBOS 强杀恢复与生产组合已接受；京东 reader/探针未通过 |
+| R-033 | 公开技术网页正文提取 | Readability＋jsdom 在 macOS/Node 24 接受；Linux 门待补 |
+| R-034 | 电视第二品类真实纵切片 | DOE/EPA→Evidence→Factory/Review→SQLite Runtime 与 PC 通过 |
 
-禁止“先实现自研版本，再证明开源方案不好用”。
+## 2. 仍然有效的基础设施决定
 
-## 2. 状态定义
+### R-002/R-017 Durable Pipeline
 
-- `待调研`：问题已登记，尚未完成官方资料核验。
-- `调研中`：已有候选和资料，尚未完成真实原型。
-- `待确认`：证据充分，等待人工接受决策。
-- `已接受`：可以进入正式架构和实现。
-- `已拒绝`：记录明确不适用原因和证据。
-- `已替代`：历史决定被新决定取代，保留迁移说明。
+状态：已接受；目标：阶段 2
 
-“候选”不等于“已接受”。
+问题：流水线要在进程崩溃、人工等待、取消和阶段重试后可恢复，不能自研状态机、重试或任务日志。
 
-## 3. 统一评估维度
+结论：使用 DBOS Transact `4.25.14`；业务状态使用 typed `start / command / get` seam，DBOS 类型不穿透领域。`workflowID` 来自冻结输入；失败 step 显式重试使用官方 `forkWorkflow(startStep)`，旧运行不可变。DBOS 建立在 PostgreSQL 上，服务启动前注册/启动，Fastify `onClose` 关闭。
 
-每项候选至少评估：
+验证：隔离 POC 覆盖三次自动重试、强杀 worker 后接续、人工消息、取消和失败 fork；见 `pocs/r017/README.md`、ADR-0007。
 
-- 与 PRD、总体技术方案和阶段停止门的符合度；
-- 开源许可证和商业使用约束；
-- 官方维护活跃度、版本稳定性和社区成熟度；
-- Node/TypeScript interface 和类型质量；
-- 本地、离线、跨机器和未来 2 核 4G Runtime 适配；
-- 外部服务、数据库、队列、容器和原生二进制依赖；
-- 崩溃恢复、幂等、人工信号、可观测性和测试能力；
-- Cookie、原始资料、模型输入和知识包安全边界；
-- 引入、升级、迁移、替换和退出成本；
-- 与现有 Fastify、React、Zod、Drizzle、SQLite、Crawlee 的集成复杂度。
+官方依据：https://docs.dbos.dev/typescript/programming-guide 、https://docs.dbos.dev/typescript/tutorials/workflow-tutorial 、https://docs.dbos.dev/typescript/reference/dbos-class
 
-## 4. 调研队列
+退出：领域 interface 不依赖 DBOS；替换必须先通过同一崩溃/人工/取消/fork 等价门，不允许降低 contract。
 
-### R-001 京东访问合规与浏览器自动化诊断
+#### 2026-08-16 / 6.3 批量监管对账扩展调研
 
-状态：已替代（合规结论保留；采集路线由 ADR-0004/R-012 取代）
-目标阶段：1A
+- CodeGraph 复核当前生产 adapter：`executePipeline` 逐阶段调用 `runStage`，而 `runStage` 把整个 `PipelineStageHandler` 包在一个 `DBOS.runStep` 中。因此在现有 `acquire` handler 内串行调用 537 个型号并不形成 537 个恢复点；任何中途失败都会至少重做整个 handler。该路径拒绝。
+- DBOS 官方 Queue 可从父 workflow enqueue 子 workflow，并提供持久结果、并发、rate limit、timeout、deduplication 和 priority；只依赖现有 PostgreSQL，不增加 Redis/新服务。当前锁定的 `@dbos-inc/dbos-sdk@4.25.14` 运行时已验证导出 `registerQueue / startWorkflow / registerWorkflow / WorkflowQueue`：https://docs.dbos.dev/typescript/tutorials/workflow-tutorial 、https://docs.dbos.dev/typescript/reference/client 、https://github.com/dbos-inc/dbos-transact-ts
+- 隔离临时 PostgreSQL 原型已验证父 workflow enqueue 3 个按型号子 workflow、队列并发 1、父级按输入顺序收齐 typed 结果，观测到 `maximumActive=1`。随后强杀首进程：已完成 M1 没有重做，执行中的 M2 按 DBOS 至少一次边界重做，M3 正常继续；最终执行序列为 `M1, M2, M2, M3`，三项结果完整。临时数据库、marker 和脚本均已删除。
+- 候选接法：父 workflow 固定消费某一 Market Universe candidate 的品牌＋厂商型号；每个型号用稳定 workflow ID 进入 concurrency=1 的监管子 workflow，子 workflow 调用现有 `EnergyLabelRecordSource` 并返回 matched/not_found/failed/producer_conflict；外部写入必须继续以业务键幂等。父级只在收齐结果后调用 Workbench 形成新 candidate，不能从 DBOS 内部表反推业务事实。
+- 生产处置已接受并落地为专用 `MarketUniverseRegulatoryPipelineModule`，没有改造通用 `PipelineStageHandlers`：父 workflow 冻结 candidate，稳定子 workflow ID 逐个进入 concurrency=1 的 Queue，公开 typed 开始/最近运行/按 ID 查询/取消与进度；结果收齐后以父运行 ID 作为 operation ID 调用 Workbench 一次生成新 candidate。真实 PostgreSQL 集成证明 3 个型号最大活跃数为 1、结果计数完整、重复开始不重复访问；取消时未开始型号不再访问且不生成半版候选；页面刷新能从当前 candidate 或输出 candidate ID 恢复运行。全仓 DBOS 强杀恢复门继续证明已完成子任务不重跑、在途任务按至少一次语义重做。该结论只接受监管按型号对账 seam，不授权万能 batch engine。
 
-问题：京东资料应通过什么获准入口进入系统；“PC频控页”是否足以证明访问过快；本机 Chrome 在 Playwright 控制下暴露哪些自动化信号。
+### R-003/R-015 知识包存储与全文
 
-当前事实与证据：
+状态：SQLite＋FTS5 已接受；新 EvidenceItem、许可投影与第二品类已由 R-034 复核
 
-- 2026-01-20 生效的《京东用户服务协议》规定，除法律允许或京东书面许可外，不得复制其知识产权内容、复制/修改网站交互数据，或通过非京东授权的第三方软件、插件、系统登录和使用服务；普通账号登录成功不等于获得系统化采集授权。
-- 京东宙斯开放平台提供应用、OAuth2、API 网关、权限申请和商品 API；京东联盟公开商品查询/推广商品信息 API。它们是候选合规入口，但需要 app key、授权和具体权限，且当前公开字段不能证明覆盖完整家电规格。
-- 2025 年修订的《反不正当竞争法》第十三条禁止以避开或破坏技术管理措施等不正当方式获取、使用其他经营者合法持有的数据；因此风控出现后实现指纹伪装、验证码绕过或未公开接口回退不进入候选。
-- 京东隐私政策公开说明其为识别真实自然人和异常行为会使用设备、系统/软件、网络、日志、IP、浏览与操作等多类信号；具体网页风控规则不公开，不能声称已知道京东使用了哪一项。
-- 本地纯空白页差分证明：Playwright 控制本机 Chrome 时，有头与无头模式的 `navigator.webdriver` 均为 `true`；无头模式另有 `HeadlessChrome` User-Agent。有头真 Chrome 因此仍明确暴露自动化控制，但现有证据不能证明京东只靠这一项拦截。
-- 本轮没有开始批量提取商品数据，但确实发生了有界页面导航。已保存的 7 次样本导航各自加载 12～117 个资源；“打开一次页面”不是“一次 HTTP 请求”。这可以解释风控为何可能在抓取前出现，但“PC频控页”仍只是京东的风险响应分类，不是高频原因的证明。
-- Crawlee 3.18.1 的 RequestQueue、恢复和 Playwright-compatible launcher 已通过隔离原型；Patchright 1.61.1 可作为 `launchContext.launcher` 复用本机 Chrome，不自研队列、浏览器或滚动器。自动化 Profile 与日常 Profile 必须隔离。
-- Crawlee 3.16 经 `file-type 20.5.0` 带入中危拒绝服务公告且恢复进程不能正常退出；官方 3.17/3.18 已有对应修复。R-001 隔离升级到 3.18.1 后 audit 为 0 且两段式恢复通过，根生产依赖未顺手升级。
+问题：知识包需单文件、只读、离线、可复制，支持精确、结构化、中文全文、关系和证据查询，不要求模型/embedding。
 
-官方资料：
+结论：SQLite＋FTS5 满足 MVP；构建后 SHA-256 校验、只读打开并启用 `query_only`，新包校验成功后原子切换 stable 指针。DuckDB/Orama 不进入当前依赖；它们不是查询能力的必要条件。
 
-- https://help.jd.com/user/issue/945-4583.html
-- https://jos.jd.com/doc/channel.htm?id=808
-- https://jos.jd.com/jdunion
-- https://help.jd.com/user/notice/detail-68f1de19e4b04df9580dcd25.html
-- https://www.npc.gov.cn/npc/c2/c30834/202506/t20250627_446247.html
-- https://www.w3.org/TR/webdriver1/
-- https://playwright.dev/docs/browsers
+验证：历史 POC 验证跨目录复制、无网络查询、损坏拒绝、版本切换/回滚和第二品类同结构；R-034 又使用当前最小 EvidenceItem 验证公开证据携带内容、受限证据只携带 locator、相同输入重建复用版本、电视型号/全文/关系/证据查询和复制离线查询。见 `pocs/r015/README.md`、`pocs/r034/README.md`、ADR-0006。
 
-历史结论：`rate_limited` 更正为 `risk_controlled`，且当时停止京东网页访问。用户随后明确改走教育研究网页采集，当前决定见 ADR-0004/R-012；本节不再定义执行路线。
+官方依据：https://sqlite.org/fts5.html 、https://sqlite.org/pragma.html#pragma_query_only 、https://sqlite.org/lang_attach.html
 
-### R-002 可恢复流水线编排
+### R-004/R-021 Workbench PostgreSQL 与 migration
 
-状态：已接受（DBOS Transact 4.25.14；见 ADR-0007 和 R-017）
-目标阶段：2
+状态：已接受；目标：阶段 2
 
-问题：如何支持多阶段执行、崩溃恢复、长时间等待、人工信号、取消、重试、幂等和可观察历史，同时保持本地部署复杂度可接受。
+问题：业务控制状态和 DBOS 运行历史需要持久化、事务和正式 migration，不能由手写 DDL 与 Schema 双重定义。
 
-调查结果：
+结论：业务表由 Drizzle PostgreSQL migration 管理在 `workbench` schema；DBOS 内部表只在 `domain_analysis_pipeline` schema。两者共用一个 PostgreSQL database，但禁止跨 schema 写表或读取 DBOS 内部表。旧 Social Intelligence SQLite 表不迁移；知识包 SQLite 不属于运行状态库。Drizzle runtime migrator 读取历史再执行 DDL，但本轮真实并发启动暴露首次建表竞争；用 PostgreSQL 官方 session-level advisory lock 对同一 schema 的官方 migrator 串行化。锁和 migrate 使用同一连接，连接销毁时数据库自动释放；不自建锁表、迁移器或重试器。
 
-- Restate Server 的 BSL 1.1 明确不是 Open Source，Inngest 为 SSPL；拒绝。
-- Hatchet、Trigger.dev、Kestra 均增加比当前模块化单体更多的常驻平台部件；不进入原型。
-- Temporal MIT 且恢复能力成熟；R-017 真实停止并重启 Worker 和服务后，从 SQLite 文件继续等待，两个外部步骤各执行一次。但本轮依赖约 170 MB、CLI 约 128 MB，且 `start-dev` 不是生产入口。
-- DBOS MIT、嵌入 Node、要求 PostgreSQL。R-017 强制终止 Node 进程后恢复通过；同 ID 幂等、三次步骤重试、取消、恢复和人工消息也实测通过；本轮 `@dbos-inc` scope 约 2.2 MB。
-- 现有 `p-queue + setInterval` 崩溃丢任务，只作失败基线；BullMQ 只解决队列，不满足完整人工等待与重放。
+本地跨电脑处置：两台开发机的 PostgreSQL 数据互不迁移；提交只携带连接配置和 Drizzle migration。Node 24 官方 `--env-file` 已稳定，且进程外显式环境变量优先于文件值，因此 API/本地数据库准备脚本直接读取已提交的根 `.env.example`，仍允许临时环境覆盖。启动前的薄脚本复用现有 `pg`，只检查目标库并在缺失时创建一个空库；表和 schema 仍全部由官方 Drizzle migrator 管理，不在脚本中手写业务 DDL。
 
-结论：MVP 采用 DBOS，领域通过 Pipeline port 隔离；`workflowID` 使用冻结输入身份作为幂等键。DBOS 系统库只作执行历史事实源，Workbench 数据库处置继续进入 R-004，不自行双写。官方资料：https://docs.dbos.dev/typescript/tutorials/workflow-tutorial 、https://docs.dbos.dev/typescript/tutorials/workflow-management 、https://docs.dbos.dev/typescript/tutorials/workflow-communication 、https://docs.temporal.io/develop/typescript/workflows/message-passing 。
+验证：临时 PostgreSQL 覆盖 migration 幂等、外键、JSONB、事务回滚和 DBOS 同库异 schema；2026-08-15 又以 4 个并发 migrator 和全测试文件并发启动验证 advisory lock 消除 `pg_type_typname_nsp_index` 竞争。见 ADR-0009。
 
-阶段 2 正式化证据：生产 workspace 精确锁定 `@dbos-inc/dbos-sdk@4.25.14`；真实 PostgreSQL 上的暂停/恢复、人工消息、取消、同 ID 幂等、自动重试和显式阶段重试 3/3 通过。官方 `resumeWorkflow` 不清除已持久化失败 step，因此显式阶段重试采用 `forkWorkflow(startStep)` 并保留旧运行；未新增本地重试表。独立子进程在等待人工时被 `SIGKILL`，新进程恢复后 6 个阶段各执行一次且已提交资料哈希不变。该证据关闭 R-002 的生产 adapter 风险，不改变 ADR-0007 选型。
+官方依据：https://orm.drizzle.team/docs/migrations 、https://orm.drizzle.team/docs/drizzle-kit-migrate 、https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS 、https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS 、https://docs.dbos.dev/typescript/reference/configuration 、https://nodejs.org/docs/latest-v24.x/api/cli.html#--env-filefile
 
-### R-003 知识包结构化存储与全文检索
+### R-006 最小证据内容寻址
 
-状态：已接受（SQLite＋FTS5 单文件；见 ADR-0006 和 R-015）
-目标阶段：1C、5
+状态：范围由 R-026/ADR-0011 收窄；实现继续接受 `cacache@19.0.1`
 
-问题：如何用可复制、离线、只读、可验证的包同时支持结构化筛选、关系查询、全文检索和证据返回。
+问题：EvidenceItem 字节需要不可变、内容去重、并发安全、读时完整性和公开/受限物理隔离，不能自研 CAS。
 
-已对照候选：
+结论：`cacache@19.0.1` 保存已选最小证据字节和 evidence manifest；PostgreSQL 保存 identity、SRI、locator、状态与关系。整页 HTML、全页截图、完整无关文档和资源清单不进入永久 CAS。提交顺序为证据字节 → manifest → PostgreSQL 事务；新证据不覆盖旧证据。
 
-- SQLite＋FTS5，单文件同时保存结构化数据和全文索引；
-- DuckDB Node Neo＋Orama，结构化分析和全文索引分离；
-- DuckDB 自带全文扩展。
+验证：既有原型证明同内容去重、并发原子写、损坏拒绝和 privacy 目录隔离；2026-08-15 新 Evidence Module 集成测试又证明“精确上下文文本 → 内容 SRI → manifest SRI → PostgreSQL 目录 → 无网络重读”，且整页夹带、空内容、不可访问观察和弱图片关系失败关闭。图片字节/裁切真实性、PDF/XLSX 与临时完整资料清理仍未过 POC。见 ADR-0010。
 
-官方资料：
+官方依据：https://github.com/npm/cacache
 
-- https://www.sqlite.org/onefile.html
-- https://www.sqlite.org/fts5.html
-- https://duckdb.org/docs/current/core_extensions/full_text_search.html
-- https://duckdb.org/docs/current/extensions/installing_extensions.html
-- https://duckdb.org/docs/stable/clients/node_neo/overview
-- https://docs.orama.com/docs/orama-js
-- https://docs.orama.com/docs/orama-js/supported-languages/using-chinese-with-orama
-- https://docs.orama.com/docs/orama-js/plugins/plugin-data-persistence
+退出：Evidence interface 只依赖 SRI/字节，不暴露 cacache API；替换存储无需改 EvidenceRequest 或 Knowledge Factory。
 
-R-015 实测：
+### R-019 稳定内容指纹
 
-- 中文、型号、别名和短字符串检索；
-- 精确查询、组合筛选、排序、关系和证据联查；
-- 由 R-008 生成的版本化验收集及放大数据集的大小、构建时间和查询延迟；
-- macOS 构建后复制到独立目录只读加载；
-- 只读打开、校验、版本切换和回滚；
-- 无网络条件下不下载扩展、不调用模型或 embedding。
+状态：已接受 `canonicalize@3.0.0`
 
-结论：3 商品/6 claim 与 1000 商品/2000 claim 两档均完成 9 项冻结查询。放大档 SQLite 为 1.77 MB、查询 4.85 ms；DuckDB＋Orama 为 4.60 MB、查询 25.29 ms。DuckDB 构建更快，但 SQLite 单文件消除事实库/搜索索引双写一致性，且无首次扩展下载，因此接受 SQLite＋FTS5。DuckDB FTS 因官方扩展下载门拒绝；DuckDB＋Orama 因双产物成本和官方持久化插件恢复 Mandarin tokenizer 的实测缺陷拒绝。不自写 tokenizer/插件兼容层，也不引入向量数据库。
+问题：版本对象和幂等身份需要跨对象键序稳定的 RFC 8785 JSON 指纹，不能自己排序 JSON。
 
-当前 Zod、数据库约束、哈希、只读连接和冻结查询已覆盖 R-011 硬门，未出现 Great Expectations 才能解决的缺口，故不新增 Python 质量基础设施。物理 Schema 与 Node binding 封装在 adapter 内，第二品类仍须通过 1D 零分支门。
+结论：用成熟 `canonicalize` 生成规范 JSON 后 SHA-256；只用于内容身份，不替代数据库唯一约束或业务版本。
 
-### R-004 Workbench 数据库与迁移
+官方依据：https://www.rfc-editor.org/rfc/rfc8785 、https://github.com/cyberphone/json-canonicalization
 
-状态：已接受（Drizzle Kit/ORM migration＋SQLite 业务库；见 R-018、ADR-0008）
-目标阶段：0、2
+## 3. 产品/领域技术边界
 
-问题：如何继续利用 Drizzle＋SQLite/libSQL，同时替换当前手写 DDL 和 schema 双重事实源，建立可测试的正式迁移流程。
+### R-005 Codex SDK 与模型任务
 
-事实与候选：`schema.ts` 和 `initializeDatabase()` 手写 DDL 已漂移，后者额外把 `sources.platform` 设为唯一。接受 Drizzle Kit `generate`＋ORM libSQL `migrate`，拒绝 `push` 和自研 migration manager。官方依据：https://orm.drizzle.team/docs/migrations 、https://orm.drizzle.team/docs/drizzle-kit-generate 、https://orm.drizzle.team/docs/drizzle-kit-migrate 。
+状态：窄用途已接受；新用途待用户确认和 POC
 
-R-018 证据：
+已接受用途：一个候选批次最多一次，将未映射最小事实视图 `evidenceId / subjectKey / rawName / rawValue` 转成永远 `review_required` 的结构化候选。完整证据、主体和值由服务端按 evidence ID 恢复与校验；模型不能改写事实或发布。
 
-- 旧 `drizzle-kit@0.23.2` 在 npm workspace 因官方已知的提升问题找不到 db workspace 的 ORM；相同版本隔离共址后成功生成，证明不是 Schema 错误。
-- `drizzle-orm@0.32.2` 命中 GHSA-gpj5-g38j-94v9 high；修复版为 0.45.2。隔离升级到 ORM 0.45.2、Kit 0.31.7、已由 R-015 验证的 libSQL 0.17.4 后，同一 snapshot 无变化，3/3 migration contract 通过。
-- 空库首次和重复执行均只记录一条 migration；9 表、9 索引、外键和默认值与 `schema.ts` 一致；同平台多来源可写入，证明手写唯一约束不是事实源。
-- 注入失败 SQL 后整批回滚，未留下半张表或错误 migration log。
-- 官方 migrator 对旧手写 DDL 库以 `table already exists` 失败关闭，不自动 baseline；因此拒绝自研 repair，旧产品库保持不动，新产品库使用新路径和正式 migration。
-- 根依赖最小升级后 Drizzle generate、12 文件/52 测试、五 workspace typecheck 和 build 全部通过；生产 audit 不再包含 Drizzle 公告。
+实现边界：R-029 已证明官方 SDK 的 thread API 不满足“每批 ephemeral、全局 Session 零新增”，因此正式 adapter 使用项目直接依赖并锁定的官方 `@openai/codex@0.147.0`，通过 `npm --prefix <repo> exec -- codex` 运行稳定 `codex exec --ephemeral`。`execa` 只管理进程/超时/取消，`ndjson` 只解码官方事件，Zod/JSON Schema 校验输出；不读取认证文件、不接通用模型 Provider。Factory 在空临时目录、只读 sandbox、禁 Web search、never approval 下运行并清理全部临时内容。
 
-结论：Workbench 业务库继续使用 SQLite/libSQL，DBOS PostgreSQL 只保存执行历史，避免迁移所有现有 repository/test。阶段 2 已生成 4 表新产品库首份正式 migration；新启动链只用官方 migrator。旧 `initializeDatabase()` 暂留以保持旧产品可运行，但不得扩展到新表。
+验证：正确 `gpt-5.3-codex-spark + low` 已对最小夹具和 R-034 电视真实证据返回严格候选；R-034 最终得到 22 条候选，其中 21 条来自模型、1 条确定性型号转换，并通过 foundational owner＋subject_ref 关系门。错误简称 `codex-5.3-spark` 的失败补丁已完全删除，不保留 alias/fallback。该事实不能证明模型适合网页语义寻找、图片关系、OCR 后推理或其他新用途。
 
-### R-005 Codex CLI 接入与结构化知识加工
+硬门：任何新 Codex/模型用途先与用户讨论任务粒度、输入、输出、modelId、推理深度、批次、数据边界和人工门，再做版本化样本 POC。不得自动 fallback 或继承浮动默认模型。
 
-状态：已接受
-目标阶段：1B、4
+官方依据：https://developers.openai.com/codex/cli/reference/ 、https://github.com/openai/codex 、https://openai.com/index/introducing-gpt-5-3-codex-spark/
 
-已确认产品边界：MVP 复用用户本机已登录的 Codex 能力，不接通用模型 API，不要求本地推理服务。该决定见 `docs/adr/0001-codex-cli-as-knowledge-processor.md`。
+### R-008 跨品类商品模型
 
-官方与本机证据：
+状态：方向已接受；生产实现未通过
 
-- OpenAI 官方 Codex SDK 文档说明 TypeScript SDK 用于以编程方式启动、继续和恢复本地 Codex thread，并支持结构化结果：https://developers.openai.com/codex/sdk
-- OpenAI 官方 SDK 仓库说明 `@openai/codex-sdk` 封装 `@openai/codex` CLI，通过 JSONL 交换 structured events；SDK 已提供 `runStreamed()`、`outputSchema`、图片输入、线程持久化、工作目录和环境控制：https://github.com/openai/codex/tree/main/sdk/typescript
-- OpenAI 官方非交互文档确认底层 `codex exec` 可复用已保存登录，支持 JSONL、JSON Schema、sandbox 和 session resume：https://developers.openai.com/codex/noninteractive
-- npm 包元数据确认 `@openai/codex-sdk@0.147.0` 为 Apache-2.0，要求 Node.js 18 以上，并精确依赖同版本 `@openai/codex`。
-- 本机全局 `codex --version` 返回 `codex-cli 0.144.5`；`codex login status` 返回 `Logged in using ChatGPT`。SDK 使用其官方依赖的 CLI 0.147.0，真实调用仍成功复用了现有登录。
-- 当前 `master` 已有 `analyze`/`report` job、API/UI 流程和 placeholder，但在本次依赖接入前没有 Codex 调用。
+结论：所有商品共用稳定身份、变体/Offer、属性结论、专业结论、关系和证据语义；共享属性字典拥有属性代码、类型、单位、别名与标准映射；品类知识定义只选择/补充版本化数据。新增品类不得新增表列、类、Runtime API、流程或同来源知识解析器。
 
-最小原型：
+行业依据：Schema.org `additionalProperty`、Akeneo Family/attributes 与 Pimcore Classification Store 证明品类属性数据化有成熟实践，但不要求引入完整 PIM：https://schema.org/additionalProperty 、https://api.akeneo.com/concepts/catalog-structure.html 、https://docs.pimcore.com/platform/Pimcore/Objects/Object_Classes/Data_Types/Classification_Store/
 
-- 在 worker workspace 精确锁定 `@openai/codex-sdk@0.147.0`，不使用浮动版本表达能力边界。
-- 使用 `sandboxMode: read-only`、`approvalPolicy: never`、禁用网络和 Web 搜索启动 thread。
-- 使用 JSON Schema 约束结果为 `{status: "ok", message: string}`，调用成功返回 `{"status":"ok","message":"Codex SDK connected."}`，并收到 2 个 structured item。
-- 原型没有读取或复制认证文件，没有把 Cookie、认证 Header 或浏览器 Profile 放入任务。
+当前缺口：旧 LinkML 与冰箱/电视 fixture 是隔离证据；当前品类定义仍内嵌属性列表，生产共享模型/字典和三品类迁移门尚未完成。见 ADR-0002。
 
-结论：
+### R-010 市场总体与覆盖
 
-- 接入实现选用 OpenAI 官方 `@openai/codex-sdk`；它是当前需求下最合适且维护边界最清晰的官方实现。
-- 定义领域中立的 `CodexExecutionPort`，由薄 `CodexSdkAdapter` 实现；SDK event 和 thread 类型不得泄漏到领域 module。
-- 禁止用 `child_process`、Execa、自写 JSONL parser 或自建 session 层重复实现 SDK 已提供的 CLI 启动、事件解析、线程继续与结构化输出能力。
-- JSON Schema 负责执行出口约束，项目已有 Zod 负责领域 contract 与证据规则；两者职责不同，不互相替代。
+状态：产品 contract 已接受；首批官方目录已真实枚举，完整市场总体仍待补齐
 
-正式进入知识加工流水线前仍须验证：图片输入、并发限制、超时与取消、进程崩溃后的 thread 恢复、版本变化、费用/额度错误、证据引用、人工否决和认证隔离。上述验证影响 adapter contract 和运行策略，不改变已接受的官方 SDK 选型；若 SDK 缺失必要能力，必须重新进入调研并请用户决定，不得补写自研 CLI 基础设施。
+结论：监管备案形成合规身份台账；品牌官网/说明书、官方自营和经核实旗舰店在同一观察窗口的并集形成官方在售总体；只有取得许可清晰的市场数据才报告销量加权覆盖。`MarketUniverseVersion` 在 frozen 前保留纳入/排除/未知和来源证据。
 
-### R-006 原始资料不可变存储
+2026-08-16 真实来源验证（官方页面与其当前生产接口，不是 fixture）：
 
-状态：待调研
-目标阶段：1A
+- 中国标准化研究院公告确认批量数据包含规格型号、生产者、能效等级和备案号并定期更新；冰箱附件观察窗为 2016-08 至 2024-12。该来源只能形成合规身份台账，不能证明 2026 年仍在售：https://www.cnis.ac.cn/tzgg/202412/t20241231_59316.html
+- 海尔中国冰箱官方目录的当前生产接口按页面声明 `total=271`；逐页读取 271 行，按 `modelno` 去重后仍为 271，缺失 0、重复 0，且全部 `psale=0`。这证明“海尔官网当前目录候选总体”，不证明中国冰箱市场总体：https://www.haier.com/cooling/
+- 美的官方商城冰箱目录当前声明 384 个 SKU；逐页读取后先以 `lCategoryId=1` 排除冷柜等非冰箱，再以“品牌＋`nModel`”去重，得到 284 个冰箱 SKU、222 个唯一厂商型号。62 个重复行来自颜色/SKU 变体；品牌唯一型号为美的 98、COLMO/科慕 58、东芝 32、小天鹅 32、华凌 2。`nInStock` 只表示观察时点库存，不能用来否定 `nOnSale=1` 的官方在售身份：https://www.midea.cn/s/search/search.html?category_id=10008
+- TCL 中国官网冰箱目录当前公开声明 44 个结果；生产 adapter 实际读取 44 行，并按官方详情标识得到 44 个唯一厂商型号，缺失 0、重复 0。页面后半部分省略 `hideInProductList` 时按“未隐藏”处理，该边界已有回归测试；全程不从搜索结果或卖家标题猜型号：https://www.tcl.com/cn/zh/refrigerators
+- 京东官方自营冰箱页当前可见至少 16 个品牌过滤项和 5 页结果，可作为官方自营来源与待补品牌发现入口；商品标题、颜色和 seller SKU 不能充当厂商型号，必须从商品规格确认后再并入：https://www.jd.com/brand/737a81dda3769f80aa8.html
 
-问题：如何原子保存 HTML、JSON、图片、截图和资源清单，生成哈希并支持重放，同时让认证状态与可发布证据保持隔离。
+京东停止门：公开品牌页可列出商品，但无登录的 Chrome/Playwright 访问商品详情时，规格接口 `pc_detailpage_wareBusiness` 返回 HTTP 403 并进入京东访问限制页。当前不得从标题正则猜型号，也不得自动绕过验证；该来源保持 unknown，待专用本机 Profile 的人工登录/验证路径在 Source Access 阶段按既定浏览器边界运行。
 
-候选方向：
+实现结论：阶段 1A 先生产一个 `candidate` 状态的 `MarketUniverseVersion`，保存观察窗口、来源声明总数、实际读取数、唯一型号数、品牌＋厂商型号去重规则、来源引用和未知品牌/渠道。当前三源真实纵切片合计枚举 699 行、接收 599 行，得到 537 个唯一型号（海尔 271＋美的系 222＋TCL 44）和 7 个品牌，只形成可审核候选分母；在监管台账、京东官方自营及其余品牌官网未完成同窗枚举前禁止标记 `confirmed/frozen`，也禁止报告“中国市场覆盖率”。
 
-- 本地文件系统不可变快照目录＋控制库元数据；
-- 成熟内容寻址存储库；
-- 嵌入式数据库 Blob 仅作为对照，不默认采用。
+#### 2026-08-16 / 6.1 覆盖定义纠偏
 
-必须验证：部分写入恢复、原子提交、重复资源、内容哈希、目录迁移、磁盘增长、备份恢复和发布清理。
+状态：已接受并完成 6.2 contract 落地；完整品牌/监管/官方渠道总体仍待 6.3～6.5。
 
-尚未决策。
+##### 官方依据
 
-### R-007 依赖可复现性与安全升级
+- 市场监管总局对现行 GB/T 8059—2025 的说明明确：标准按主要间室把家用制冷器具分为“非冷冻食品储藏箱、冷冻和非冷冻组合箱、冷冻食品储藏箱或冷冻箱、葡萄酒储藏柜”，并单独定义深冷间室。这是品类边界/标准适用分类，不是单门、对开门或嵌入式等销售筛选：https://www.samr.gov.cn/xw/sj/art/2025/art_5d2267b710d3450689e6ce11a6bd4eaa.html
+- GB/T 8059—2025 与 GB 12021.2—2025 均于 2026-06-01 实施；后者适用范围还覆盖嵌入式制冷器具，说明“监管产品类别”和“安装形态”必须分轴表达，不能压成一个 `type` 枚举：https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=BF0FB970326D221A8E78987E22BB7F02 、https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=9BC022A3FF2B7F7D733C3962C986DF7A
+- 《能源效率标识管理办法》规定能效标识记录生产者名称、产品规格型号、能效等级/指标和依据标准；生产者或进口商负责备案。CNIS 公告公开的数据也只有型号、生产者、能效等级和备案号。因此监管台账能证明合规 identity，不直接提供品牌 identity，也不能证明 2026 当前在售：https://www.samr.gov.cn/zw/zfxxgk/fdzdgknr/bgt/art/2023/art_3fd2290ff58a40a8805f9d4af4af4e94.html 、https://www.cnis.ac.cn/tzgg/202412/t20241231_59316.html
+- 2026-08-16 复核京东自营冰箱页：页面公开列出至少 48 个当前可见品牌标签并仍有“更多”，同时提供容量、门数量、预留宽度、是否嵌入式、制冷方式、开门方式、能效、变频/定频、控温和门款式等多个筛选轴。品牌页可作为渠道发现与市场形态候选来源，但这些筛选轴语义不同，且页面同时出现冷柜、冰吧和车载冰箱入口；不得把页面标签数直接当冰箱品牌分母：https://www.jd.com/brand/737a81dda3769f80aa8.html
+- 同日从该品牌页打开三个自营商品详情均进入京东 risk handler；公开品牌页可发现商品，但不能据此声称规格采集成功。厂商型号、SKU/变体和店铺身份仍须由专用 Profile 下可定位的商品规格、能效标识或其他官方证据确认；访问受限保持 typed unknown，不从标题猜测。
 
-状态：待调研
-目标阶段：发布前独立治理，不阻塞当前阶段 0 架构工作
+##### 候选覆盖模型
 
-问题：当前锁文件可以安装、测试和构建，但 npm 报告锁文件修复提示及多条依赖安全告警；后续如何在独立分支和独立验证范围内治理，而不干扰已工作的产品工程基线。
+1. `Market Universe` 的唯一成员集合仍是商品型号；型号 identity 保持“规范化品牌身份＋厂商型号”。监管生产者、来源对象、商品变体和销售要约分别关联，不并入型号 identity。
+2. 品牌分母不是人工维护的品牌清单，而是型号总体投影出的品牌集合；是否“品牌抓完”另外由品牌发现来源账判断。监管、品牌独立官网/说明书、京东官方自营和核实旗舰店任一必需来源未完成时，品牌集合只是 `observed`，不是 `complete`。
+3. 类型不建立第二套对象总体，而是对同一型号集合做分维度覆盖。首个必须维度是 `regulatory_product_class`；候选市场形态维度为 `installation_form` 与 `door_layout`。`cooling_method` 是技术配置/比较属性，可参与分层验收，但不属于型号 identity 或监管产品类别；容量段由规范总容积确定性派生，不保存为另一条外部事实。
+4. 每个覆盖维度独立报告 `classified / unknown / not_applicable` 型号及分组计数。一个型号可以同时属于“冷冻和非冷冻组合箱”“嵌入式”“十字门”“风冷”，这些值不能拼成单一 `type` 字符串。
+5. 当前冰箱项目范围候选为纳入“非冷冻食品储藏箱”和“冷冻和非冷冻组合箱”，排除独立冷冻箱/冷柜与葡萄酒储藏柜；这是根据现有 `household_refrigerator` 和官网冰箱目录形成的系统推荐，仍需负责人确认，不能由代码静默决定。
+6. 确认总体不要求世界上不存在任何 unknown，但必须没有 coverage-blocking unknown。数值完成阈值在真实原型前不写死；品牌发现来源未完成、型号 identity 未确认、必需监管类别缺失、观察窗口不一致和京东官方渠道不可访问默认为 blocking 候选。
 
-当前证据：
+##### 当前 contract 缺口
 
-- 多次 `npm ci` 均成功，但 npm 提示 `invalid or damaged lockfile detected`；verbose 日志将提示定位到旧锁文件中 `node-fetch` 的 3 个空元数据节点。现有 test/typecheck/build 不受影响。
-- 接入官方 Codex SDK 后，`npm audit` 报告 37 项：1 low、19 moderate、14 high、3 critical；`npm audit --omit=dev` 报告 24 项生产依赖风险：14 moderate、10 high。
-- 生产依赖链涉及 Drizzle ORM、Fastify/find-my-way、Crawlee/file-type、AJV、WebSocket 等；完整审计还包括 Vite/Vitest、concurrently/shell-quote 等开发工具链。
-- npm 对多个问题建议跨大版本升级，不能把 `npm audit fix --force` 当作经过验证的方案。
+| 现有表面 | 缺口与后果 | 6.2 候选处置 |
+| --- | --- | --- |
+| `brand: string` | 没有规范品牌 identity、别名或品牌/监管生产者区分；大小写归一化不能合并中英文/子品牌别名 | 引入有来源的 brand identity/reference；producer/importer 单列关联 |
+| `manufacturerModel` | 只能记录型号文字，不能表达 identity 是否由规格/监管证据确认 | 记录 identity 状态与支持来源；未确认不得进入 confirmed 总体 |
+| `variantCount` | 当前每遇到同 identity 的目录行或跨来源引用就加一；它统计重复观察，不证明真实 SKU/颜色变体 | 改成真实来源引用/重复观察计数；只有官方区分的规格才建立 Product Variant |
+| `sources[]` 汇总计数 | 只有全来源总数，没有逐品牌发现完成度、观察窗口一致性、拒绝项或来源运行状态 | 增加版本化 source/brand coverage ledger 与 typed completion |
+| `models[]` | 没有监管类别、安装形态、门体布局或逐维度 unknown | 增加版本化分类观察/覆盖投影，不把站点筛选标签写成通用枚举 |
+| `unknowns[]` 自由描述 | 不能指出影响哪个品牌/型号/维度/来源，也不能确定是否阻断 confirm | 增加 scope、dimension、reason code、blocking 和所需来源 |
+| `basis = official_active_assortment_candidate` | lifecycle 已另有 status，但 basis 名称仍写死 candidate；confirmed 版本语义矛盾 | basis 表达总体口径，candidate/confirmed 只由 lifecycle status 表达 |
+| 只有 `refreshCandidate/latest` | 没有人工审核/确认命令，Schema 虽允许 confirmed 但生产路径不能到达 | 增加带 expected version/hash 的显式 confirm；保留历史并 supersede 旧版本 |
 
-候选处理方式：
+##### 来源矩阵
 
-- 逐一核对直接依赖的官方安全公告、修复版本、迁移指南和当前维护版本，再按影响面拆分升级；
-- 对仅由传递依赖导致且上游已有兼容修复的项，优先升级直接依赖，不长期堆叠无依据 override；
-- 只有上游尚未发布修复且风险可被明确隔离时，才记录临时缓解、上游 issue 和删除条件。
+| 来源 | 能证明 | 不能证明 | 在总体中的职责 |
+| --- | --- | --- | --- |
+| GB/T 8059、GB 12021.2 | 标准范围、监管类别、测试/能效适用边界 | 品牌、当前在售型号 | taxonomy version 与分类依据 |
+| CNIS/能效备案 | 生产者/进口商、规格型号、备案号、能效和依据标准 | 市场品牌、当前在售、官方渠道 | 合规 identity 台账与交叉核对 |
+| 品牌独立官网/说明书 | 品牌呈现、厂商型号、官方规格/分类、目录时点 | 中国市场其他品牌是否遗漏 | 品牌内官方在售与类型观察 |
+| 京东官方自营/核实旗舰店 | 渠道在售、Offer/SKU、平台筛选和时点状态 | 监管生产者、跨市场完整品牌分母；标题不能单独确认型号 | 官方渠道发现、在售并集和差异核对 |
 
-本轮处置：不升级现有依赖，不重建 lockfile，不切换 Node 版本，不删除已有平台依赖。此前尝试的 Node 24、Rollup 平台依赖和 npm 11 lockfile 调整已全部回退；当前 lockfile 相对原提交只保留已接受的官方 Codex SDK 新增项。
+##### 最小原型计划
 
-未来独立治理时必须验证：先固定独立变更范围和回退点；测试、类型检查和构建全部通过；生产依赖告警逐项有可追踪结论；关键升级覆盖 API、数据库、worker 和 Web 的真实启动或 contract 测试。
+原型不引入新依赖、模型、Provider registry 或站点字段 projector；继续复用已经接受的 Zod、Workbench PostgreSQL、Crawlee＋Patchright 和人工登录边界。
 
-尚未决策升级组合，当前不进入执行顺序。禁止直接运行 `npm audit fix --force`，也禁止为了压低数量而添加无调查依据的 override。
+1. 从至少两个品牌独立官网、CNIS 和京东自营选择 12～20 个真实型号，覆盖两个拟纳入监管类别、两个拟排除类别、嵌入式/非嵌入式、至少三种门体布局、同型号跨来源、同型号多销售行和一个详情访问受限样本。
+2. 用隔离 prototype contract 表达 brand identity、producer、model identity、source refs、coverage dimensions、Offer/Variant 区分和 scoped unknown；不迁移生产数据库。
+3. 验证同型号跨来源只增加引用、不增加变体；品牌别名必须通过显式证据映射；无法确认监管类别/厂商型号时保持 blocking unknown；不同观察窗口不得合并成 confirmed 候选。
+4. 输出品牌发现账、逐覆盖维度 `classified/unknown/not_applicable` 对账和 candidate confirm 报告；用实际样本决定哪些维度必须进入 Market Universe、哪些留在后续 Knowledge Need。
+5. 原型和 contract diff 经人工确认后才进入 6.2，一次修改共享 Schema、migration、Workbench、API、Web 和测试；若原型无法稳定从官方来源得到必需分类，则停止实现并保留该维度 unknown，不自造分类器或用模型补事实。
 
-### R-008 数据驱动商品知识模型、引导访谈与验收集生成
+##### 2026-08-16 / 6.2 原型与实现结论
 
-状态：调研中
-目标阶段：0、1
+- 隔离原型使用 20 条真实型号观察，得到 19 个唯一 identity、16 个拟纳入型号、2 个冷柜和 1 个酒柜；`BCD-501WSPM(Q)` 的官网/CNIS 两条观察归为同一型号并保留两个 source ref，未产生 Product Variant。13 个只从京东发现页得到的型号保持 identity blocking unknown。
+- 正式 contract 采用结构化品牌 identity、独立监管生产者、型号 identity 状态、来源 completeness、`regulatory_product_class / installation_form / door_layout` 三个覆盖维度，以及带 kind/scope/blocking 的 unknown。`basis=official_active_assortment` 与 lifecycle status 分离。
+- Workbench 是唯一聚合与确认事实源；API 新增 expected version/hash confirm，PC 只投影同一版本。确认门拒绝 blocking unknown、未核验 identity 和必填分类 unknown；跨来源分类冲突会收窄为 blocking unknown，不做隐式择一。
+- 当前表的内容本来就是 JSONB，status/confirmed_at 字段也已存在；实际开发库 Market Universe 行数为 0，所以无 DDL 可迁移。本轮不生成空 migration；若发现其他机器存在旧形状，Schema 明确拒绝，等待单独迁移决定。
+- Node 24.12.0 arm64 下 6.2 首次全仓门为 104 项通过、30 项条件跳过；临时 PostgreSQL Market Universe 集成 2/2、六 workspace typecheck、production build 与 1440×900 PC 表面通过。PC 验收显示 4 个隔离代表型号、2 个品牌、3/4 identity 已核验、京东 partial source 和三类冻结阻塞；横向溢出与浏览器错误均为 0。临时数据库和服务已清除，真实开发库未写入候选。
 
-问题：如何让不掌握商品分类和属性标准的知识项目负责人，只表达品类、市场、知识用途和业务取舍，由系统基于稳定商品知识模型、共享属性字典和版本化品类数据生成采集范围、知识约束与验收方案；同时避免自研模板语言、让用户手工设计字段，或用无依据的固定样本数代替质量设计。
+##### 2026-08-16 / 6.3 监管同窗生产验证（已完成监管部分）
 
-用户已明确的不可取消约束：
+- 能效标识公开查询用已知 `BCD-501WSPM(Q)` 返回唯一记录，`productTypeCode=81`、生产者“合肥美的电冰箱有限公司”和备案号可用，说明既有按型号两步 list/detail 路径能提供生产者＋规格型号交叉证据。
+- 用 `productType=81 / isOld=0` 枚举时，接口 `data.total` 固定报告 500，但 pageSize 100 的第 6 页仍返回 100 条不同记录；因此 `total` 不是可信完整分母，禁止按 500 宣称监管型号抓完，也不能用它驱动停止条件。
+- 监管记录把冷柜 `BD/BC-*` 和冰箱 `BCD-*` 放在同一“家用电冰箱 2015版”产品类型下，不能直接提供 GB/T 8059—2025 四类 `regulatory_product_class`。6.3 应把能效备案用于“已从品牌官网发现的型号”的生产者/备案交叉，而不是反向把整个备案列表冒充当前在售市场总体。
+- `EnergyLabelRecordSource` 已把“同型号多条备案”从异常改为 typed registration list；真实海尔 `BCD-500WGHFDB5XAU1` 返回两条备案但生产者均为“海尔智家股份有限公司”，这是可保留的多记录，不应触发两次无意义重试。列表/详情 Zod 校验移到 crawler 结果外，使 Crawlee 只重试网络和运行时失败，确定性业务结果不重试。
+- 薄 `EnergyLabelRegulatoryCatalogSource` 已完成三型号纵切片：`BCD-501WSPM(Q)`、`BCD-500WGHFDB5XAU1`、`R555Q10-SS` 均 matched，共保留 4 条备案与 3 个唯一型号；输入重复型号只查询一次，not_found/failed/producer_conflict 都有 typed outcome。它只负责来源交叉，不拥有 Market Universe 或最终知识。
+- `OfficialCatalogSnapshot` 来源账明确增加 `coverageKind / coverageStatus / observedBrandKeys`。海尔/TCL 标为 `independent_brand_catalog`；美的商城标为 `multi_brand_official_catalog`，其五个品牌标签不能各算一个独立官网；能效备案标为 `regulatory_registry_lookup`。来源完整度由 adapter 明确报告，不再从行数相等自动推导。
+- 该 adapter 没有接到同步 refresh route，而是经已接受的专用 DBOS 父/子 workflow 执行。隔离业务库真实运行 537/537：274 matched、251 not_found、12 producer_conflict、0 failed，生成 v2 candidate；286 个型号带至少一个监管生产者。not_found/conflict 均转为逐型号 blocking unknown，监管结果没有被冒充成完整在售分母。页面刷新恢复和取消传播的缺口随后修复：父级逐项入队、至多一个在途子任务，父运行 ID 作为输出 candidate operation ID，API/Web 从服务端读取最近运行。监管部分已完成，6.3 仍因其余品牌独立官网未完成而保持进行中。
 
-- 冰箱只是“商品”的一个品类，系统必须有相对固定的商品知识骨架，不能每次从零临时定义，造成结构和结果不稳定；
-- 换成电视、微波炉等品类时必须极低成本迁移；品类差异不得变成新的生产 Schema、数据库列、TypeScript 类、Runtime API 或通用流程分支；
-- 知识项目围绕可复用商品知识资产，而不是围绕一个“目标 Agent”；同一知识包需要被多个 Agent/Skill 使用；
-- 专业差异必须来自清洗后的规格、功能、机制、适用条件、取舍、需求映射、比较维度和证据，不能只收参数或依赖通用模型已有知识；
-- 首轮覆盖目标是目标市场中大多数主流品牌和型号；来源只取品牌官网/说明书、平台官方自营、经核实品牌官方旗舰店和监管/标准资料，不以普通第三方卖家数量换覆盖率；
-- 产品应像 `grill-with-docs` 一样，通过引导式访谈澄清本次搜集和知识用途，但商品知识访谈需要比普通表单承担更多专业判断；
-- 用户不负责凭专业知识给出各品类属性、覆盖率或样本量，也不能被要求对没有证据的数字拍板；
-- 所有通用建模、约束、表单生成和抽样能力继续遵守开源优先，确无适合实现时必须停下请用户决定。
+##### 2026-08-16 / 其余品牌独立官网入口复核
 
-当前代码事实：
+当前品牌发现缺口矩阵（同一日重新读取京东自营冰箱页当前首屏品牌列表；页面仍显示“更多”，所以这是已观察集合，不是中国市场品牌总数）：
 
-- 现有 `AnalysisProject` 只有 `name`、`goal`、`language`、`market` 和默认数量；`CollectionPlan` 只有 Reddit 平台、包含/排除关键词、周期和批次上限。
-- 当前 UI 和 API 能复用项目、计划、运行、暂停/恢复和阶段展示骨架，但没有稳定商品知识模型、共享属性字典、数据化品类定义、基于用途的引导访谈或有依据的验收集生成能力。
-- 旧 Reddit 关键词和固定批次模型不能提升为商品知识需求模型。
+| 已观察品牌标签 | 当前可审计来源 | 独立官网完整目录 | 处置 |
+| --- | --- | --- | --- |
+| 海尔 | 海尔中国目录 271 个唯一型号 | complete | 已接生产 |
+| 统帅 | Leader 中国目录 49 个唯一型号 | complete | 已接生产 |
+| TCL | TCL 中国目录 44 个唯一型号 | complete | 已接生产 |
+| 美菱 | 美菱商城 93 SKU / 85 个唯一型号 | complete | 已接生产 |
+| 美的、华凌、COLMO/科慕、东芝、小天鹅 | 同一美的官方商城多品牌目录 | missing | 保留各品牌独立覆盖缺口，不能拆成五个官网完成 |
+| 海信、容声 | 同一海信集团目录 16 个唯一 identity，且 1 页型号未确认 | partial/missing | 集团来源已接生产；容声独立官网访问仍失败 |
+| 康佳、新飞 | 康佳集团官网冰箱总类目 7 个当前商品 | complete multi-brand only | 详情参数明确品牌和型号；排除 1 个冷柜后接入 6 个冰箱 identity，不能拆成两个独立官网完成 |
+| 西门子 | 西门子中国官网“商城在售”46 项 | complete | 排除 2 个酒柜和 1 个独立冷冻箱后，43 个冰箱型号已接生产 |
+| 米家、小米 | 小米商城冰箱搜索与详情 API | missing | 搜索有 19 项但混有系列聚合页和配件，详情有参数却没有厂家型号；暂不进入型号总体 |
+| 荣事达 | 荣事达集团官网“冰洗护”当前产品中心 | partial | 页面声明当前 1 项且明确 `BCD-271WGP`；可作官方渠道发现，不能冒充独立冰箱完整目录 |
+| 志高 | 志高集团官网声明经营冰箱，但产品访问标准 TLS 失败 | missing | 不关闭证书验证；保留来源访问 unknown |
+| 奥克斯 | 奥克斯集团官网当前产业与产品导航 | missing | 当前官方范围为暖通、用配电、新能源和医疗，未发现冰箱目录；京东标签不能反推品牌完整目录 |
 
-官方标准与成熟开源证据：
+这 19 个已观察标签中，当前海尔、TCL、美菱、统帅、西门子 5 个具有独立品牌完整目录；美的系 5 个品牌和康佳/新飞 2 个品牌只有完整的多品牌官方目录；海信/容声 2 个品牌只有集团 partial 目录；荣事达只有官方渠道 partial；米家/小米、志高、奥克斯 5 个仍缺少可生产使用的厂家型号完整目录。该计数用于暴露来源缺口，不是市场份额、品牌总数或完成率。京东当前页还显示“更多”，6.4 的渠道枚举仍可能发现新增品牌：https://www.jd.com/brand/737a81dda3769f80aa8.html
 
-- Stanford Protégé《Ontology Development 101》建议先明确领域、用途、使用者和知识库必须回答的 competency questions，并明确优先复用已有本体；问题集是限制知识范围和后续验证是否足够的依据：https://protege.stanford.edu/publications/ontology_development/ontology101.pdf
-- Schema.org 已区分 `ProductModel`、`ProductGroup`、`Product`、`Offer` 和扩展属性，证明商品型号、变体与具体销售要约不应混成一个对象：https://schema.org/ProductModel 、https://schema.org/Offer
-- Schema.org `additionalProperty` 使用 `PropertyValue` 表达没有专用词汇的商品特征，同时要求已有专用属性时优先复用，支持“稳定公共语义＋可扩展属性”：https://schema.org/additionalProperty
-- GS1 GPC 提供跨市场的商品分类共同语言、层级、Brick 和属性；标准仓库保留版本与归档：https://ref.gs1.org/standards/gpc/ 、https://www.gs1.org/standards/gpc/get-started
-- ETIM 用产品组、产品类、特征、值、单位和同义词描述技术商品，每个类绑定自己的技术特征：https://www.etim-international.com/classification/model-information/
-- Akeneo PIM Community Edition 是可参考的成熟开源 PIM；其 Family 本身就是产品模板，Family 管理属性和完整性，Family Variant 管理公共属性、变体层级和变体轴：https://github.com/akeneo/pim-community-dev 、https://help.akeneo.com/en_US/serenity-discover-akeneo-concepts/23-serenity-what-is-a-family 、https://help.akeneo.com/serenity-what-about-products-with-variants
-- Pimcore 官方文档将 Classification Store 定义为类似 key/value 的动态属性容器，并明确可在不改变产品类定义时处理品类专用属性；其 Object Bricks 对比也说明大量品类/属性场景适合 Classification Store：https://docs.pimcore.com/platform/Pimcore/Objects/Object_Classes/Data_Types/Classification_Store/ 、https://docs.pimcore.com/platform/next/Pimcore/Objects/Object_Classes/Object_Bricks_vs_Classification_Store/
-- LinkML 是 Apache-2.0 的开源数据建模框架，支持继承、枚举和约束，并能从 YAML 模型生成 JSON Schema、TypeScript、SHACL、文档和关系图；它是“不自研模板语言”的候选，不是已接受技术：https://linkml.io/ 、https://github.com/linkml/linkml
-- `react-jsonschema-form` 能直接从 JSON Schema 生成 React 表单，是“不自研通用 schema 表单引擎”的候选：https://rjsf-team.github.io/react-jsonschema-form/docs/
-- NIST 说明比例抽样数量必须由置信度、允许误差、预期缺陷率和统计功效推导，分层时需逐层设计；因此“50 个型号”不是普适验收依据：https://itl.nist.gov/div898/handbook/ppc/section3/ppc333.htm 、https://itl.nist.gov/div898/handbook/prc/section2/prc242.htm
-- NIST ACTS 的 covering array 用因素和值的组合覆盖生成小而有效的测试集，可用于品牌、页面状态、变体、信息载体和异常类型的组合场景覆盖；它不能替代统计抽样，但可避免随意挑异常样本：https://csrc.nist.gov/csrc/media/Projects/automated-combinatorial-testing-for-software/documents/SP800-142-101006.pdf
+- Leader 独立官网产品页公开搜索参数连接官方 `leader_product/getProduct` JSON 目录。按 `channelId=41824` 与 `psale=0` 实测声明 49、读取 49、缺失型号 0、唯一型号 49；详情 URL 和 `modelno` 均由同一官方响应给出。该 typed snapshot 已接生产并标记 `independent_brand_catalog/complete`：https://www.leader.com.cn/cooling/
+- 九个生产来源在同一轮只读访问中的当前并集是 737 个唯一“品牌＋厂商型号”，目录内实际观察 15 个品牌：海尔 271、统帅 49、美的系 222、TCL 44、海信集团 16、美菱 85、康佳集团 6、西门子 43、荣事达 1。相对旧 537 型号监管批次新增 200 个 identity，未继承旧结论。
 
-许可证、维护与分发边界：
+- 海信集团官网冰箱类目当前公开声明 21 个产品，并在同一页面分别列“海信冰箱”和“容声冰箱”；它能作为海信集团官方目录观察，但不能冒充海信、容声两个独立品牌官网都已完整枚举：https://www.hisense.com/productcat/54.html
+- 海信集团 typed snapshot 已通过并接生产组合：Crawlee/Cheerio concurrency=1 对声明 21 个产品发现并读取 21 个详情，20 页在 title/meta/主标题给出显式厂商型号，按品牌＋厂商型号去重为 16 个 identity（海信、容声）；产品 1340 只有图片文件名出现 `BCD-222WTDGS`，故拒绝推断。来源固定为 `multi_brand_official_catalog/partial`，不得计作两个独立官网完成。
+- 容声独立官网公开冰箱产品列表与详情入口，但标准 TLS 客户端访问 `www.ronshen.cn` 当前证书域名不匹配；Source adapter 必须保留 `source_access` unknown，不得通过关闭证书校验绕过。搜索索引能看到产品不等于生产访问已通过：https://www.ronshen.cn/product/list/42.html
+- 长虹美菱官网跳转到正式商城域，官方 `getProductColumnList` 返回冰箱父类 `721` 及对开门/多门/三门/两门/单门子类。对 `getSkuListByColumnCondition` 使用 `columnId=721` 后总数稳定为 93，pageSize 20 共 5 页、实际读取 93/93 个在线 SKU，得到 85 个唯一厂商型号；重复行是颜色/SKU，不新增型号 identity。`skuname` 中明确出现但没有 `BCD-` 前缀的型号保持官网原文。该 typed snapshot 已接生产并标记 `independent_brand_catalog/complete`：https://www.meiling.com/meiling/pages/index.html 、https://mlmall.meiling.com/mall/column/getProductColumnList.do
+- 美菱接口的响应体是 JSON，但响应头使用非标准 `text/json`。Crawlee `HttpCrawler` 默认拒绝该 MIME，生产 adapter 按官方公开的 `additionalMimeTypes` 选项显式追加 `text/json`，继续复用其请求、超时和重试能力，没有另写 HTTP client：https://crawlee.dev/js/api/http-crawler/interface/HttpCrawlerOptions
+- 小米商城官方搜索 API 对“冰箱”返回 19 项和冰箱类目，但包含系列聚合页与制冰机配件；`product/view` 详情能提供能效、制冷方式、尺寸、容积、噪音等参数，却只给商城 `product_id / commodity_id / sku`，没有厂家型号。当前 `manufacturerModel` contract 不允许把商城内部 ID 冒充厂家型号，故米家/小米只登记为后续参数知识候选来源，不进入 Market Universe 型号 identity：https://www.mi.com/shop/search?keyword=%E5%86%B0%E7%AE%B1
+- 康佳集团官网冰箱总类目当前列出 7 个商品；7 个详情均在同一官方参数块明确品牌和型号，排除 `BD/BC-211DGLCEX` 冷柜后得到康佳 3 个、新飞 3 个冰箱 identity。该来源已接生产并标记 `multi_brand_official_catalog/complete`，只能证明康佳集团当前总类目完整读取，不能替代康佳/新飞两个独立品牌官网完成：https://www.konka.com/list.html?cat_id=28
+- 西门子中国官网产品页实际入口为 `product-frist-level.html?name=冰箱&groupId=26`，其前端直接调用官方 `getProductOfficialList`。设置官网同款“商城在售”过滤后，API 声明并返回 46/46 个唯一 `vib` 型号；排除 group 6 的 2 个 wine cooler 和名称明确为“冷冻箱”的 1 项后，剩余 43 个冰箱型号。该来源具备官方总数、明确型号字段和同窗完整读取，已接生产并标记 `independent_brand_catalog/complete`：https://www.siemens-home.bsh-group.cn/productlist/product-frist-level.html?name=%E5%86%B0%E7%AE%B1&groupId=26
+- 荣事达集团官网产品中心的“冰洗护”类目当前声明 1 项并明确列出 `BCD-271WGP`，详情页再次确认同一型号；另一方面，惠而浦冰洗品牌站的荣事达 `brandId=5` 当前 JSON 目录为空，历史详情不能混进当前在售同窗。故只把 `BCD-271WGP` 接成 `official_channel_discovery/partial`，不把更广的“冰洗护”类目冒充独立冰箱完整目录：https://www.rsdgroup.com.cn/product_list.asp?keyno=319&p_id=231
+- 荣事达官网正文实际使用 GB18030 但响应头没有 charset。实测 Crawlee 的 `suggestResponseEncoding/forceResponseEncoding` 在该 `HttpCrawler` Buffer 路径均未正确保留中文，而原始 Buffer 经 Node 标准 `TextDecoder("gb18030")` 可无替换字符恢复正文。生产 adapter 因此继续复用 Crawlee 的访问、重试、超时和内存队列，只在已知站点边界做确定性标准解码；不自研编码探测，也不放宽 TLS。Crawlee 编码选项边界见：https://crawlee.dev/js/api/http-crawler/interface/HttpCrawlerOptions
+- 奥克斯集团官网当前集团产业只列空调、用配电、新能源和医疗，全球产品站也只提供暖通产品；未发现可核验的冰箱厂家型号目录。志高集团官网说明业务包含冰箱，但当前标准 TLS 访问无法建立可信连接。两者都保持 typed missing/source_access，而不是从京东品牌标签或第三方页面推断目录：https://www.auxgroup.com/about.html 、https://www.china-chigo.com/cn/jituangaikuang/index.html
+- 重复真实枚举发现既有 Crawlee 配置 `purgeOnStart=false` 会复用项目默认持久请求队列：同一 URL 首次完成后，后续刷新可能零请求直接结束。禁止通过清空全局 `storage/` 修复；选用 Crawlee 官方 `MemoryStorage`，每次 Source 访问注入独立 storage client、`persistStorage=false`，从根上避免跨刷新误去重且不触碰用户已有队列。官方 API 明确 `MemoryStorage` 实现 dataset/KV/request queue storage，`Configuration.useStorageClient` 允许注入该 client：https://crawlee.dev/js/api/memory-storage/class/MemoryStorage 、https://crawlee.dev/js/api/core/class/Configuration#useStorageClient
+- 稳定九源候选已在全新隔离 PostgreSQL 运行生产 DBOS 监管对账：737/737 完成，381 matched、338 not_found、18 producer_conflict、0 failed；最终一次业务写生成 v2，保持 737 个型号，399 个型号带至少一个监管生产者，358 个 blocking unknown 被保留。隔离数据库、临时证据目录和一次性运行脚本均已精确删除，开发库未写入。该结果完成 6.3 的监管同窗门，但不消除品牌独立官网缺口，也不能替代 6.4 京东渠道枚举。
 
-- LinkML 为 Apache-2.0；本轮隔离验证使用 `1.11.1`。RJSF 为 Apache-2.0，本轮使用 `6.5.3`；仓库持续发布且已有大量生产使用案例。
-- `json-schema-to-typescript` 为 MIT，本轮使用 `15.0.4`；它只承担从 JSON Schema 生成 TypeScript 声明，不成为运行时事实源。
-- `allpairspy` 为 MIT，本轮使用 `2.5.1`；项目明确说明生成结果不保证全局最小，但能提供 pairwise/n-wise 覆盖与约束过滤。`statsmodels` 为 BSD-3-Clause，本轮使用最新稳定版 `0.14.6`。
-- 两个 Python 库当前只作为方法与数值基准，不是生产运行时决定。TypeScript 调研发现 stdlib.js（Apache-2.0）提供 beta quantile 等可靠统计原语，但没有完整的比例样本量策略；自行拼装统计过程会违反“不自研通用能力”。微软 PICT 是成熟 MIT 组合工具，但现成 Node/WASM 包是非官方且采用量很低。生产 runtime 选型仍是停止门，不能因原型成功擅自引入 Python、WASM wrapper 或自写算法。
-- ETIM 分类模型使用 ODC Attribution 1.0，可在保留署名和许可证通知的前提下共享、修改和制作衍生数据库；模板引用或随包分发前仍需建立第三方声明清单：https://www.etim-international.com/classification/license-info/
-- Schema.org 词汇使用 CC BY-SA 3.0；引用其术语需要保留署名和相同方式共享要求：https://schema.org/docs/terms.html
-- GS1 GPC 虽可公开浏览和下载，但 GS1 标准免责声明与 IP FAQ 没有给出足以支撑本产品再分发 GPC 数据集的宽松开源许可。当前只允许引用概念或外部版本，不把 GPC 内容内嵌进模板或知识包，直至许可证经明确核准：https://ref.gs1.org/gs1/standards-disclaimer/ 、https://www.gs1.org/docs/gsmp/GS1_IP_FAQ.pdf
+##### 2026-08-16 / 6.4 京东官方渠道生产候选
 
-候选产品结构（2026-08-14 已确认方向，正式组件仍待验证）：
+- 2026-08-17 重新核对当前《京东用户服务协议》（2026-01-20 生效）：第九条第六款规定，除法律强制规定外，未经京东特别书面同意，不得全部或部分复制、转载、引用、链接、抓取或以其他方式使用站内信息内容；同条也明确站内文字、图表、图片、视频、数据编辑和软件受京东或内容提供者权利保护：https://help.jd.com/user/issue/945-4583.html 。当前项目没有京东书面许可，也没有经过负责人/法律确认的法定例外，因此 `localRead / evidenceStorage / modelInput / derivedKnowledgePublication / sourceRedistribution` 不能由工程自行写成 allowed。正式 Planner 必须把京东路线保持 `planning_rule_missing` 或权限 waiting；频控和 reader 通过也不能越过这一许可门。fixture/parser/队列/熔断开发可继续，但真实探针和批量访问暂停。该结论不会自动改成“永久拒绝京东”：若未来取得书面许可、经负责方确认适用的法律依据，或明确重开官方授权 API，再按授权字段、速率、保存和发布边界新增版本化规则。
 
-1. **稳定商品知识模型**：定义商品型号、产品组/变体、Offer、品牌、标识符、属性结论、专业知识结论、来源对象、时点信息、证据和结论状态；任何品类共用。
-2. **共享属性字典**：维护可跨品类复用的属性身份、含义、值类型、单位、别名和核准外部映射。
-3. **品类知识定义**：只以版本化数据选择共享属性、来源策略、决策维度和能力问题；冰箱不是子类或生产 Schema。
-4. **用途配置**：使用 competency questions 表达“这份知识要支持什么判断”，决定哪些知识层、新鲜度和风险重要；它不创建字段或 Schema。
-5. **引导访谈**：Codex 根据品类定义和问题缺口追问业务意图、风险与冲突处理偏好；系统给出有证据的默认建议，用户不手填专业字段矩阵。
-6. **派生计划**：从品类定义、用途配置和可审计总体派生采集计划、加工约束、质量检查和验收设计。
+- 2026-08-17 在 Codex 内置 Browser 的已登录独立会话做监督式真实枚举：品牌目录 5/5 页各返回 60 张卡，共 300 个唯一 SKU；其中 299 个带自营标记，另 1 个国美商品为非自营。该结果证伪“目录页出现任一非自营卡片就整页作废”，正确边界是在目录观察层只投影自营卡片，同时保留分页/数量一致性检查。
+- 同一轮详情读取到第 17 个请求时触发京东真实 `risk_handler`，按约束暂停且等待用户手动验证，没有自动绕过。暂停前 15 个详情完整可读，1 个康佳详情能确认品牌、冰箱面包屑和 25 项参数但缺少 `能效网规格型号`，因此保持 `source_abnormal`，不从营销标题 `AR-183G2` 猜型号。另有 TCL、海尔详情缺少“类型”参数但官方面包屑明确为冰箱；详情接纳规则已改为“类型或官方分类路径确认冰箱，并显式排除冷柜/冰柜/酒柜/冰吧”，品牌与厂家型号仍是 identity 必填。Codex Browser 仍只承担监督式可达性和真实页面契约验证，不因此升级为 Workbench 生产 Provider。
+- 用户在同一 Codex Browser 会话完成京东扫码验证后，页面没有恢复商品详情，而是跳转到 `https://pc-frequent-pro.pf.jd.com/?from=pc_item&reason=403`，正文明确“暂时无法展示该商品的信息，请稍后重试”。随后只做一次返回原 SKU 的正常重试，仍进入同一 403 频控页；没有循环刷新、切换入口或换浏览器规避。故本轮恢复门结论是“人工验证后仍被 rate limited”，不能把扫码写成已验证恢复方案。
+- 真实普通浏览器复核：京东自营冰箱入口当前为 5 页、首屏每页 60 个商品卡，卡片均带“自营”；一个米家详情即使页面仍显示未登录提示，DOM 仍公开给出 26 项规格，其中品牌、商品编号、类型与 `能效网规格型号=MC-186DMD` 均可读取。故“登录”不是详情规格的业务前置，标题仍只作发现文本，只有详情参数的型号字段才进入 identity。
+- “更多品牌”展开后 DOM 返回 500 个标签，混入出版社、工具、清洁品等明显非冰箱品牌；因此品牌筛选只能说明平台 facet 污染，不能作为品牌分母。6.4 必须从 5 页实际自营商品投影品牌，并逐商品详情确认型号。
+- 历史依赖候选：`patchright@1.61.1` 为 Apache-2.0、Node >=18、近期发布且官方 Node 包仍活跃；Crawlee `BasicCrawler` 的 request queue、并发/重试/取消与每次枚举独立 `MemoryStorage` 仍是可复用资产。但 Patchright 在当前旧/新/无 Profile 的同 SKU 原型均进入 `risk_handler`，故撤销其“优先生产浏览器候选”地位；它只保留历史访问证据、当前 typed failure 与详情 parser 验证，不再把持久 Profile 或人工登录写成确定修复：https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs 、https://www.npmjs.com/package/patchright
+- 专用 Profile 默认位于 Git 已忽略的 `data/`，配置可覆盖；Cookie、认证 Header、密码、验证码信息和 Profile 内容不得输出、进入证据或提交。页面状态沿用共享 `SourceObservation` 既有 `login_required / verification_required / access_denied / rate_limited / source_abnormal` vocabulary；真实登录/验证只暂停京东来源并保留 Market Universe blocking unknown，不自动绕过。
+- 京东 typed 边界已接到 Market Universe 刷新：Crawlee `BasicCrawler` 负责独立内存队列、重试和并发 1；5 页目录卡只承担发现并过滤非自营卡片，详情以“品牌＋能效网规格型号”为 identity，并以类型或官方分类路径确认冰箱、显式排除相邻冷柜等品类，营销标题永不进入型号 identity。京东成功时作为第十个来源并入候选；typed 访问失败时九个官网快照仍保存，京东单独形成 blocking `source_access` unknown。Patchright 被当前真实门淘汰后，其自动浏览器生命周期、生产 Profile 配置和生产依赖已删除；生产 bootstrap 没有注入已通过的 `JdPageReader` 时立即返回 `source_abnormal`，不会再访问京东或启动浏览器。
+- 2026-08-16 新建专用 Profile 的真实生产运行在品牌页被京东转入安全验证，最终返回 `verification_required`；没有生成京东快照、没有自动验证、没有读取或复制日常 Chrome Cookie，也没有把 Profile 内容写入 Git/日志。运行同时发现 `domcontentloaded` 后二次跳转会短暂销毁执行上下文，旧检测已重写为将该瞬间视作页面状态变化，再由 URL/正文归类 typed 状态，而不是另造 fallback。三商品与五页完整枚举门仍未通过，所以 Patchright 组合和京东 adapter 保持生产候选，不能写成已完成来源。
+- 同日最小差分诊断推翻了“只需复用已登录 Profile”的假设：历史 R-001 成功的旧专用 Profile、生产新 Profile 以及无 Profile 的 Patchright 都被送入 `risk_handler`；官方 Playwright＋系统 Chrome 只得到空骨架，Puppeteer＋系统 Chrome进入频控页，普通 Chrome临时专用 Profile经官方 CDP连接则进入登录页。相同时间的 Codex普通浏览器会话无需登录即可读取上述 26 项规格。因此根因边界是当前本机自动化启动/连接表面与京东页面状态的组合，不是型号页必须登录，也不是单个旧 Profile 丢失。禁止通过复刻 `h5st`、伪造指纹、修改 UA/headers 或复制受信任会话 Cookie 来弥合差异。
+- 当前不存在通过产品关键门的生产浏览器候选：Codex普通浏览器会话只证明公开规格可达，尚不是 Workbench 可调用、可恢复、可审计的 Source Provider。京东 adapter 仅保留 typed 失败、注入式分页/详情解析和九源隔离，不能描述为已完成京东采集。R-012 的当前候选处置如下：
 
-候选验收设计（尚待用户确认）：
+- 2026-08-17 产品范围纠偏：此前 R-012/6.4 把京东产物过度收窄为自营目录中的“品牌＋厂家型号”，也把 EvidenceRequest 最小证据边界错误前置到第一轮来源发现。用户明确京东的首要价值是其分类/筛选体系、国内外品牌官方旗舰店聚合、每款商品完整详情图文，以及评价汇总和每款前 50/100 条样本。后续研发必须先形成可查看、可导出、可恢复的来源数据集，再投影 Market Universe、属性/比较候选和 Evidence；浏览器可达性与频控候选状态仍按本节失败关闭，不因范围纠偏自动恢复批量访问。详细方案见 `JD-COLLECTION-DESIGN.md`。
 
-- **范围覆盖**：相对于版本化模板与明确的候选总体/发现台账报告覆盖、排除、不可访问和未知，不声称无法证明的“京东全量”。
-- **场景覆盖**：把品牌层级、产品/变体层级、页面状态、文本/图片载体和异常类型作为因素，使用 covering array 或等价成熟工具生成组合场景。
-- **质量抽样**：先用小规模试采估计缺陷和差异，再按用户能理解的风险等级映射到置信度与允许误差，由统计方法计算样本量并显示理由；不让用户直接发明样本数。
-- **能力验收**：以用途配置中的 competency questions 验证知识包是否能回答目标问题，并验证证据、离线查询、恢复和版本行为。
+| 候选 | 成熟度、许可证与 Node/本地边界 | 当前真实门 | 处置 |
+|---|---|---|---|
+| Patchright 1.61.1＋Crawlee | Apache-2.0；Node/TS、本机运行；队列与恢复资产已验证 | 旧、新、无 Profile 均进入京东 `risk_handler` | **淘汰为当前生产访问候选**；保留 parser、typed failure 和九源隔离 |
+| 官方 Playwright / Puppeteer＋系统 Chrome | Apache-2.0；活跃 Node/TS；部署和退出成本低 | 同一 SKU 分别得到空骨架与频控页 | **淘汰为当前生产访问候选** |
+| Chrome DevTools MCP 1.7.0 | Apache-2.0；Node `^20.19 || ^22.12 || >=23`；2026-08-10 更新；默认专用 Profile，本地 MCP 不向 Google 发送浏览器数据 | 专用临时 Profile 的等价 Chrome＋CDP 原型进入登录页；连接现有 Chrome 的 `--autoConnect` 需要 Chrome 144+、用户先开启远程调试并在 UI 点 Allow，且会暴露所选 Profile 的全部标签页、Cookie 和存储 | **不满足无人值守/最小权限生产门**；不得连接日常 Profile。若未来 Chrome 提供可预授权、专用且可审计的连接边界，再重新原型：https://github.com/ChromeDevTools/chrome-devtools-mcp 、https://developer.chrome.com/docs/devtools/agents/use-cases/auto-connect |
+| Codex 内置 Browser / Chrome 插件 | OpenAI 官方维护；内置 Browser 使用独立 Profile、站点权限和敏感操作确认 | 同一 SKU 匿名读取 26 项规格，但官方明确 Browser 只在 ChatGPT/Codex 桌面会话可用，不在 Codex CLI/IDE；调用方式是会话内 `@Browser`，没有供任意本地 Worker 调用的稳定 Provider API | **只作可达性证据，不接生产 Worker**：https://learn.chatgpt.com/docs/browser?surface=app 、https://help.openai.com/en/articles/20001256-plugins-in-codex/ |
+| 京东官方 API / 商务接口 | 官方授权通道；部署、配额、字段与许可范围需另做真实 POC | 现有 ADR-0004 与用户决定明确不走该路线 | **未授权，不调研后接线**；只有用户明确重开决定才进入候选 |
+| 复制 Cookie/Profile、复刻 `h5st`、伪造指纹/headers | 自研绕过且泄露凭证边界，无可接受维护和退出路径 | 与安全、不绕过验证和本地秘密边界冲突 | **永久拒绝** |
 
-2026-08-14 隔离原型与纠偏：
+- 简单说明：京东页面本身无需登录，问题在于“普通可信浏览器能读，当前可编程浏览器会被区别对待”。能复用普通 Chrome 状态的成熟工具又要求用户当场授权，并会拿到整个 Profile，不适合后台批量任务；所以当前正确结果是京东保持 typed unknown，而不是抓四份样本或用标题猜型号。
+- 上述复核不新增商品字段 DOM projector 或通用 Provider。每个已接来源只用薄 adapter 隔离外部目录差异；未通过安全访问门或缺少厂家型号 identity 的来源继续保持 typed unknown。
 
-- 原型位于 `docs/development/pocs/r008/`，只新增非生产 LinkML 模型、正确/错误样例和调用成熟库的验证脚本；所有生成物和依赖均位于临时目录，没有修改项目依赖、数据库或业务代码。
-- 第一版用 `RefrigeratorModel` 继承公共型号，虽然技术上可表达，但会让每个品类产生新的生产 Schema/代码，已按用户纠正明确拒绝。
-- 第二版只保留稳定 `ProductModel`、`AttributeClaim`、`ProductKnowledgeClaim`、`Offer` 和证据结构；冰箱与电视各自是 `CategoryKnowledgeDefinition` 数据，由同一个 Schema 校验。电视文件只验证迁移结构，不证明电视知识字段专业或完整。
-- LinkML `1.11.1` lint 和 metamodel validate 均为 0 问题；正确用途说明通过，错误样例因空用途、空问题集、错误枚举和错误时间被拒绝。
-- LinkML 原生 TypeScript generator 在该模型上把多值枚举、枚举范围和 decimal 降级为不正确的 `string`，因此明确拒绝该生成路径。`LinkML → JSON Schema → json-schema-to-typescript@15.0.4` 能保留枚举 union、非空数组和 required/optional 约束，是继续验证的单一事实源候选。
-- RJSF `6.5.3` 从生成的 JSON Schema 成功渲染 10,907 字节 HTML，包含核心必填项和枚举；但默认也展示 ID、模板版本等内部字段。产品交互候选因此是“Codex 引导对话＋RJSF 结构化回顾/修改”，并通过独立公开表单 schema 或 `uiSchema` 隐藏内部字段，而不是自研表单或把技术表单直接交给用户。
-- `allpairspy==2.5.1` 将 5 个因素、324 个全组合压缩为 16 个场景，并经独立断言确认覆盖 102/102 个值对。NIST 同时明确 pairwise 并非所有风险都足够，因此二阶只能作为平衡风险的默认候选，更高风险需由需求和试采证据决定是否提升至三阶或更高。
-- `statsmodels==0.14.6` 根据四组示例置信度、预期成功率和允许误差算出 25、73、457、165 个样本；59/59 全部成功时，Clopper–Pearson 单侧 95% 成功率下界约为 95.05%。这证明质量目标可以计算，也证明“固定 50 个型号”没有普适含义。
+### R-011 质量与人工频次
 
-原型后的候选结论（待用户以真实使用确认）：
+状态：contract 已接受；数值待阶段 1A/1B
 
-1. 用户只说明知识主题、用途、来源许可、新鲜度和业务风险；不输入“目标 Agent”、字段表、品牌数或样本数。
-2. 系统用稳定商品知识模型＋共享属性字典＋数据化品类知识定义形成专业结构；用途说明只选择重点，不创建新 Schema。
-3. Codex 负责像 `grill-with-docs` 一样追问并解释取舍；结构化表单只用于最终回顾和修订。
-4. 系统从可证明的候选总体、场景因素、风险等级和小规模试采派生范围报告、组合场景和统计抽检计划，并把公式、参数与理由展示给用户；具体生产运行库必须另过维护性、许可证和单运行时复杂度门。
-5. 品类定义和指标必须保留版本与退出路径；冰箱首轮真实试用可以修改候选数据，不能因本原型通过就冻结生产架构。
-6. 架构冻结前用第二品类小样本验证生产 Schema、数据库结构、通用 interface、Runtime API 和同来源 Provider 实现零修改。
+结论：结构、证据、身份一致性、知识层完整性、时效和冲突为硬门；Runtime/下游能力使用版本化任务集；模型评分只补充。没有证据时保持 unknown。
 
-停止条件：如果真实冰箱资料无法映射稳定模型/数据化品类定义、切换第二品类需要新增品类类或通用流程分支、Codex 仍要求用户回答专业字段、二阶场景漏掉高风险交互、统计目标无法用业务风险解释，R-008 返回调研，不进入生产实现。GS1 GPC 数据分发许可未解决前禁止内嵌；组合/统计生产运行库未解决前禁止自写算法或直接增加 Python/非官方 WASM runtime。
+新增纠偏门：报告每 100 个 EvidenceRequest/候选的人工例外数量、typed 原因、可批量比例和处理耗时。用户不逐字段排版；队列按 request/reason/source/evidence/category version 确定性筛选，不调用 LLM 判断“同类”。在真实数据前不承诺固定人工次数。
 
-R-008 已完成文档与隔离能力门，并支撑 Q003/Q004 的方向确认；Q005/Q006 的产品口径已确认，实际来源枚举、质量数值和组件仍依赖 R-010/R-011 原型。LinkML、RJSF、ETIM、`allpairspy` 和 `statsmodels` 仍是候选，不是已冻结的生产依赖。
+## 4. 来源访问与旧 contract 处置
 
-### R-009 首轮来源、登录、对象身份与发布门
+### R-001/R-012 浏览器与官方来源访问
 
-状态：调研中（Q007～Q010 产品边界已确认；JD 原始留证已通过，脱敏与异常原型待完成）
-目标阶段：0、1A、1C
+状态：队列、状态分类和最小证据边界保留；京东生产浏览器候选已重开且当前无通过项
 
-问题：Q007～Q010 应让用户确认哪些可见产品行为，而不是要求用户设计浏览器会话、对象主键、快照格式或模型审核状态机。
+候选比较：用户选择的教育研究网页路线、并发 1、遇验证码/风控失败关闭、不自研反检测/验证码/账号切换仍有效。2026-08-16 的同 SKU 差分已证明登录不是公开规格的业务前置，同时推翻“Patchright＋持久 Profile＋人工登录即可形成生产 Provider”的实现假设；当前候选矩阵和处置以 6.4 小节为准，不得再引用历史 R-001 成功样本宣布生产可达。
 
-当前代码事实：生产适配器仍只实例化 `CheerioCrawler`；R-001 隔离 POC 已用 `crawlee@3.18.1` 注入 `patchright@1.61.1`，复用本机 Chrome 和专用 Profile 打通 JD 原始留证及公共样本中断恢复。`Source` DTO 预留 `requiresLogin` 和 `playwright` 类型，但该 POC 尚未进入业务代码。数据库虽预留 `rawHtmlPath` 和 `screenshotPath`，当前返回映射不包含两字段；现有 Reddit `RawContent` 也不能直接充当商品型号、SKU、Offer 或不可变快照。
+验证：历史真实样本只证明 Patchright 曾接入本机 Chrome、Crawlee 可恢复队列、系统可区分 loaded/login/challenge/discontinued；当前样本证明所有本机程序化启动/连接候选未通过，而 Codex 内置 Browser 的成功只证明公开页面可达。旧 POC 永久保存过 HTML/文本/截图/资源清单，但该范围已由 ADR-0011 撤销，只保留访问与状态证据。见 `pocs/r001/README.md`、ADR-0004。
+
+官方依据：https://crawlee.dev/js/ 、https://github.com/apify/crawlee 、https://github.com/Kaliiiiiiiiii-Vinyzu/patchright 、https://playwright.dev/docs/auth 、https://github.com/ChromeDevTools/chrome-devtools-mcp 、https://developer.chrome.com/docs/devtools/agents/use-cases/auto-connect 、https://learn.chatgpt.com/docs/browser?surface=app
+
+### R-013 受限快照白名单投影
+
+状态：已替代；见 R-026/ADR-0011
+
+历史决定把登录态整页永久留在受限快照，再按来源 DOM 白名单投影。该设计扩大敏感数据并要求逐站字段 projector，不能满足未知 DOM/跨品类，ADR-0005 已 superseded。严格 Schema、外部内容不直接进模型、privacy 物理隔离三个不变量继续保留。
+
+### R-014 文档/表格/单位与候选
+
+状态：局部组件保留；旧输入 contract 已替代
+
+可复用资产：
+
+- `unpdf@1.7.0`（MIT）在当前 Node 21 读取历史 16 页 PDF；最新版 1.8.1 当时要求 Node 22，未升级；
+- `read-excel-file@9.3.10`（MIT）精确读取 XLSX 行/单元格；
+- `mathjs@15.2.0`（Apache-2.0）只对明确声明单位/规范单位的十进制值作确定性换算；
+- Zod 为候选唯一作者态 Schema，模型/规则结果必须引用 evidence ID；
+- 近似型号、冲突、图片解释和缺证据不得自动合并/发布。
+
+旧 Cheerio 官网/JD projector、整页输入、`sanitized projection` 和图片模型 POC 不再是目标 contract。格式 adapter 只能从 EvidenceItem/临时来源内容产生最小片段，不能定义商品字段。见 `pocs/r014/README.md`。
+
+官方依据：https://github.com/unjs/unpdf 、https://github.com/catamphetamine/read-excel-file 、https://mathjs.org/docs/datatypes/units.html
+
+### R-023/R-024/R-025 旧 Acquisition/Raw Material contract
+
+状态：已替代；局部基础设施保留
+
+保留：Crawlee RequestQueue、SitemapRequestList、FileDownload、`file-type`、`get-stream`、RFC 9110 条件请求、typed 来源状态/人工恢复。撤销：Provider 提交整页 capture、Raw Material snapshot/manifest、以 snapshot 存在计算覆盖、可重放整页文件和按 provider/media 选择 projector。
+
+HTTP validator 只属于 SourceObservation：`304` 说明服务端表示未变化，不自动证明旧证据仍充分；`200` 也必须重新满足 EvidenceRequest 才提交 EvidenceItem。不得自研 cache/scheduler/transport。
+
+官方依据：https://crawlee.dev/js/api/core/class/RequestQueue 、https://crawlee.dev/js/api/core/class/SitemapRequestList 、https://crawlee.dev/js/api/http-crawler/class/FileDownload 、https://www.rfc-editor.org/rfc/rfc9110.html#section-13
+
+## 5. 当前关键调研
+
+### R-026 目的驱动采集、最小证据与媒体证据
+
+状态：产品方向已确认；locator、公开静态网页、PDF 单页、XLSX 最小区域和整图字节真实性门已接受；完整 1A 矩阵、动态页面、图片正式投影、模型抽取/OCR/图片语义候选待 POC
+目标阶段：重新打开的 1A、1B
+
+#### 问题与不可取消约束
+
+外部 DOM、文档排版和品类结构无法预先枚举。采集输入必须是已确认知识需求、对象范围和证据要求；站点/URL/DOM 只是执行线索。永久保存内容必须是支持明确问题的最小不可变 EvidenceItem；整页 HTML、全页截图、完整无关文档、HAR、Cookie、Header 和 Profile 默认不得持久化。
+
+完整页面/文件可在本机受控临时区读取；证据提交、失败、取消后必须清理未选内容。以后出现新问题而旧证据不足时重新采集，不声称能从最小证据恢复整页。
+
+图片是否保存由知识需求决定，不由 `<img>` 数量、文件名、尺寸或 DOM 邻近单独决定。无法证明图片与对象/知识点关系时保持 unknown/人工审核。规则、OCR、模型都只产 ExtractionCandidate。
+
+#### 官方标准与成熟候选（核查 2026-08-15）
+
+- W3C Web Annotation Recommendation 已定义 TextQuote(exact/prefix/suffix)、TextPosition、Fragment、Range、DataPosition、SVG selectors；Media Fragments 定义图片 `xywh`。接受这些语义作为 locator 词汇，不引入完整 JSON-LD/RDF 注解平台：https://www.w3.org/TR/annotation-model/ 、https://www.w3.org/TR/selectors-states/ 、https://www.w3.org/TR/media-frags/
+- Playwright 已在项目中，官方支持 locator/element screenshot、clip 和 buffer。接受定点截图；`fullPage` 不是默认产物：https://playwright.dev/docs/screenshots 、https://playwright.dev/docs/api/class-page
+- Schema.org `Product.image`/`ImageObject` 可提供对象/图片关系、caption、代表页等提示，但来源不保证存在且仍需核验，只是关系候选：https://schema.org/Product 、https://schema.org/ImageObject
+- Stagehand v3（MIT、TypeScript/Python、活跃）支持本地浏览器、Playwright Page、自然语言与 Zod/JSON Schema 抽取；AI 方法仍需要模型，页面上下文进入所选模型，本地 Ollama 准确性被官方标为有限。结果不自带本项目的不可变 EvidenceItem/locator，因此只做未知 DOM 候选寻找 POC：https://github.com/browserbase/stagehand 、https://docs.stagehand.dev/v3/basics/extract 、https://docs.stagehand.dev/v3/references/extract 、https://docs.stagehand.dev/v2/configuration/models
+- Firecrawl 核心 AGPL-3.0；自托管基线需要 Docker Compose、多服务和 PostgreSQL 队列，默认自托管不含 screenshot，LLM extraction 需额外 provider，Cloud 结果/活动记录有远程边界。许可证、部署、全量 crawl/Markdown 和退出成本不适合当前最小本地证据，拒绝作为 Workbench 基础设施：https://github.com/firecrawl/firecrawl 、https://docs.firecrawl.dev/contributing/self-host 、https://docs.firecrawl.dev/features/extract
+- Tesseract.js（Apache-2.0、Node/浏览器 WASM、100+语言、2025 有 release）可本地 OCR 图片；官方明确不支持 PDF 且不改进模型准确率。保留中文印刷图片 POC，不用于语义关系：https://github.com/naptha/tesseract.js/ 、https://github.com/naptha/tesseract.js/blob/master/docs/faq.md
+- PaddleOCR（Apache-2.0、Python/Paddle、PDF/图片/版面/表格、100+语言）能力更全但部署重；仅当 Tesseract.js 真实质量失败且产品确需本地 OCR 时比较：https://github.com/PaddlePaddle/PaddleOCR
+- sharp（Apache-2.0、Node/libvips）可做 metadata、方向和确定性 crop；原生依赖进入生产前必须补 macOS 与 Linux 安装/运行 POC：https://sharp.pixelplumbing.com/api-input/ 、https://sharp.pixelplumbing.com/api-resize/
+
+#### 2026-08-16 Crawlee 公开网页真实冰箱纵切片
+
+- 复核 Crawlee 官方文档：`CheerioCrawler` 是 Node/TypeScript 的 HTTP＋Cheerio 成熟实现，提供 HTTP/2、队列、重试和 HTML parser；`Configuration.persistStorage:false` 可关闭本地存储写出。当前仓库使用同版本 `@crawlee/cheerio/http/core@3.18.1`，不自写 HTTP 重试或 HTML parser：https://crawlee.dev/js/docs/introduction/first-crawler 、https://crawlee.dev/js/api/cheerio-crawler 、https://crawlee.dev/js/api/3.12/core/class/Configuration
+- 接受范围仅为 `PublicWebTextSource.capture` 薄 adapter：输入 HTTPS URL、显式允许的 origin、一次性 CSS 访问线索和必要对象文本；初始/重定向 origin 都校验。selector 不进入知识模型，也不映射品牌/品类字段。
+- 真实海尔官网样本 `BCD-500WGHFDB5XAU1` 返回 HTTP 200。adapter 选中包含该型号的 Schema.org Product JSON-LD 原始块，3,997 bytes，SHA-256 `c4819d551a766ed09955c115205af4472f5de367127b8800b9571a26d47e529d`；没有解析属性、清洗或生成候选。
+- 第二个真实美的官网样本 `BCD-501WSPM(Q)` 同样返回 HTTP 200，但页面是 HTML 规格表而非 JSON-LD。未改动 Schema/API/adapter，仅使用该请求的 `#product_spec` 访问线索，选中 5,873-byte 原始文本，SHA-256 `3c11f72f24589a90d49c4806fad715b1f297ea742079945f6359c127e8970b06`；仍不做属性解析或清洗。
+- 监管来源核对：市场监管总局/国家发改委 2026 规则确认家用电冰箱属能效标识管理产品；中国能效标识网的“产品备案查询”公开系统可用。其前端公开声明 `/admin-api/gateway/productRegistration/productRegistrationList` 与 `productDetailById` 两步 POST JSON 协议；未使用登录、Cookie 或认证材料。官方规则：https://www.samr.gov.cn/xw/zj/art/2026/art_622696c3b0d24421b782e1ffd657dbeb.html ；查询网站：https://www.energylabel.com.cn/
+- 真实备案列表对 `BCD-501WSPM(Q)` 返回唯一结果：备案号 `20241017-471100-92391729144470006`、生产者“合肥美的电冰箱有限公司”、能效等级 1。Crawlee `HttpCrawler` POST 详情 POC 保留 1,079-byte 原始 JSON，SHA-256 `9d7b01b670d89bdc0d40f83ff90c4832b1b6caca8722afc3016d0ce049494cc3`，包含 `GB 12021.2-2015`、标准/综合耗电量与间室容积。
+- 监管 POC 的首次实现错误假设 `PlainResponse.rawBody`，失败后删除该假设；按 Crawlee 官方 `HttpCrawlingContext.body: string | Buffer` 取得原始内容后通过。因两步列表/详情是官方特有协议，只接受隔离它的薄 Source Access adapter；不冻结到通用 Evidence interface，不自写 HTTP、重试或 JSON parser。Crawlee body contract：https://crawlee.dev/js/api/3.14/http-crawler/interface/HttpCrawlingContext
+- 缺失型号样本由 Crawlee 完成既定重试后返回 typed `evidence_not_found`，没有把 URL/HTTP 200/空内容视为成功。Crawlee 磁盘持久化关闭，完整响应只在本次内存访问中存在。
+- 正式组合根通过冻结冰箱项目生成 EvidenceRequest，保存 SourceObservation、最小 EvidenceItem 与 CAS manifest；API 重读、桌面和 390px Workbench 显示来源、SRI、字节数和原始内容。完整命令、ID、结果和退出成本见 `pocs/r026/README.md`。
+- PDF 候选复核：`unpdf@1.8.1` 为 MIT、Node >=22 的 TypeScript/JavaScript PDF.js 封装，可用 `mergePages:false` 返回逐页文本；Crawlee `HttpCrawler@3.18.1` 可用已验证的自定义 `Configuration` 下载二进制响应并沿用成熟重试/超时。拒绝生产使用 `FileDownload`：其 3.18.1 公开 TypeScript 构造签名不接受自定义 Configuration，不能满足本轮“不落盘”证明门。
+- 真实美的官方 16 页说明书为 1,154,097 bytes，源文件 SHA-256 `bd173c352c759dea6a4128dcc4dda079b1a8102dec7a01f40f96846036ca2478`。型号 `MR-457WUSPZE` 出现在 5 页，不能以“型号唯一页”定位；使用本次知识问题的“型号＋年综合耗电量＋外形尺寸”线索唯一定位第 14 页，保留 3,768-byte 原始页文本，SHA-256 `97c17f2d1bbea79422a82854bb5153503d157f1b9a5f467cbc38cc6fec6dbc96`。完整 PDF 只在内存中，成功和缺失路径后均无永久完整文件。
+- `DocumentExcerptSource.capture` 生产薄 adapter、typed API 与自动化已转绿，但真实项目冻结的 Collection Board 尚无 `official_manual` 路线，因此本轮不把 POC 冒充正式 EvidenceItem，也不把说明书错误归类为普通官网页面。
+- `libarchive-wasm@1.2.0`（MIT、Node 18+、WASM、RAR4/5）与 `read-excel-file@9.3.10`（MIT、Node 18+、2026-08-10 更新）通过监管压缩表格 POC。CNIS 服务器把 RAR 错标为 `text/plain`，HttpCrawler 只负责取得 buffer，实际格式由 libarchive 验证；完整 RAR/XLSX 只在内存。真实 RAR 2,301,639 bytes、14 个条目/13 个 XLSX，唯一 2023 工作簿 307,787 bytes；sheet `结果` 的 `A2:G2` 表头与 `MR-457WUSPZE` 唯一 `A479:G479` 行形成 261-byte JSON，缺失型号失败关闭。
+- `CnisRegistryTableSource.captureByModel` 是隔离 CNIS 公开归档布局的薄 adapter，不把 RAR 路径、sheet 或列号写入通用 Evidence contract。正式组合根复用已冻结 `regulatory_check` 路线，提交 EvidenceItem `evidence-3c60c601-cb59-4c99-8fbd-fda7ca6223f6`，内容 SRI `sha256-fdq+uI0tnZSy2qVIXwoarYfaXtq+SsbOH1grUEAEEJM=`。
+- `sharp@0.35.3`（Apache-2.0、Node >=20.9、macOS/Linux/Windows 预编译）通过 macOS arm64 真实图片解码与 Linux x64 glibc 隔离安装门。海尔产品页直接图片首次无 Referer 为 403；加入来源页 Referer 和普通 Accept 后返回 88,486-byte、1200×1200、单帧 WebP，SHA-256 `90a96450d6c91ba5225cb78145fb3415630fff339f99be6e049d8c7a6f474ff6`。URL 的 `.png` 后缀不可信，真实 MIME/格式必须由响应与 sharp 共同验证：https://sharp.pixelplumbing.com/install/ 、https://www.npmjs.com/package/sharp
+- Evidence 核心只接受请求允许、关系方法可接受、全图 locator、SHA-256/实际格式/尺寸/帧数均与字节一致的整图。裁片仍因无法从永久最小内容独立复核原图 hash 而拒绝。现有 API 读取投影只有 `contentText`，不能诚实表达二进制；在人工确认 UTF-8/base64 判别联合的公共 contract 前，不接正式图片 source/API/UI，也不把 POC 写成 EvidenceItem。
+
+结论：Crawlee 3.18.1 通过静态 HTML/JSON、PDF、RAR/XLSX 与图片二进制的来源访问约束；unpdf、libarchive-wasm、read-excel-file 和 sharp 各自只承担成熟格式能力。HTML/JSON、能效详情与 XLSX 最小行已经形成正式 EvidenceItem，PDF 因冻结路线缺失未正式写入，图片因公共读取投影待确认未正式写入。动态页面、异常状态和三品类矩阵仍未证明，因此完整阶段 1A 未通过，也不引入 Provider registry、站点字段 projector 或图片语义模型。
+
+#### 最小 contract
+
+- `EvidenceRequest`：目标对象/集合、问题/属性、允许来源、证据类型、时效、停止条件。
+- `SourceObservation`：URL、时间、访问状态和失败分类；不是证据充分性。
+- `EvidenceItem`：最小内容、URL、时间、hash、locator、请求/对象关系、隐私、证据政策版本。
+- `ExtractionCandidate`：规则/结构化数据/OCR/模型对 EvidenceItem 的解释，必须引用 evidence ID。
+
+文本保存 exact＋必要 context；PDF 保存页/章节＋片段；表格保存 sheet＋表头＋唯一行/范围；图片保存资源 identity 与必要 crop，只有视觉本身构成事实才保存全图。
+
+#### 验证矩阵与停止门
+
+1. 三个品类、每类至少两个布局不同官方站点，共用一个 contract，不增加站点/品牌/品类 DOM 分支。
+2. HTML、动态页面、PDF、XLSX、图片各有真实纵切片；locator 能在保存的最小内容上复核。
+3. 图片覆盖明确关系、同页多图歧义、图中文字、装饰图；关系不明必须拒绝自动入证据。
+4. Stagehand/OCR/sharp/模型分别测准确率、漏检、错误关联、数据边界、成本、部署和退出；新模型用途先获用户确认。
+5. 成功/失败/取消临时清理、公开/受限隔离、敏感阻断和生产入口可达全部通过。
+
+结论：接受 Knowledge Need → EvidenceRequest → SourceObservation/EvidenceItem → Candidate → Review 方向、W3C locator、Playwright 定点截图和 cacache CAS。其余工具在 POC 前保持候选。
+
+### R-027 错误与死代码清算
+
+状态：当前方法已确定；目标：阶段 0R
+
+现有 CodeGraph 是 AST 调用/影响图，结合真实 API/worker/package entry、package exports、CLI/migration/config、动态入口和测试不变量完成清算。不可达只是删除候选；每项必须分类 delete/keep/rewrite。
+
+Knip（ISC、活跃）能从 entry 图报告未使用文件/export/dependency，但官方明确 entry 缺失会级联误报；当前仓库多 workspace 且本机 Node 21.7.3，Knip 当前仓库 engine 要求 Node 22。此次不新增/降级 Knip，也不自研扫描器：https://knip.dev/explanations/how-knip-works 、https://knip.dev/guides/handling-issues 、https://github.com/webpro-nl/knip
+
+删除后必须通过 CodeGraph impact、全 workspace typecheck/test/build、真实生产入口、临时清理和离线包验证；只保护旧 snapshot/projector 的同构测试一并删除，不改测试去保护错误行为。
+
+### R-028 本地 Chat Timeline
+
+状态：接受 `@assistant-ui/react`＋ExternalStoreRuntime；锁定 Node 24，已知包体成本进入实现预算
+目标阶段：0I
+
+#### 问题与不可取消约束
+
+新品类必须从可恢复的聊天采访开始，而不是要求用户先填一张完整大表。界面需在现有 React 18、Vite、Tailwind 和本地 Workbench 内工作，支持流式消息、取消、重试、中文输入法、自动滚动、桌面与 390px 宽度，并从项目自己的持久化状态恢复；不得把 Assistant Cloud、第三方远程消息存储或模型后端变成运行依赖。
+
+Workbench 拥有 Interview Session、规范化 Message、append-only Interview Decision、未决项和 confirmed Category Research Brief。Chat Timeline 只投影这些事实，不从模型文案推导业务状态，也不保存第二份权威任务书。
+
+#### 成熟候选与官方资料（核查 2026-08-15）
+
+- `assistant-ui`：MIT、React/TypeScript、持续维护；提供 thread/message/composer 等可访问 UI primitives，`ExternalStoreRuntime` 可接项目自己的消息、状态和动作，不要求使用 Assistant Cloud。首选 POC 只使用 `@assistant-ui/react` primitives 与现有样式系统：https://github.com/assistant-ui/assistant-ui 、https://www.assistant-ui.com/docs/runtimes/custom/external-store
+- Vercel AI SDK UI：Apache-2.0、TypeScript、持续维护；`useChat` 与 custom transport 可连接自有后端，状态/传输 seam 清楚，但相较 `assistant-ui` 仍需自行组装更多消息列表、composer 和交互细节，作为第二候选：https://github.com/vercel/ai 、https://ai-sdk.dev/docs/ai-sdk-ui 、https://ai-sdk.dev/docs/ai-sdk-ui/transport
+- 从零编写通用 Chat Timeline：当前拒绝。只有两个成熟候选都无法满足本地事实源、可恢复状态或交互验收时，才允许登记最小自研缺口并等待用户确认。
+
+#### 隔离 POC 与停止门
+
+1. 在当前 macOS/Node/React/Vite/Tailwind 组合中安装并构建；进入生产前补目标 Linux 安装与 build，若 Windows 仍在产品支持范围再补 Windows。
+2. 用项目自有内存/测试存储驱动 ExternalStoreRuntime，验证历史恢复、流式增量、取消、重试、错误、输入锁、中文输入法、自动滚动和 390px 布局。
+3. 网络检查证明除项目自己的 HTTP API 外不依赖 Assistant Cloud 或第三方消息后端；退出路径不泄漏消息或 Codex 原始事件。
+4. 比较实现代码、包体、可访问性、升级 seam 和移除成本。只有通过真实浏览器验收后，才能把依赖写入生产 `package.json` 并冻结 UI adapter。
+
+#### 2026-08-16 隔离 POC 结果
+
+- `@assistant-ui/react@0.15.14`＋ExternalStoreRuntime 在 React 18.3.1/Vite 5.3.1/Tailwind 3.4.4 下完成真实 POC。项目自有 `StoredMessage[]`/localStorage 是唯一消息状态；桌面与 390px Playwright/Chrome `2/2` 通过，覆盖恢复、流式、立即取消、错误、重试、刷新恢复、中文 IME composition、自动滚动、axe 和无外部网络请求；in-app Browser 复核同样通过。完整命令、样本和失败处置见 `docs/development/pocs/r028/README.md`。
+- 构建通过但成本不达门：673 modules，主 JS 424.28 kB / gzip 127.82 kB；`@assistant-ui/react` 发布包 unpacked 2,305,255 bytes，并直接依赖 `assistant-cloud@^0.1.40` 和整包 `radix-ui`。POC 没有云网络请求，但安装图仍携带未使用的云包。
+- 当前 Node 21.7.3 下每次安装均警告 `nanoid@6.0.1` 要求 `^22 || ^24 || >=26`；该依赖来自 `@assistant-ui/core`/`assistant-stream`，属于 production graph。不能把“npm 允许警告后构建”写成兼容通过。
+- Vercel 当前 `@ai-sdk/react@4.0.69`/`ai@7.0.66` 都要求 Node `>=22`；Node 18 兼容的是上一主版本 3.x，而且还需项目自行组装消息、composer、滚动和 a11y，因此不是当前基线下更低风险的替代。
+- axe 首跑因默认 30 秒预算超时；没有删规则或改期望，只将该用例预算提高到 90 秒后全量通过。初次 npm 在线安装还曾被代理 `ECONNRESET` 中断，最终用官方 registry 缓存补全；两项均按工具/环境失败记录。
+
+#### 2026-08-16 Node 24 复跑与选型结论
+
+- 用户已确认 Node 24 LTS 基线和推荐方案。使用隔离的 Node `24.19.0` 原样重跑安装、typecheck、Vitest、Vite build 和 Playwright；安装不再出现 `EBADENGINE`，类型、`2/2` 单测、build、桌面与 390px `2/2` 浏览器全部通过。
+- 包体没有因 Node 升级变化：673 modules，主 JS 仍为 424.28 kB / gzip 127.82 kB；直接 `assistant-cloud`、整包 `radix-ui` 和 0.x 升级成本仍是真实负担，不得在交付时省略。
+- 项目级运行门采用 npm 官方 `engines / devEngines`、`.npmrc engine-strict` 和 `.nvmrc`；但反向实测 npm 10.5.0 会忽略 `devEngines` 并继续执行脚本，因此它不能单独保护仍以旧 npm 启动的本机 shell。补充成熟跨平台 `check-node-version@4.2.1`（Unlicense、直接读取 package engines、npm 周下载约 20 万）作为根 dev/test/typecheck/build 入口门，不自写 semver/version parser：https://docs.npmjs.com/files/package.json/ 、https://www.npmjs.com/package/check-node-version
+- 当前根版本范围为 Node `>=24 <25`、npm `>=11 <12`，`.nvmrc=24.12.0`。反向门证明 Node 21.7.3/npm 10.5.0 下安装以 `EBADENGINE` 失败，typecheck 在 `tsc` 前被版本检查器拒绝；正向 Node 24.12.0 arm64/npm 11.6.2 下 106 tests 通过、30 条件跳过，六 workspace typecheck、production build 与 `git diff --check` 通过。硬编码 darwin-x64 Rollup direct dependency 已删除，lockfile 由 arm64 Node 24 原生重装生成。
+- 选型接受 `@assistant-ui/react@0.15.14`＋ExternalStoreRuntime，条件是生产消息/决定/brief 仍归 Workbench、依赖锁版本、Chat UI adapter 保持薄且可整体移除、不使用 Assistant Cloud，并在后续实现中把 gzip 增量作为已知预算持续复核。Vercel AI SDK UI 不承担 UI primitives，当前没有更低的总实现/退出成本。
+
+结论：R-028 通过选型门；生产 `CategoryInterviewTimeline` 已直接使用 ExternalStoreRuntime，消息/Decision/Brief 仍归 Workbench。2026-08-17 删除不会被根 workspace、测试或构建调用的隔离应用、构建配置和独立 lockfile，只保留压缩选型记录；以后升级在当前生产页面上重新验证，不复活平行应用。
+
+#### 2026-08-16 PC Workbench 信息架构复核
+
+问题：首版项目页把新品类采访、项目概览、市场总体和证据面纵向叠在同一页面，视觉上会把采访误解成冰箱项目的一部分，也无法表达用户当前是在“创建品类”还是“推进既有项目”。
+
+官方参考：Codex App 把独立 thread 组织到 project 下，而不是把所有工作流堆在同一 thread 表面；Linear 的 Project Overview 与不同项目视图分层；GitHub Projects 将不同 view 表达为同一项目内的独立 tab。参考：https://openai.com/index/introducing-the-codex-app/ 、https://linear.app/docs/project-overview 、https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/managing-your-views
+
+结论：接受“左侧工作对象导航＋右侧单一工作模式＋项目内阶段 tab”的 PC 信息架构。新品类采访和项目详情互斥；确认任务书并创建项目后回到该项目概览；市场总体和原始证据只在相应前置状态满足时可进入。该调整只改变 Web 投影与导航，不改变 Interview、Project、Market Universe、Evidence 的事实归属或公共 contract。
+
+### R-029 Codex 交互运行时与 Pi 边界
+
+状态：接受 `codex exec --ephemeral` 薄 adapter；App Server `thread/start/resume` 正式路径拒绝保留；MVP 不引入 Pi
+目标阶段：0I
+
+#### 问题与不可取消约束
+
+品类采访需要多轮、可继续、可取消、可观察的 Codex 执行，但浏览器不能直接连接 CLI，Codex thread 也不能成为项目事实源。必须复用官方运行协议或成熟库，不自写 CLI 生命周期、JSONL parser、重试、超时或多模型 fallback。
+
+#### 官方能力与候选处置（核查 2026-08-15）
+
+- Codex App Server 是官方面向富客户端集成的运行协议，提供 thread/turn/item、历史继续、流式 delta、中断、审批与 skill 输入；`stdio` 是默认本地 transport，WebSocket 是实验 transport。官方当前同时把 App Server 命令本身和 WebSocket 标为 experimental、unsupported for production workloads，因此“默认 `stdio`”不能被写成“App Server 已稳定可生产”：https://learn.chatgpt.com/docs/app-server
+- `@openai/codex-sdk` 可在 TypeScript 中开始、继续和恢复 Codex thread，适合自动化/批次任务；它继续承担 R-005 Knowledge Factory 的一次批次候选加工候选。阶段 0I POC 要实测它与 App Server 在富事件、取消和显式 skill 上的能力，不凭文档印象重复接两套：https://learn.chatgpt.com/docs/codex-sdk
+- `pi-agent-core` 为 MIT 的通用 agent loop/runtime，自己拥有工具调用、消息与会话状态。当前同时引入会与 App Server 重复管理 agent loop、模型、工具、事件和继续语义，增加双事实源与退出成本，因此 MVP 拒绝引入，也不作为 App Server 失败时的自动 fallback：https://github.com/badlogic/pi-mono
+
+#### 历史候选边界（已被 2026-08-16 Session 持久化纠错覆盖）
+
+```text
+Browser
+  → 项目 typed streaming HTTP
+  → Category Interview Module
+  → 薄 Codex App Server adapter
+  → 本机 codex app-server stdio
+```
+
+- 每个采访 turn 显式提供仓库专用品类采访 Skill；Skill 只定义采访行为，不保存会话、决定或任务书。
+- Workbench 数据库存规范化消息、Interview Decision 与 confirmed brief；Codex thread ID 只用于继续执行，可丢弃、重建或替换。
+- adapter 只做官方协议到项目 typed event 的校验和归一化。若官方提供版本化 schema 或生成类型则直接复用；确需 JSON-RPC 库时另调研成熟实现，不手写 parser/进程管理器。
+- 浏览器看不到 Codex 登录材料、工作目录、原始工具事件或内部审批数据；Codex 在限定工作目录、工具和权限下运行，进程退出必须清理。
+
+#### 隔离 POC 与停止门
+
+1. 记录真实 Codex CLI/App Server 版本；只验证可用登录状态，不读取认证文件。
+2. 通过 `stdio` 实测 initialize、thread start/resume、turn、item/delta、interrupt、错误、进程异常、重启继续和显式 skill input。
+3. 证明所有外部 `unknown` 在 adapter 边界完成 schema 校验并投影为少量项目 typed event；断开或取消后无孤儿进程。
+4. 比较官方 SDK 是否已经完整覆盖阶段 0I 的富交互需求；只保留一个交互执行入口，批次与交互用途不得共享含混 adapter。
+5. 用真实品类采访样本分别评测 modelId 和 reasoning effort。R-005 的 `gpt-5.3-codex-spark + low` 只适用于历史批次映射，不自动继承到采访。
+6. 复核 POC 时的官方成熟度。只要 App Server 仍明确不支持 production workloads，就不得仅凭功能 POC 接入正式入口；必须优先证明稳定 SDK 可覆盖，否则向用户提交缺口、风险、退出方案和最小例外范围，取得知情确认。
+
+历史结论（现已作废）：曾接受“浏览器 → 项目后端 → 本机 Codex”的候选边界，并把 App Server `stdio` 作为首选实验候选。后续 Session 持久化核查证明关键门失败；当前处置以后文“Session 持久化纠错与候选重开”为准。
+
+#### 2026-08-16 POC 纠错与清理
+
+- 实际验证的稳定候选是官方 `@openai/codex-sdk@0.147.0` TypeScript SDK，不是其他同名或相邻用途 SDK。最小真实探针已跑通 `startThread`、`runStreamed`、thread ID 和 `resumeThread`。
+- 首个样本明确要求“不调用工具”，只观察到少量事件类型。这个样本只能证明该次运行实际产生了什么，**不能证明 TypeScript SDK 缺少 Codex CLI 中可见的丰富调用信息**；此前由“未观察到”外推“不支持”的判断作废。
+- 当前类型表面可确认的具体缺口只限于：`Thread` 没有暴露低层 `turn()`/可直接调用 `interrupt()` 的 handle；结构化 `ThreadInput` 不接受显式 `{ type: "skill" }` item。`run`/`runStreamed` 接受 `AbortSignal`，但尚未用代表样本证明其语义等价于 App Server `turn/interrupt`。
+- 未授权引入 Python SDK，因此 Python 虚拟环境、探针、requirements 和 Python 专用 fixture 已清理；R-029 后续只能先在 TypeScript 路径完成代表性事件、取消、错误、恢复和显式 Skill 矩阵，除非用户另行批准新增语言栈。
+- `codex app-server generate-ts --experimental` 与 `generate-json-schema --experimental` 曾直接写入仓库 POC，产生 1,008 个文件、133,534 行、3,536,891 字节。该全量生成物不属于最小证据，已清理；若后续确需核对版本化协议，必须先生成到临时目录、统计规模，只保留命令、版本、校验摘要和实现真正消费的最小产物。
+
+历史阶段结论（已由后文 Session 纠错与 ephemeral exec 接受结论覆盖）：当时 R-029 未完成，且尚未证明 TypeScript SDK 不满足富交互需求。
+
+#### 2026-08-16 TypeScript SDK 代表性矩阵
+
+- 当前官方最新版 `@openai/codex-sdk@0.147.0`（Apache-2.0、Node `>=18`）在 Node `24.19.0`、版本化样本 `r029-interaction-v1`、`gpt-5.6-terra + medium`、无 fallback 下真实执行。
+- SDK 确实交付丰富调用信息：样本观察到 `command_execution` 的 `item.started/in_progress` 与 `item.completed/completed`、完整命令、thread ID、turn 完成；用新的 `Codex` 实例 `resumeThread` 后得到 `R029_RESUME_OK`。此前“SDK 看不到 CLI 丰富调用信息”的说法确认错误。
+- 显式 `$r029-poc-skill` 成功返回 `R029_SKILL_OK`。SDK 类型仍不接受结构化 `skill` input item，但在仓库 Skill 路径固定、Skill 经校验且实现记录内容哈希的前提下，用户已接受 `$skill-name` 作为最小兼容输入。
+- 稳定 SDK 的事件 union 和真实运行都没有 `item/agentMessage/delta`；agent message 只在 `item.completed` 出现。它能流式交付生命周期事件，但不能满足 Chat Timeline 的文字增量输出。
+- 对活动 `node -e "setTimeout(() => {}, 60000)" r029-cancel-probe` 调用 `AbortSignal` 后，SDK 报 `The operation was aborted`，但子进程 PID `64633` 仍存活；POC 随后只终止该精确进程并确认无匹配残留。因而 AbortSignal 不能视为已证明等价于 `turn/interrupt`，也不满足取消后的进程清理门。
+- 非法工作目录和缺失 Codex 可执行文件分别得到明确错误；没有 fallback。
+
+历史结论（后续步骤已作废）：稳定 TypeScript SDK 的能力/缺口证据保留，但“下一步验证 App Server `stdio`”已经执行且最终因持久 Session 失败；当前不得重跑该路径。
+
+#### 2026-08-16 App Server `stdio` 最小例外 POC
+
+- 官方 `@openai/codex@0.147.0` 通过 `stdio` 完成 initialize、thread start/resume、turn、66 个 `item/agentMessage/delta`、typed Skill input、`turn/interrupt`、初始化错误、正常进程退出和 SIGKILL 异常表面；中断后的长命令无残留，新进程可恢复原 thread。
+- 只在隔离 POC 使用 `execa@10.0.1`、`ndjson@2.0.0`、`json-rpc-2.0@1.7.1` 和 Zod，分别承担进程生命周期、JSONL、请求关联/timeout 和边界校验；没有自写这些通用能力，也没有生产依赖变更。
+- 版本化 TypeScript/JSON Schema 生成器只写入临时目录：642 文件/6,923 行和 285 文件/117,312 行；统计后全部清理，零生成物入库。
+- 当前 0.147.0 实际 `thread/start.sandbox` 使用 kebab-case，官方页面示例仍展示 camelCase，证明实验协议存在真实漂移风险。完整命令、样本、失败和清理见 `docs/development/pocs/r029/README.md`。
+
+历史结论（现已作废）：曾接受本机 Workbench 专用、版本锁定的 App Server `stdio` 薄 adapter 例外；当时漏验全局 Session 持久化，故该接受结论撤销。POC 只保留为能力与失败审计证据。
+
+#### 2026-08-16 正式 adapter 与真实采访样本
+
+- 正式 adapter 版本锁定 `@openai/codex@0.147.0`，复用已验证的 `execa@10.0.1`、`ndjson@2.0.0`、`json-rpc-2.0@1.7.1` 和 Zod。新增 `zod-to-json-schema@3.25.2`（ISC）将唯一 Zod contract 转为 OpenAI strict schema；新增 `stream-json@1.9.1`（BSD-3-Clause）只从结构化 delta 中投影 `assistantText`，没有自写 JSON/JSONL parser。
+- 官方 0.147.0 JSON Schema 再次只生成到临时目录，用于确认 `TurnStartParams.outputSchema` 和 `ItemCompletedNotification.item`；临时目录随即移入废纸篓，未提交生成物。
+- 版本化真实样本 `fridge-interview-v1` 固定 `gpt-5.6-terra + medium`、显式 typed Skill、只读 sandbox、无 fallback。最终返回 55 个可见文字 delta、一个 owner question、一个 `proposedDecision`，并明确要求显式确认；没有自动生成 confirmed decision 或 brief。
+- 两次真实兼容失败均已收窄到 schema seam：OpenAI strict schema 要求所有 property 都进入 `required`，故使用成熟转换器的 `target: openAi`；response format 不接受 `format: uri`，故领域 URL 继续由同一 Zod schema 的自定义校验保护，模型 schema 只接收 string。strict 输出中的 `null` 在 runtime seam 归一化为领域 `undefined`/空数组。
+- 真实样本结束后 `production-interview-runtime-sample` 和 `codex app-server --stdio` 均无残留。当前样本证明启动轮的一次一问、真实 delta、结构化候选和进程退出；中断、resume 和异常仍由前述 App Server 代表矩阵覆盖。
+- HTTP streaming 复核：官方 `@fastify/sse@0.6.0` 要求 Fastify `^5.x`，与当前 Fastify 4 不兼容；未借本任务升级框架。采用 `fastify-sse-v2@4.2.2`（MIT、peer Fastify `>=4`）只承担 SSE framing/backpressure，typed event 仍由共享 Zod contract 拥有。退出时可随未来 Fastify 5 升级替换该单一 HTTP adapter，不影响 Workbench contract。
+
+历史参数证据：`gpt-5.6-terra + medium` 曾通过该启动轮样本，但依赖的运行时已因持久 Session 被拒绝；不得据此继续阶段 0I 纵切片。新运行边界确认后必须重新验证，不能沿用此样本宣布通过。
+
+#### 2026-08-16 Session 持久化纠错、遗漏候选补查与接受结论
+
+用户在真实 Codex 全局目录发现采访开发产生的大量 Session。只验证进程退出和无孤儿进程，没有验证 Session 是否进入全局列表/`sessions` 目录，是此前验收门的实质遗漏。以下结论覆盖本节更早的“接受最小 App Server 例外”和“参数可继续纵切片”结论；历史 POC 证据保留用于解释能力边界，但不得继续作为正式运行时接受依据。
+
+官方资料复核：
+
+- App Server `thread/start` 的响应示例明确返回 `ephemeral: false`；`thread/resume` 继续已存储 Session。`serviceName` 只用于标记 thread 级指标，不提供存储目录、命名空间或不落盘隔离：https://learn.chatgpt.com/docs/app-server
+- App Server `thread/fork` 支持 `ephemeral: true`，该 fork 只存在于内存且不进入已存储 thread 列表；但它必须从一个已存储 source thread 派生，且进程退出后不能承担跨进程继续。它无法满足“采访运行时不在全局 Codex 目录留下任何产品 Session”的完整约束：https://learn.chatgpt.com/docs/app-server
+- 官方 TypeScript SDK 文档只公开 `startThread()` 和 `resumeThread(threadId)`；未公开不持久化的 start 或项目专属 Session 存储位置。现有真实 SDK/App Server POC 已产生可见全局 Session，因此不能把“文档未说明”解释成隔离已成立：https://learn.chatgpt.com/docs/codex-sdk
+- App Server 命令和 WebSocket transport 仍被官方标为 experimental/unsupported for production workloads；即使 `ephemeral fork` 能覆盖部分交互，也不能消除生产成熟度风险：https://learn.chatgpt.com/docs/app-server
+- 官方稳定 CLI 的 `codex exec --ephemeral` 明确承诺本轮不把 Session rollout 文件持久化到磁盘；同一命令还提供 `--json`、`--output-schema`、`--output-last-message`、`--model`、`--sandbox` 与配置覆盖，足以承载本项目的无状态单轮 Skill 执行：https://developers.openai.com/codex/cli/reference
+- 本项目此前只比较了 App Server、ephemeral fork 和 TypeScript SDK start/resume，遗漏了稳定 `codex exec --ephemeral`。这是调研不完整，不是官方能力缺失。
+- 对照 `/Users/guojunxi/Desktop/work/opencode-dev` 当前架构：Host/平台拥有 canonical conversation 和 accepted state，Agent runtime 只持有私有继续语义。该原则直接复用；但对方使用 Pi 是为了多 Provider、工具循环和 compaction，本项目只有一个采访 Agent，复制 Pi/registry 会违反最小复杂度与已接受的“不引入 Pi”边界。
+
+候选处置：
+
+| 候选 | 隔离结果 | 处置 | 退出/改造成本 |
+|---|---|---|---|
+| 现有 App Server `thread/start/resume` | 持久写入全局 Codex Session | **拒绝** | 重写 runtime；移除 PostgreSQL 中 `codexThreadId` 作为继续机制；保留 Workbench 消息/Decision/Brief |
+| App Server `ephemeral thread/fork` | fork 本身不进列表，但依赖已存储 source thread，且不能跨进程恢复 | **拒绝作为完整方案** | 仍需全局 seed、常驻进程或每轮重建；同时保留 experimental 风险 |
+| 现有 `@openai/codex-sdk` start/resume | 官方未提供无持久 Session start；现有 POC 已出现全局记录 | **拒绝直接替换** | 无法只换 adapter 解决；重新跑矩阵只会继续制造 Session |
+| Workbench 持有全部上下文＋官方 `codex exec --ephemeral` 无状态单轮执行 | 官方明示不持久化 rollout；真实验收前后 `~/.codex/sessions` 文件差分为空 | **接受** | 复用现有 Codex 登录；每轮重放 typed state；无 Codex thread resume；通过 `execa`/`ndjson`/Zod 薄适配 |
+| 直接接稳定模型 API | 可无状态，但新增 Provider/API 凭证和另一条调用边界 | **当前拒绝** | `exec --ephemeral` 已满足约束，无需扩大鉴权与 Provider 范围 |
+
+最小原型结论：先用 fake Codex 建立红灯，旧 App Server 路径会在模拟全局目录写入 `rollout-pollution.jsonl`；改为 `exec --ephemeral` 后完成与取消路径均保持目录为空。随后仅运行一次真实 `gpt-5.6-terra / medium` acceptance，完成一轮结构化采访输出，测试断言 `~/.codex/sessions` 前后新增文件为 `[]`。临时 schema/最终输出在成功、失败和取消的 `finally` 中删除。
+
+主动调查验收补充（2026-08-16）：官方 non-interactive 文档说明 `codex exec --json` 会输出包含 `item.*` 的 JSONL，item 类型明确包括 `web_search`；`--output-schema` 只约束最终结构化消息，不能单独证明搜索实际发生：https://developers.openai.com/codex/noninteractive 。因此 adapter 继续用已选 `ndjson` 解码官方事件，不新增 parser；只有生成 brief 的同一轮观察到 `web_search` item 才允许进入结构化 brief 校验。最终事实真实性仍由非空来源、六类 `investigatedFacts`、引用闭包和真实用户表面复核共同保护，不能把事件名当作事实证据。
+
+当前结论：R-029 Session 隔离方案通过，接受“Workbench 持有全部业务上下文＋官方稳定 `codex exec --ephemeral` 无状态单轮执行”。拒绝 `serviceName` 伪隔离、App Server/SDK thread、Pi/第二 Provider 和自动 fallback；既有全局 Session 仍不擅自删除。JSONL 的 `web_search` item 现同时承担 brief 主动调查的最小运行时完成门，但不改变 Workbench 的事实源归属。2026-08-17 已删除旧 SDK/App Server 探针、POC Skill、独立 package/lockfile 和配置，只保留压缩的候选淘汰记录；当前验证由生产 adapter 的 fake 回归和显式真实 Session 零新增 acceptance 承担。
+
+### R-030 商品底层知识来源与质量门
+
+状态：调研中；代表性来源的证明范围与许可门已形成候选，生产来源白名单、共享 contract 和真实纵切片仍未冻结
+目标阶段：阶段 1A/1B
+
+问题：现有九个官网与京东采集只支持目录 identity、商品声明和市场资料，不能单独产出压缩机、制冷循环、换热、控温、除霜、保鲜等商品底层知识。正式知识必须同时包含商品底层知识和商品品类知识；品牌、系列、型号和变体属于品类知识的市场实例层。
+
+不可取消约束：
+
+- 底层结论必须表达原理链、部件、输入/输出、适用条件、边界、取舍和常见失效，并绑定可定位证据；
+- 京东卖点、品牌营销声明和用户评价不能单独证明通用技术原理；
+- 某型号采用某机制必须同时有“该机制为何成立”的权威证据和“该型号确实采用”的型号证据；
+- 普通营销媒体、SEO 内容和无出处转载不进入正式知识；
+- 来源许可、可携带范围、本地处理、安全边界、时效、冲突和退出成本必须逐类登记；
+- 不在调研前新增通用 Provider、知识 schema、模型调用或来源评分器。
+
+#### 代表性来源与官方资料
+
+下表只冻结“来源类别怎样被判定”，不把冰箱来源写成所有商品品类的固定白名单。新品类必须针对自己的 Knowledge Need 重新生成来源候选并通过同一许可和证明范围门。
+
+| 来源类别与代表样本 | 可以直接证明 | 不能直接证明 | 模型加工与知识包候选处置 |
+| --- | --- | --- | --- |
+| 当前国家标准身份与监管解释：国家标准全文公开系统、全国标准信息公共服务平台、市场监管总局 | 标准号、现行/废止、实施日期、适用范围、监管分类和官方解释 | 通用科学原理、品牌当前在售、具体型号实际结构 | 接受元数据、状态和可定位的最小监管证据；全文仍逐项核对版权/采标限制，不因“可在线预览”默认允许整篇保存、输入模型或进入知识包 |
+| 政府科研技术系列：NIST Technical Series，例如 CYCLE_D-HX Technical Note 1974 | 蒸汽压缩循环的部件、热力过程、输入输出、比较条件和模型边界 | 中国标准适用性、家用型号实际采用、保鲜效果 | **首个制冷循环原理纵切片候选**；NIST 员工 Technical Series 在美国不受版权保护，NIST 同时授予境外再版/衍生许可并要求署名，但每份资料仍检查第三方作者、图片和数据例外 |
+| 政府食品安全/农业资料：USDA FSIS、ARS/NAL | 温度、湿度、气流、微生物、冷冻速度等保存条件及其边界 | 某冰箱宣传技术有效、型号具备某功能、跨食材统一效果 | **首个保鲜条件纵切片候选**；USDA 职务作品通常为美国政府作品，仍逐页检查第三方材料、图片和单独版权标识并保留署名 |
+| 国际组织技术资料：FAO 出版物 | 冷藏、冷冻、湿度和食品品质等机构性技术背景 | 当前家电标准、具体型号实现 | 只保留候选目录与 locator；FAO 默认开放政策限非商业用途，商业复用/再分发需要许可，未取得与本产品一致的授权前不得进入生产模型输入或可发布知识包 |
+| 专业协会标准/手册：ASHRAE Handbook | 制冷与 HVAC 专业体系和行业参考 | 具体型号采用、当前在售 | **拒绝进入现有 AI 加工链**：官方许可页明确禁止将 ASHRAE 出版物/IP 输入 AI 或用 AI 形成衍生作品，除非书面许可；订阅/购买也不等于模型加工授权。只允许登记书目信息，不能抓正文做原型 |
+| 核心部件厂商工程资料：以 Copeland Application Engineering 为代表 | 该厂商部件的结构、应用条件、工作包络和厂商声明 | 跨厂商通用原理、某整机型号实际采用该部件 | 作为 component/application claim 候选，不升级成独立通用原理；Copeland 官网条款将服务限定为个人非商业使用并限制复制分发，未另获授权前不进入生产模型或知识包 |
+| 品牌官网、说明书、服务/技术资料 | 品牌或型号公开声明、规格、结构、使用/安装/维护边界 | 未披露实现、跨品牌原理、宣传效果真实性 | 作为品牌/型号 implementation claim；逐站核对许可，和独立底层原理证据建立双证据关系 |
+| 原始论文、教材和专利 | 论文实验条件内的结论、教材定义、专利公开的技术方案 | 商业产品实际采用、方案真实效果、无限泛化 | 逐项核对原始发布者、版本、同行评议/实验条件及许可证；“公开可读”不等于允许批量模型加工或再发布，不设整类默认许可 |
 
 官方依据：
 
-- Schema.org 将厂商 `ProductModel` 与时点销售 `Offer` 分开，同一型号可以对应多个卖家、SKU 和价格；这支持用户看到“一款型号＋多条销售记录”，而非系统把价格差异误判为多个型号：https://schema.org/ProductModel 、https://schema.org/Offer
-- Crawlee 的 SessionPool 已提供会话状态、阻断标记和 cookie 持久化；它只用于获准来源的会话管理，不能充当来源授权或反风控手段，项目不得自研会话池：https://crawlee.dev/api/core/class/SessionPool
-- Playwright 明确警告认证状态文件包含可用于冒充用户的 cookies/headers，必须本地忽略且按过期策略清理；因此 Codex 任务、知识包和日志均不得接收认证状态：https://playwright.dev/docs/auth
-- WARC 是公开维护的 ISO 28500 Web 归档格式，适合把响应和元数据聚合成可重放采集物；是否使用 WARC 仍需在获准官方资料原型中与 Crawlee 存储能力比较，不能本轮直接冻结：https://www.loc.gov/preservation/digital/formats/fdd/fdd000236.shtml
-- W3C PROV-O 以 Entity、Activity、Agent 和 `wasDerivedFrom` 等关系表达跨系统来源链；本项目只需映射必要子集，不自研通用 provenance 语言：https://www.w3.org/TR/prov-o/
+- NIST CYCLE_D-HX Technical Note 1974 明确模拟由压缩机、冷凝器、膨胀装置和蒸发器等组成的蒸汽压缩循环，并声明模型输入和比较边界：https://www.nist.gov/publications/cycled-hx-nist-vapor-compression-cycle-model-accounting-refrigerant-thermodynamic-and
+- NIST 对 Technical Series 的版权说明：NIST 员工职务作品在美国不受版权保护，并授予境外再版和衍生使用许可；第三方作品可能例外，需逐项检查并署名：https://www.nist.gov/open/copyright-fair-use-and-licensing-statements-srd-data-software-and-technical-series-publications
+- USDA FSIS 说明低温会减慢细菌生长、冷藏不能杀灭所有病原体、蔬菜与水果需要不同湿度条件；这些内容能证明保存条件和边界，不能证明某品牌营销技术：https://www.fsis.usda.gov/food-safety/safe-food-handling-and-preparation/food-safety-basics/refrigeration
+- USDA 关于冷冻说明低温使微生物进入不活跃状态，解冻后可恢复活动，快速冻结可减少大冰晶造成的细胞损伤：https://www.fsis.usda.gov/food-safety/safe-food-handling-and-preparation/food-safety-basics/freezing-and-food-safety
+- USDA/NAL 版权页说明多数政府信息为公有领域，但第三方图片、资料和单项限制仍须识别：https://www.nal.usda.gov/web-policies-and-important-links
+- FAO 官方许可页只默认允许私人学习、研究、教学和非商业产品/服务使用；再发布、分发和商业使用需按具体许可申请：https://www.fao.org/publications/about-fao-publishing/permissions/
+- ASHRAE 官方许可页明确禁止把其出版物或相关 IP 输入 AI 工具、以及未经书面许可用 AI 制作衍生作品：https://www.ashrae.org/permissions/permissions-and-licensing
+- Copeland 官方 Terms of Use 将服务限定为个人信息与非商业用途，并禁止未经明确同意在其他网站或网络环境复制、再发布或分发材料：https://www.copeland.com/en-us/terms/terms-of-use
 
-已确认产品边界：首轮只从品牌官网/说明书、平台官方自营或经核实旗舰店和监管/标准来源发现资料，普通第三方和小型商家排除。用户已选择教育研究用途的京东网页采集，ADR-0004 取代 ADR-0003；技术上不自研反检测、验证码或账号切换。型号、SKU/变体、Offer 和采集快照分层；确定性转换可自动进入发布候选，Codex 推断、冲突和证据不足必须进入例外审核；新知识包发布需明确批准。
+#### 当前标准版本纠错
 
-尚未冻结登录态受限原始区到脱敏资料区的成熟组件、WARC/现有 Crawlee storage 组合、型号合并规则和审核批次。这些必须经真实资料和隔离原型验证后再冻结。
+- 截至 2026-08-17，`GB/T 8059-2025` 已于 2026-06-01 实施并全部替代 `GB/T 8059-2016`；官方状态页：https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=BF0FB970326D221A8E78987E22BB7F02
+- `GB 12021.2-2025` 已于 2026-06-01 实施并全部替代 `GB 12021.2-2015`；官方状态页：https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=9BC022A3FF2B7F7D733C3962C986DF7A
+- 既有监管 Evidence 中出现 `GB 12021.2-2015` 只能证明当时备案原文采用旧标准，不能继续充当当前品类标准基准。标准版本是时点事实，来源快照必须保留 `observedAt`、状态和“替代/被替代”关系，不得静态写死在冰箱代码中。
+- 国家标准全文公开系统说明对采标推荐性标准按国际版权政策公开，平台同时声明版权所有；因此当前只确认标准身份、状态、范围和允许保存的最小证据，不推定全文可进入模型或知识包：https://openstd.samr.gov.cn/bzgk/std/std_list_ics_left
 
-### R-010 主流品牌/型号总体与覆盖率
+#### 质量门候选
 
-状态：调研中
-目标阶段：0、1A
+不引入一个拍脑袋的“来源总分”。每条来源资料必须分别记录并验证以下事实：
 
-问题：如何为“中国市场某商品品类的大多数主流品牌与型号”建立可审计总体、时间窗口和覆盖率，而不是用已抓 URL、店铺数量或任意品牌/型号数字自证完整。
+1. `authority`：发布主体和资料类型；
+2. `claimScope`：它能证明原理、标准边界、部件声明、品牌声明、型号事实还是用户体验；
+3. `versionStatus`：版本、发布日期、现行/废止和观察时间；
+4. `usagePermission`：允许本地读取、允许输入模型、允许保存最小证据、允许发布派生知识、允许携带原文分别判定；未知一律 fail closed；
+5. `thirdPartyRisk`：第三方作者、图片、表格、数据、国际标准采标等例外；
+6. `evidenceLocator`：URL/DOI、页、章节、表格区域或 exact/context，及内容 hash；
+7. `generalizationBoundary`：实验条件、适用对象、不能推出的结论和冲突；
+8. `freshnessPolicy`：稳定原理可以较长有效，标准、监管、品牌和型号事实必须按各自时效更新。
 
-不可取消约束：只统计品牌官网/说明书、平台官方自营或经核实旗舰店和监管/标准来源；普通第三方商家不进入总体发现；用户不负责发明品牌数、型号数或覆盖率门槛。
+发布关系至少需要两条独立闭环：`foundational claim → authoritative evidence` 与 `model implementation claim → brand/model evidence`。二者同时存在才允许生成人工审核的“该型号采用/利用该机制”候选；任何一侧缺失都保持 `unknown`，不允许模型补造。
 
-第一轮官方证据（2026-08-14）：
+#### Node/TypeScript、本地/离线和部署边界
 
-- 中国标准化研究院集中公开冰箱等 8 类家电能效备案，字段含型号、生产者、能效等级和备案号，并说明定期更新；它适合做身份/合规发现台账，不等同于当前在售清单：https://www.cnis.ac.cn/tzgg/202412/t20241231_59316.html
-- 该公告的 2016.08～2024.12 冰箱附件已做只读检查：2024 年五个工作簿包含数千条备案记录和数百个生产者，证实备案总体规模远大于任意手定样本；生产者不是消费品牌，备案也不证明仍在售或主流。公告页面未给再分发许可，原始批量数据暂不进入可分发知识包。
-- 市场监管总局 2026 年规则自 6 月 1 日实施，同时允许此前出厂/进口产品延迟两年加施新版标识；因此 `MarketUniverseVersion` 必须记录快照日期和适用标准版本，不能假设市场只有一个能效口径：https://www.samr.gov.cn/xw/zj/art/2026/art_622696c3b0d24421b782e1ffd657dbeb.html
-- 京东冰箱自营入口当前公开品牌、筛选维度、型号和“自营”标记，可作为时点在售发现源；它只代表该官方零售渠道，不代表全国销量份额：https://www.jd.com/brand/737a81dda3769f80aa8.html
+- 本轮来源访问不新增依赖：继续复用已验证的 Crawlee/HTTP 访问、`unpdf`、`read-excel-file`、`sharp`、PostgreSQL/Drizzle 与 `cacache`；它们只负责取得和保存允许处理的内容，不决定资料权威性或许可。
+- 来源许可和 claim scope 是 Workbench 业务事实；Provider 只返回页面状态和观察，不能把站点域名直接升级成“权威”或“可进模型”。
+- 公开可携带的最小证据与受限的本地资料物理隔离；Runtime 知识包不得包含付费、个人订阅、未授权全文或第三方受限图片。
+- macOS 开发和 Linux Runtime 不增加新的原生部署依赖；Windows 仍待产品目标确认。抓取登录态、Cookie、Profile 和订阅凭据永不进入 Git、日志、模型输入或知识包。
 
-第一轮候选结论：总体分三层而不是一个抓取列表。`合规身份台账` 取监管备案；`官方在售总体` 取品牌官网/说明书、官方自营和核实后的官方旗舰店在同一快照窗口的并集；`市场优先级` 只有获得许可证清晰、可审计的销量/份额数据后才能加入。MVP 先报告 `brand_discovery_coverage`、`active_model_discovery_coverage` 和 `knowledge_complete_coverage`；没有授权市场份额数据时禁止声称 `market_share_weighted_coverage`。
+#### 安全、测试、升级与退出
 
-预期产物：`MarketUniverseVersion` 记录市场、品类、快照日期、渠道、来源版本、标准版本、品牌/型号集合、纳入/排除/未知原因；型号身份以生产者型号＋品牌映射＋证据为主，Offer/卖家不构成新型号。用户已确认采用“可审计官方在售总体覆盖”，而不是无法举证的销量加权“大多数”；旗舰店仍须逐个举证，市场数据没有许可时继续关闭优先级。
+- 许可未知、条款禁止 AI、只允许个人/非商业用途、需要登录订阅或包含未识别第三方材料时，自动加工必须停止；不得用“只摘录一点”绕过明确禁止。
+- 测试夹具只使用项目自有文本或已确认可复用的政府公开资料最小片段；不把 ASHRAE、Copeland、付费标准正文复制进仓库。
+- 来源更换不能改变 Knowledge Need、EvidenceRequest 或知识关系 contract；新来源只通过同一 `claimScope + usagePermission + locator` 门接入。退出某来源时保留书目/URL、历史使用许可和受影响 claim 清单，撤下不可继续携带的内容而不改写历史审计。
+- 标准状态需要定期重查；发现替代版本时追加新快照并把依赖旧版本的候选标为待复核，不能覆盖旧 Evidence。
 
-第二轮调查与隔离原型（2026-08-14）：
+#### 最小原型与当前结论
 
-- 京东帮助中心明确商品页“自营”标识可区分自营与第三方；授权店铺规则说明品牌店铺依赖商标和授权文件。因此自营可用平台标识确定，旗舰店名称本身不是充分证据，必须另有品牌官网反链、平台商家资质或有效授权证据：https://help.jd.com/user/issue/44-75.html 、https://help.jd.com/user/issue/325-2069.html
-- 海尔官方支持中心支持按品类/型号查说明书，美的官方商城展示型号、库存和规格；TCL 官方电视目录公开结果数、型号和购买入口。这证明官方目录可参与身份/在售发现，也证明详情成功不等于已完整枚举目录：https://www.haier.com/support/ 、https://www.midea.cn/1/1000000000400692547081.html 、https://www.tcl.com/cn/zh/tvs
-- 公开奥维数据和上市公司引用可以支撑行业趋势，但没有提供可构造品牌/型号销量分母的授权明细或再使用许可；按已确认口径保持 `market_priority=pending`，不阻塞官方在售总体，也不计算销量加权覆盖。
-- 隔离原型位于 `docs/development/pocs/r010/`。同一 LinkML Schema 已校验冰箱与电视两个 `structural_sample`；lint 和 schema validate 为 0 问题，两份正确样例通过，错误样例因错误日期、非法生命周期和三个空必填列表报告 5 项错误。原型未修改项目依赖、数据库或生产代码。
+最小原型仍以制冷循环、压缩机、控温/除霜和保鲜各一个能力问题为目标，但首轮只允许使用通过许可门的资料：制冷循环优先 NIST Technical Series，保鲜条件优先 USDA 职务作品；现行标准身份使用 SAMR 元数据。ASHRAE、Copeland、FAO 和标准全文在相应许可未确认前只保留候选/书目，不进入模型输入或测试夹具。
 
-结论：接受三层市场总体和 `MarketUniverseVersion` 领域 contract；`frozen` 前必须保留来源核验、许可、纳入/排除/未知项，只有 frozen 版本可作覆盖率分母。LinkML 只承担隔离验证，不因 R-010 接受而成为生产依赖。阶段 1A 又用 Crawlee `SitemapRequestList` 真实读取海尔官方 `product.xml`，得到 1,341 个唯一冰箱产品 URL并回链既有样本；用 `FileDownload`＋`file-type` 保存美的说明书和中国标准化研究院备案附件，哈希、签名和表格字段复核通过。目录发现与监管身份台账的可行性已经成立；完整多品牌总体、逐品牌目录适配和旗舰店资质采集属于阶段 3，不把原型扩大成完整生产采集。
+原型必须形成“原理链＋条件＋边界＋权威证据”，再选择至少一个真实型号，用独立型号资料建立 `confirmed / candidate / conflicting / unknown` 关系；同时证明 Workbench 可查看、证据可复核、模型只产候选、缺失不补造，并与京东/官网来源数据在同一批次报告中联合验收。
 
-停止条件：权威名录与官方目录无法对齐且没有可解释估计方法；型号身份粒度无法稳定定义。市场报告没有许可时关闭市场优先级，不再阻塞官方在售总体；不得自行把公开聚合文章当销量分母。
+当前结论：来源证明范围、许可门和首轮可用候选已形成；这不是生产白名单已完成。下一步先冻结跨品类来源数据 seam 并完成逐条持久化/查看/导出原型，再运行上述真实纵切片。统一补救与执行顺序见 `JD-COLLECTION-DESIGN.md`。
 
-### R-011 专业商品知识分层与评测门
+### R-033 公开技术网页正文提取
 
-状态：已接受（质量 contract；生产组件留到阶段 1C 真实知识存储原型）
-目标阶段：0、1B、1C
+状态：macOS/Node 24 正式链路原型已通过；目标 Linux 安装/运行门仍待补，暂不宣称跨机器生产接受
+目标阶段：阶段 1A / M2 代表性底层知识来源小批次
 
-问题：知识资产需要覆盖哪些规格、功能、机制、适用条件、取舍、需求映射和比较维度，才能让专业导购与通用聊天模型拉开差距；如何用成熟方法验证，而不是用无依据固定准确率或问题数。
+问题：已确认任务书只应提供 Knowledge Need 和来源入口，不能要求调用者为每个未知技术网页手写 CSS selector。正文定位属于通用网页能力，必须复用成熟实现；站点权威性、许可和 claim scope 仍由 Workbench 规则决定，提取器不能替代这些业务判断。
 
-不可取消约束：知识必须来源可追溯、限定条件明确、冲突可见；专业知识不寄存在单个 Agent 提示词；下游 Agent 的引导工作流与知识资产解耦；用户不承担品类专家的字段和指标设计职责。
+候选与处置：
 
-官方依据与候选处置（2026-08-14）：
+| 候选 | 结论 | 原因与退出成本 |
+| --- | --- | --- |
+| 继续使用现有 Cheerio `selector + requiredText` | 拒绝作为批量入口；保留定点 Evidence adapter | 它适合已知证据定位，不适合未知 DOM 的正文发现；要求 Planner/用户提前知道站点结构会把站点细节泄漏进领域计划 |
+| `@mozilla/readability@0.6.0` + `jsdom@29.1.1` | 接受进入最小原型 | Readability 是 Firefox Reader View 使用的成熟 Apache-2.0 实现，并官方给出 Node＋jsdom 用法；jsdom 29.1.1 为 MIT，Node engine `^20.19 || ^22.13 || >=24`，兼容本仓库 Node 24.12；依赖只承担 DOM 和正文提取 |
+| jsdom 30.x | 当前拒绝 | 官方 30.0.0 将 Node 24 最低版本提高到 24.15，本仓库固定 24.12；升级运行时不是本能力的必要范围 |
+| Firecrawl/远程正文提取服务 | 继续拒绝 | R-026 已记录 AGPL、自托管多服务、云端内容边界和退出成本；当前本地成熟库已能验证需求，无需引入远程处理 |
 
-- W3C DQV 将质量拆为 Dimension、Metric、Measurement、Policy 和 provenance，并明确质量依赖消费者用途；本项目复用该质量记录词汇但不引入 RDF。SHACL 专门校验 RDF 图，当前知识包不是 RDF，因此拒绝为采用它新增 RDF/SPARQL：https://www.w3.org/TR/vocab-dqv/ 、https://www.w3.org/TR/shacl/
-- Ajv 是 MIT 的成熟 JSON Schema validator，支持 draft-07/2019-09/2020-12；项目已直接依赖 `ajv@8.17.1`，结构门优先复用它，不重复加 validator：https://github.com/ajv-validator/ajv
-- Great Expectations 当前为 Apache-2.0，Expectation Suite 支持批次非空、枚举、唯一性等断言；隔离 `1.20.0` POC 可运行，但引入 Python 3.10～3.13 和 35 个隔离包，复杂图关系仍可能需要自定义 Expectation。因此只保留为阶段 1C 表格/SQL 批次质量候选，不先加入 Workbench 依赖：https://docs.greatexpectations.io/docs/core/define_expectations/ 、https://docs.greatexpectations.io/docs/reference/learn/data_quality_use_cases/uniqueness/
-- Soda Core 当前主分支已改用 Elastic License 2.0，明确限制把主要功能作为托管服务提供；它不满足本项目开源优先和未来部署退出边界，直接淘汰，不运行 POC：https://raw.githubusercontent.com/sodadata/soda-core/main/LICENSE
-- Spectral 为 Apache-2.0 JSON/YAML linter，规则集适合文档风格治理，但复杂规则要求 JavaScript/TypeScript custom functions；它与 Ajv 结构门重叠且不能免除跨记录质量实现，因此本轮淘汰：https://github.com/stoplightio/spectral
-- Promptfoo 是 MIT 的 Runtime/Agent 评测候选，支持确定性断言和自定义 JS/TS Provider。最新 `0.122.0` 要求 Node `>=22.22.0`；`0.119.0` 支持 Node `>=20`，但隔离下载超过两分钟无输出后已主动终止。保留配置和 contract，不升级 Node、不安装生产依赖；阶段 1C 必须在受支持 Node LTS 上用当前版本重验：https://www.promptfoo.dev/docs/configuration/expected-outputs/ 、https://www.promptfoo.dev/docs/providers/custom-api/
+官方依据：
 
-隔离结果位于 `docs/development/pocs/r011/`。Ajv 正确样例通过，错误样例按预期报告非法知识层、非法状态、空证据、错误时间和错误布尔值共 5 项；它没有发现数组内重复 `claim_id`，证明结构门不能替代批次一致性。Great Expectations 正确 CSV 通过，错误 CSV 以 6 个失败规则拒绝重复 ID、非法枚举、空证据、错误时间和错误冲突标记。两者均未修改项目依赖。
+- Mozilla Readability README 说明它被 Firefox Reader View 使用，Node 示例明确配合 jsdom，并要求传入来源 URL 解析相对链接；同时建议保持 jsdom 脚本和远程资源加载关闭：https://github.com/mozilla/readability
+- Readability 0.6.0 包元数据声明 Apache-2.0、内置 TypeScript 类型和 Node `>=14`：https://raw.githubusercontent.com/mozilla/readability/main/package.json
+- jsdom 29.1.1 包元数据声明 MIT、Node `^20.19.0 || ^22.13.0 || >=24.0.0`：https://raw.githubusercontent.com/jsdom/jsdom/v29.1.1/package.json
+- jsdom 30.0.0 发布说明将最低版本提高到 `^22.22.2 || ^24.15.0 || >=26.0.0`，因此当前不能跟随最新版：https://github.com/jsdom/jsdom/releases/tag/30.0.0
 
-接受的质量 contract：`结构有效性`、`来源与证据完整性`、`身份/属性一致性`、`知识层完整性`、`时效与冲突可见性`是确定性发布硬门；`检索可用性`、`能力问题满足度`、`下游任务效果`使用版本化用例集。模型评分只能补充，不能替代证据和确定性断言。不得自写通用质量引擎；阶段 1C 必须把同一 contract 放到真实 SQLite/DuckDB 候选上，再决定是否需要 Great Expectations。
+安全与产品边界：
 
-停止条件：只能评测参数抽取而无法验证功能/机制/取舍；指标无法映射到用户可理解风险；为采用工具必须新增长期运行时、自写大量插件或接受不合适许可证。触发后回到调研，不以“先写个校验器”绕过。
+- jsdom 不启用 `runScripts`、不加载页面子资源；Crawlee 仍只访问 allowlist 中的 HTTPS origin，并限制响应体大小、超时和单次请求数。
+- 永久保存的是 Readability 返回的纯文本正文和来源观察，不渲染其 HTML，因此本纵切片不引入 DOMPurify；未来若 UI 展示或保留 HTML，必须另过 sanitizer/CSP 调研门。
+- Readability 是文章正文提取器，不用于商品目录、参数表、京东详情、标准表格或 PDF；这些继续走各自 typed Provider。
+- 提取成功不代表可进入模型或知识包。`usagePermission.localRead` 与 `evidenceStorage` 必须为 allowed 才能执行和持久化；模型输入、派生发布和原文再分发分别 fail closed。
 
-### R-012 京东数据通路与现成开源能力
+最小原型通过门：项目自有 HTML 夹具证明正文提取、导航/脚本排除、无远程子资源；本地 HTTPS fixture 证明 allowlist、响应上限和 typed failure；随后用 R-030 已允许的 NIST/USDA 各一条真实页面验证标题、正文、URL、时间、HTTP 元数据和 Knowledge Need/target 绑定。只有自动化、真实样本、Node 24.12 安装和目标 Linux 安装均通过，候选才改为已接受。
 
-状态：已接受（隔离 POC 通过首个 SKU；批量与敏感数据门待验证）；目标阶段：1A
+#### 2026-08-17 正式 Planner 与多来源原型结果
 
-问题：官方通路是否收费，以及网页采集、反检测、指纹和私有接口是否已有可复用开源实现。
+- `@mozilla/readability@0.6.0`、`jsdom@29.1.1` 已进入 worker 直接依赖；macOS arm64、Node 24.12 的正文夹具、Provider 路由、全 workspace typecheck 与真实正式链路通过。目标 Linux 尚未运行，因此依赖选型保持“当前开发环境接受、跨机器待验”。
+- 正式链路不是手写 URL 脚本：Category Interview 形成 confirmed brief，`sourceAssignments` 显式把每个来源入口绑定到 collection lane 和 Knowledge Need，服务端 Planner 只接收 `projectId`，生成并持久化 plan/batch/work item，再由 DBOS、Provider 和 Source Dataset 执行。缺少分配的新任务书不能确认；历史任务书仍可读取但 Planner 失败关闭。
+- 第一次真实链路暴露“同一 lane 的两个来源被同时绑定到两个知识需求”的错误。旧按知识层交集猜测的代码已重写为显式 `sourceAssignments`；重新验收后 NIST 只绑定 `need:refrigeration-cycle`，USDA 只绑定 `need:food-preservation`。
+- 扩展后的隔离 PostgreSQL 原型保存 3 条真实快照：NIST、USDA 为 `document`，中国能效标识 `MR-457WUSPZE` 为保留官方 JSON 原文的 `ordered_record`；两个 DBOS 批次均 `succeeded`。美的说明书 lane 为 `waiting / local_read_not_allowed`，没有发起访问。隔离数据库和临时 Evidence 目录均已删除。
+- `SourceCollectionWorkItem.request` 只新增三个 category/source-neutral 选择方式：`full_resource / document_excerpt / structured_record_lookup`。监管 Provider 在外部 seam 将通用字段码严格收窄为 `manufacturer_model`；PDF Provider 复用 Crawlee＋unpdf 并只保存唯一页摘录。未知查询字段、错误对象类型或许可不足均失败关闭。
+- 当前美的法律声明明确：未经书面许可不得通过机器人/爬虫复制、下载或使用平台内容。因此历史 `MR-457WUSPZE` PDF 只能保留为历史 POC 证据，正式规则设置 `localRead/modelInput/evidenceStorage=denied`：https://www.midea.cn/act/help_center_new/transaction_terms?id=106&parentId=508
+- 中国能效标识按型号公开查询继续复用 R-026 已接受的真实来源与两步官方协议；本轮只查询一个已知型号，不把监管库冒充当前在售总体，也不从监管结果生成知识。
 
-- 京东联盟公开开通流程未列开户费或 API 调用费，基础商品接口可在审核后使用；但联盟定位是 CPS 推广，关键词等高级接口面向企业会员且公开条件含月订单量大于 3 万。公开商品接口证明可取名称、主图、类目、价格、物流、自营和引单量，未证明覆盖冰箱完整规格：https://news.jd.com/153_1.html 、https://jos.jd.com/jdunion
-- VOP/B2B 确有商品详情和大字段接口，但需要企业资料、商务/合同和具体服务许可；公开协议提到“购买的具体服务”且不提供统一价目，费用必须由京东按合作模式报价：https://vop.jd.com/reg/agreement 、https://jos.jd.com/b2b2b
-- 官方 SDK 只明确支持 Java/PHP/.NET/Python；Node 候选 `@liuliang520500/jd-sdk` 为 MIT、带类型声明但下载量和维护规模较小，必须先审计和实调，不能仅凭包名进入生产：https://www.npmjs.com/package/@liuliang520500/jd-sdk
-- 京东专用 `MarketSpider` 为 MIT/Selenium 且 2025 年仍更新，但只覆盖链接、价格、名称和店铺；README 又限制交流学习并警告封号，不满足本项目商用和深度参数要求：https://github.com/zhangjiancong/MarketSpider
-- 通用现成候选包括 Apache-2.0 `Patchright`、Apache-2.0 `fingerprint-suite`、MIT `rebrowser-patches`、MPL-2.0 `Camoufox` 及 MIT `camofox-browser`。它们分别处理自动化泄漏、指纹一致性或引擎级伪装，不包含京东字段提取，也不能授予数据使用权：https://github.com/Kaliiiiiiiiii-Vinyzu/patchright 、https://github.com/apify/fingerprint-suite 、https://github.com/rebrowser/rebrowser-patches 、https://github.com/daijro/camoufox
+### R-031 跨品类来源数据集 contract 与导出
 
-结论：用户明确选择教育研究网页路线。已精确安装隔离 `patchright@1.61.1`：同一有头持久 Chrome 空白页把 `navigator.webdriver` 从 Playwright 的 `true` 变为 `false`；同一登录 Profile 的 S01 从历史风险页恢复为 HTTP 200 商品页。Crawlee 3.18.1 已保存 HTML、文本、截图、脱敏资源路径和匹配哈希；首次骨架屏假成功已由目标文本门纠正，公开样本先处理 1 条、重启补齐 2 条并正常退出。S05 当次正常加载，S06 正确标记为 `discontinued`；未登录新 Profile 当前进入登录页。不叠加 fingerprint-suite/Camoufox，除非 Patchright 出现可复现缺口。
+状态：已接受；跨品类 TDD 实现与本地真实 PC 表面通过，尚未访问真实来源
+目标阶段：阶段 1A / `JD-COLLECTION-DESIGN.md` 实施 A
 
-### R-013 受限快照的可加工资料门
+问题：当前 `OfficialCatalogSnapshot` 只保存品牌和厂家型号，`EvidenceItem` 只保存围绕既定 Knowledge Need 选择出的最小证据；二者之间缺少“来源取得了什么”的不可变事实层。若直接给京东、官网、标准、论文各建一套表和 DTO，会把站点/冰箱结构写进公共 contract；若把内容塞进 `unknown metadata`，则失去校验、可查看和可重放能力。
 
-状态：已接受（隔离 POC 通过）；目标阶段：1A、1B
-问题：怎样确保登录态整页 HTML 中的账户/地址个性化内容不进入 Codex 和知识包。
-结论：Microsoft Presidio 官方明确自动检测不保证找全敏感信息，中文又需额外 NLP/识别器，不作为主门：https://github.com/microsoft/presidio 、https://microsoft.github.io/presidio/installation/ 。选择已在工程依赖链的 Cheerio CSS 选择器白名单投影＋Zod 严格未知字段拒绝：https://cheerio.js.org/docs/basics/selecting/ 、https://v3.zod.dev/ 。S05/S06 实测投影 34/26 个商品属性，不携带整页原文或已知个性化容器；决策见 ADR-0005。
+#### 现有资产与成熟组件
 
-### R-014 混乱资料加工与证据化候选知识
-状态：已接受（隔离 POC 通过）；目标阶段 1B；主体隔离、受控冲突、稳定审核 ID、真实 Codex 候选和未经审核禁止发布均已验证，证据见 `pocs/r014/README.md`。
+- 继续使用已接受的 PostgreSQL＋Drizzle 保存 Workbench 结构化事实；DBOS 只保存执行与恢复，不充当来源事实；`cacache` 保存允许保留的图片/文件字节；Zod 在所有跨模块入口校验；RFC 8785 `canonicalize` 生成稳定内容 hash。
+- JSONL 继续复用项目已声明的 `ndjson`/Node stream 能力，不另造流式协议解析器。
+- CSV 候选使用 `csv-stringify`，不手写逗号、引号、换行和公式注入转义。官方项目为 MIT，支持 ESM、TypeScript 声明和 Node Transform stream，维护超过十年，当前 npm 版本 `6.8.1`、2026-07 仍有发布；无原生依赖，可在 macOS/Linux/Windows Node 运行：https://github.com/adaltas/node-csv 、https://csv.js.org/stringify/distributions/nodejs_esm/ 、https://csv.js.org/project/license/
+- 当前 lockfile 已有 `csv-stringify` 的传递依赖记录，但生产代码若采用必须在直接使用它的 package 明确声明直接依赖并更新 lockfile；不得依赖偶然 hoist。
 
-### R-019 商品输入的稳定内容指纹
+#### 候选比较
 
-状态：已接受（`canonicalize@3.0.0`）；目标阶段：2
+| 候选 | 结果 | 原因 |
+| --- | --- | --- |
+| 每个站点/品类建专用表和 DTO | 拒绝 | 京东/冰箱字段会成为公共 schema；切换电视、空调或其他来源需要迁移和代码分支 |
+| 单表 `jsonb metadata: unknown` | 拒绝 | 不能在 seam 校验内容、关系、许可和导出；违反 typed contract 与单一解释器约束 |
+| 只把整页/文件放 CAS | 拒绝 | 无业务边界、无法直接查看/导出/投影，且会携带广告、账号、无关内容和许可风险 |
+| 直接把来源内容提交成 EvidenceItem | 拒绝 | 来源数据用于发现知识问题，Evidence 是围绕已确认问题选择的最小证明；合并会导致反向删除原始来源结构或把页面内容冒充充分证据 |
+| 稳定 envelope＋少量 discriminated content kind＋独立 asset | **接受候选** | 保持 category/source 中立，同时让内容、关系、许可、幂等和导出在公共 seam 立即校验；后续新 kind 必须有真实来源和消费者，不能预建 registry |
 
-问题：品类定义、确认范围和搜集板需要跨版本比较内容，普通 `JSON.stringify` 会让对象字段顺序影响哈希；项目不得自研 JSON 规范化算法。
+#### 公共 seam 候选
 
-调研与依据：RFC 8785 定义 JSON Canonicalization Scheme，并在 Appendix G 列出 JavaScript 开源实现 `canonicalize`。npm 当前版本 `3.0.0`，Apache-2.0，内置 TypeScript 声明且无运行时依赖。官方资料：https://www.rfc-editor.org/rfc/rfc8785.html 、https://www.npmjs.com/package/canonicalize 。
+Workbench 只新增一个深模块 `SourceDatasetModule`，不新增 manager/registry/engine：
 
-验证结果：Product Module 在共享 Zod 契约通过后用该库规范化，再计算 Node `crypto` SHA-256；相同内容跨两个数据库版本的三份哈希全部一致。临时 SQLite 集成测试同时证明项目和三份版本输入在插入冲突时整笔回滚。
+```ts
+interface SourceDatasetModule {
+  startRun(input: StartSourceCollectionRun): Promise<SourceCollectionRun>;
+  commitSnapshot(input: CommitSourceSnapshot): Promise<SourceSnapshotRecord>;
+  commitAsset(input: CommitSourceAsset, content: Uint8Array): Promise<SourceAsset>;
+  finishRun(input: FinishSourceCollectionRun): Promise<SourceCollectionRun>;
+  getRun(runId: string): Promise<SourceCollectionRunView | null>;
+  listProject(projectId: string): Promise<SourceCollectionRun[]>;
+  exportRun(input: ExportSourceCollectionRun): AsyncIterable<string>;
+}
+```
 
-结论：接受 `canonicalize@3.0.0`，不实现自定义 key 排序、序列化或哈希协议。该库只封装在 Project Module 内，未来替换不会改变外部 interface 或数据库字段。
+- `startRun` 只接收 `projectId + collectionLaneId + providerKey + accessPolicySnapshot`；module 自己读取当前 confirmed Category Definition/Scope/Collection Board 并把版本 ID 冻结进运行，调用方不得重复提交另一套 category 事实。
+- `commitSnapshot` 一次事务完成稳定 `SourceObject` upsert、不可变 `SourceSnapshot` 插入和关系插入。输入带 `idempotencyKey`；同一 run 重试同一 key 返回原 snapshot，不产生重复记录。相同对象的新观察必须使用新 key 并追加 snapshot，永不覆盖历史。
+- `commitAsset` 只把与 snapshot 中 `assetKey` 对应且通过媒体/字节限制的内容写入 CAS；相同 bytes 由内容地址去重，但对象关系和来源 URL 仍各自保留。Cookie、Header、Profile、个人标识和未授权整页没有字段入口。
+- `finishRun` 只关闭来源产物运行并写入统计/终止原因；DBOS 仍独占尝试、队列、取消和恢复事实。运行即使 `failed/stopped`，此前提交的 snapshots 仍可读、可导出。
+- `exportRun` 首轮支持 JSONL；对 `ordered_record`、`catalog` 和 `experience_collection` 的可表格投影支持 CSV。CSV 单元格开头为 `= + - @` 时按导出安全策略转义，避免本地表格打开时执行公式。
 
-## 5. 新调研条目模板
+#### 稳定 envelope 与 content kind 候选
+
+公共结构只表达所有商品品类都需要的来源事实，不出现冰箱、京东、压缩机、SKU、价格等固定字段：
+
+- `SourceCollectionRun`：项目/品类/范围/搜集板版本、lane、provider、访问政策快照、状态、开始/结束、统计和终止原因；
+- `SourceObject`：`sourceIdentity + objectKind + externalKey` 稳定识别外部分类、机构、目录项、商品、文档、监管记录、报价或体验记录；具体外部 ID 只是数据；
+- `SourceSnapshot`：URL、时间、typed 页面状态、内容 kind、canonical hash、解析版本、许可判定和对象关系；
+- `SourceAsset`：snapshot/assetKey、来源 URL、媒体类型、尺寸、用途、区块/顺序、内容 hash、CAS integrity 和隐私级别；
+- `SourceRelation`：只接受 `contains / describes / variant_of / offered_by / reviews / published_by / supersedes / references` 等来源可观察关系，并带 relationship proof；知识层的“型号采用某机制”不在这里生成。
+
+首轮 discriminated `content.kind`：
+
+1. `ordered_record`：有序 field group、允许重复原始字段名、文本/表格/asset reference block；覆盖官网商品页、监管记录、店铺/机构、Offer 等结构化来源；
+2. `document`：标题、出版者、文档标识/版本/状态和有序章节 block；覆盖说明书、标准、政府技术资料、论文；
+3. `catalog`：原始分类路径、筛选维度/选项/顺序和指向 SourceObject 的 entry relation；覆盖官网目录和销售平台分类，不把筛选词自动升级成品类属性；
+4. `experience_collection`：公开汇总指标、采样计划、评分档、排序/页码和去个人化样本；只表达体验来源，不表达因果或技术事实。
+
+字段和 block 都是 Zod strict object；来源原始名称和值作为有长度限制的字符串/数值进入有序数组，不允许任意 `metadata`。规范化属性、Market Universe、知识候选和 EvidenceItem 均从 snapshot 显式投影，不能回写原始内容。
+
+R-030 所需来源 authority 只增加当前真实消费者需要的类别：`standards_body / government_research / intergovernmental_technical / primary_research / professional_association / component_official_technical`。同时新增独立的 `claimScope` 与 `usagePermission`；“权威”不再隐含“允许输入模型”或“可以发布”。用户已明确技术 interface、数据结构、依赖和测试策略由工程负责；本 seam 因此按调研证据和跨品类不变量冻结，不再把技术责任转交用户。
+
+#### 第一条 TDD 纵切片与验收
+
+测试 seam 就是上面的 `SourceDatasetModule` 公共 interface，不测试私有 SQL helper。确认后先写 PostgreSQL integration 红灯，再写最小实现：
+
+1. 用完全相同的方法分别为 `household_refrigerator` 与 `television` confirmed project 创建运行并提交 `ordered_record`；不修改 schema、不增加品类分支；
+2. 证明有序字段保留重复名和区块顺序，同一 idempotency key 不重复，不同观察追加不可变 snapshot；
+3. 模拟中断并重新打开 Workbench，已提交内容和恢复点仍存在；失败运行仍可查看/导出；
+4. JSONL 逐行可由共享 Schema 重读；CSV 正确处理逗号、双引号、换行和公式前缀；
+5. 相同 asset bytes 复用 CAS content address，但两个来源关系不合并；
+6. API 与 PC 最后只读取该 module；PC 同屏显示运行状态、已提交/失败/unknown、原始有序字段和导出入口；
+7. 本切片不访问京东或真实官网，不增加模型调用，不改 Market Universe 投影。
+
+验证结果：共享 Schema、四张 PostgreSQL/Drizzle 表与迁移、Workbench module、CAS 附件关系、JSONL/CSV、只读 API 和 PC 已接线。冰箱＋电视使用同一 seam；失败重启、幂等冲突/追加、失败计数、相同字节不同关系、导出重读均在干净临时 PostgreSQL 通过。PC 本地真实表面已显示冰箱与电视记录、原始有序字段、用途范围、许可、导出入口，以及电视 `rate_limited / HTTP 429` typed 失败。全仓 172 项通过、1 项真实模型 acceptance 按设计跳过，六 workspace typecheck 与 production build 通过。ADR-0014 记录公共决定；真实官网/监管/权威技术来源矩阵、Linux/Windows 和跨机器门仍未通过。
+
+### R-032 来源访问限速、取消与熔断
+
+状态：真实 60 秒窗口、DBOS 强杀恢复与生产组合已接受；第 9.1 京东 reader/探针未通过
+目标阶段：阶段 1A / `JD-COLLECTION-DESIGN.md` 9.1 频控硬门
+
+问题：Crawlee `maxConcurrency: 1` 只能限制同时执行数，不能单独证明一分钟滑动窗口、同域最小间隔、批次冷却、最长运行、取消和首次受限后的全来源熔断。手写队列、超时、取消或 circuit breaker 违反工程基准。
+
+候选与官方资料：
+
+- `p-queue` 9.3.3：MIT、原生 ESM、内建 TypeScript、Node >=20；官方支持 `concurrency`、`intervalCap + interval + strict` 滑动窗口、per-task `AbortSignal`、timeout、`pause/onPendingZero/onIdle` 和 backpressure。它只承担当前进程内访问调度，不冒充持久任务事实源：https://github.com/sindresorhus/p-queue
+- Cockatiel 4.0.0：MIT、原生 ESM、Node >=22、零运行依赖、内建 TypeScript；官方提供 `circuitBreaker`、`ConsecutiveBreaker`、`isolate`、状态序列化和 AbortSignal。配置一次失败打开 circuit；本轮 gate 一旦打开即终止，只有新建恢复运行才能继续，不使用自动 retry：https://github.com/connor4312/cockatiel
+- Crawlee `BasicCrawler.maxRequestsPerMinute` 仍保留为 crawler 自身护栏，但不承担同域抖动、批次冷却或跨调用熔断；来源适配继续复用 Crawlee，不自建 crawler：https://crawlee.dev/js/api/3.8/basic-crawler/interface/BasicCrawlerOptions
+- DBOS TypeScript workflow 官方文档明确 workflow 会在进程重启后从 durable state 恢复，`DBOS.sleep(durationMS)` 是不占用进程的持久等待；本轮用它保存跨进程频控等待：https://docs.dbos.dev/typescript/tutorials/workflow-tutorial 、https://docs.dbos.dev/typescript/reference/methods
+- 持久工作项、尝试、取消和恢复继续由已接受的 DBOS 承担；`SourceDatasetModule` 只持久化来源运行、政策快照和逐条产物。不能把 `p-queue` 的内存队列描述为恢复事实源。
+
+最小原型边界：只启动本机随机端口 HTTP fixture，不访问京东或任何外部来源。测试真实请求时间戳、严格窗口、最小间隔、抖动边界、批次冷却、最大运行、AbortSignal 取消、429/验证类错误第一次即熔断、队列 idle 后零新增请求；随后把同一 gate 薄接到注入式 JD `pageReader`，生产 bootstrap 没有 reader 时仍失败关闭。
+
+本地验证结果：`PacedAccessGate` 已使用 `p-queue` 严格窗口、单并发、同域“前次完成到下次开始”间隔、抖动与批次冷却；Cockatiel 首次 typed 受限即打开 circuit，不自动重试。随机端口 HTTP fixture 验证实际服务端时间戳、取消/最长运行 AbortSignal、429 后零继续派发、队列 idle 后零残留；该 gate 已薄接注入式 JD `pageReader`，没有生产 reader 或没有显式 `paced_http` policy 时失败关闭。除缩放窗口回归外，显式 acceptance 以真实 60,000ms 窗口、每分钟上限 2 连续派发 3 个请求，实际运行 `60.029s` 通过，第三个服务端时间戳与第一个相隔至少 60 秒。
+
+`SourceCollectionPipelineModule` 使用稳定父/子 workflow ID、DBOS Queue 单并发、Provider 访问 step 不自动重试、逐条 `SourceDatasetModule.commitSnapshot` 幂等落库和 `DBOS.sleep` 持久等待。集成测试覆盖正常完成、typed 停止、取消；进程恢复验收在第一条快照已提交后对 Worker 执行 `SIGKILL`，新进程恢复后访问日志严格为 `item-A / item-B / item-C` 各一次，三条快照完成且 3 秒同域等待仍成立。DBOS 只拥有执行，来源事实仍只在 Workbench PostgreSQL。
+
+生产组合结果：`ProductKnowledgePipelineRuntime` 在一次 DBOS launch 前同时注册监管与 Source Collection 父/子 workflow，两个单并发 Queue 在同一临时 PostgreSQL runtime 中同时执行成功；生产 API 已改用该组合根，真实进程 `/health` 与项目列表均返回 200。Source Dataset HTTP 继续只读；曾尝试让客户端提交 work item 的写接口因会把 UI 变成采集计划/许可事实源而在本轮审计中删除，后续只能由服务端 Planner 从 confirmed brief/board 生成并启动。新 `JdSourceCollectionProvider` 不含冰箱判断，同一 adapter fixture 已分别保存电视与冰箱详情；目录保留顺序、自营标记和对象引用。生产未注入已验证 `JdPageReader` 时只提交 typed `source_abnormal` 并停止，不访问京东。旧 Market Universe 京东枚举仍是冰箱专用兼容路径，不能作为跨品类完成证据。
+
+剩余接受门：先完成真实 JD reader 的 R-012 验收并注入上述通用 Provider，再只允许 1 个目录＋3 个详情的真实验收探针；连续三个相互冷却窗口无受限才形成候选区间。旧冰箱专用 Market Universe 兼容路径还必须退出生产主流程。完成前第 9.1 节整体保持未通过，禁止京东数据抓取。
+
+### R-034 电视第二品类真实纵切片与 Socrata 开放数据
+
+状态：最小迁移门已接受；目标 Linux、动态页、图片和 JD 真实门不在本结论内
+目标阶段：M3～M7 / ROADMAP 1A～1D 最小真实纵切片
+
+问题：必须用非冰箱品类证明同一系统能取得底层知识、品类知识和真实型号，经过最小 Evidence、模型候选、人工审核、知识包与离线 Runtime；不能只换测试字符串，也不能为第二品类新增公共 Schema/流程分支。
+
+来源与许可：
+
+- DOE 电视定义页、节能采购指导和显示架构报告用于电视边界、LCD/OLED 结构与生命周期成本规则。DOE Web Policy 说明联邦政府材料通常为 public domain，但站点也可能含第三方材料；因此当前允许本地读取、模型输入、最小证据和派生知识，原文再分发保持 unknown，知识包只携带 locator：https://www.energy.gov/web-policies
+- EPA ENERGY STAR Model Index 的 Socrata 数据集 `8wj2-sec8` 用 `pd_id=2399940` 精确取得 Sansui `LE-32T1`。EPA Data License 说明 EPA 生产的数据默认 public domain，因此该最小记录允许进入公开证据包：https://data.energystar.gov/Active-Specifications/ENERGY-STAR-Model-Index/8wj2-sec8 、https://edg.epa.gov/EPA_Data_License.html
+
+Socrata 候选与边界：
+
+- 复用 Socrata 官方 SODA `/resource/{dataset-id}.json` 查询协议，而不是抓页面表格；官方 endpoint/filter 文档：https://dev.socrata.com/docs/endpoints 、https://dev.socrata.com/docs/filtering.html
+- 不引入 Socrata SDK、远程服务或新基础设施。已有 Crawlee HttpCrawler 负责 HTTPS、超时、取消和 JSON 响应，Zod 负责 scalar record；薄 adapter 只允许 allowlisted origin/dataset、一个合法字段的相等查询、`$limit=1`、最多一条记录、字节/字段上限和返回 identity 对照。
+- 纯 Node/TypeScript，无新增原生依赖；Source Dataset 保存后可离线重放，Runtime 不访问 Socrata。退出该来源只需删除 planning rule/provider 注入，不改变 Evidence、Factory 或 Runtime contract。
+
+真实结果：Category Interview → confirmed brief → Project → Planner → DBOS → DOE/EPA Provider → Source Dataset 保存 4 条真实记录；Evidence 形成 4 条最小证据。固定 `gpt-5.3-codex-spark + low` 加一条确定性型号转换产出 22 条候选、0 冲突、0 未知，包含 3 条品类到 foundational concept 的关系；人工接受后构建 22 状态/4 证据的 SQLite 包。相同内容重建版本哈希一致，复制单文件后精确、全文、关系和证据查询通过。PC Workbench 又从 DOE 长正文人工选择并提交一条 349-byte TextQuote，证据/审核/激活包页面均可见。
+
+结论：第二品类最小迁移门通过；新增内容只有版本化电视数据、DOE/EPA planning rule 和隔离外部协议的 Socrata adapter。公共数据库结构、Knowledge Factory/Review/Package/Runtime interface 与流程无电视/冰箱分支。该结论不等于 1A 完整矩阵完成，不授权 JD 访问，也不证明 Linux/Windows 或图片/动态页。
+
+## 6. 依赖与安全持续门
+
+### R-007 依赖复现与安全升级
+
+状态：持续维护
+
+- 新依赖先查官方文档/仓库、许可证、维护状态、Node/TS、local/offline、部署/原生依赖、安全、测试、升级与退出；再做隔离 POC。
+- 修改 `package.json` 必须更新 lockfile，并验证当前 macOS 与目标 Linux install/typecheck/test/build；Windows 若仍为产品目标再补。
+- 不扫描 `node_modules`；依赖信息只读 `package.json`、lockfile、包管理器摘要和官方资料。
+- `npm audit fix/force`、Node 升级、依赖大版本升级和新服务都不是顺手操作，必须独立归因和授权。
+
+## 7. 新调研条目模板
 
 ```text
 ### R-XXX 标题
@@ -434,11 +857,11 @@ R-008 已完成文档与隔离能力门，并支撑 Q003/Q004 的方向确认；
 
 问题：
 不可取消约束：
-候选：
-官方资料：
+候选与官方资料：
 许可证与维护状态：
-最小原型：
+Node/TypeScript、本地/离线和部署边界：
+安全、测试、升级与退出：
+最小原型与真实样本：
 验证结果：
-风险与退出成本：
-结论与确认人：
+结论与确认：
 ```

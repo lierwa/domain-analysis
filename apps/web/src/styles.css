@@ -8,6 +8,9 @@
   --color-ink: 15 15 15;
   --color-muted: 102 102 102;
   --color-line: 224 224 224;
+  --color-danger: 185 28 28;
+  --color-warning: 161 98 7;
+  --color-success: 21 128 61;
 }
 
 [data-theme="dark"] {
@@ -16,6 +19,9 @@
   --color-ink: 245 245 245;
   --color-muted: 163 163 163;
   --color-line: 48 48 48;
+  --color-danger: 252 165 165;
+  --color-warning: 253 224 71;
+  --color-success: 134 239 172;
 }
 
 html {
@@ -35,9 +41,67 @@ body {
 button,
 a {
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 /* WHY: 统一表单输入框样式，避免各页面重复定义 border/bg/padding/outline。 */
 .input-base {
-  @apply rounded border border-line bg-panel px-3 py-2 text-sm outline-none focus:border-ink;
+  @apply min-h-11 w-full rounded-lg border border-line bg-surface px-3 py-2 text-base outline-none transition-colors focus:border-ink focus:ring-2 focus:ring-ink/10 sm:text-sm;
+}
+
+.button-primary {
+  @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg bg-ink px-4 text-sm font-medium text-surface transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40;
+}
+
+.button-secondary {
+  @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-line bg-surface px-4 text-sm font-medium transition-colors hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40;
+}
+
+.icon-button {
+  @apply inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink;
+}
+
+.form-section {
+  @apply space-y-5 rounded-xl border border-line bg-panel p-4 sm:p-6;
+}
+
+.nested-card {
+  @apply rounded-lg border border-line bg-surface p-4;
+}
+
+.field-label {
+  @apply text-sm font-medium text-ink;
+}
+
+.field-help {
+  @apply mt-1 text-xs leading-5 text-muted;
+}
+
+.check-row {
+  @apply flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface px-3 text-sm transition-colors hover:bg-panel;
+}
+
+.check-row input {
+  @apply h-4 w-4 accent-black;
+}
+
+.step-number {
+  @apply inline-flex h-7 w-7 items-center justify-center rounded-full bg-ink text-xs font-semibold text-surface;
+}
+
+.status-badge {
+  @apply inline-flex min-h-7 items-center rounded-full border border-line bg-panel px-2.5 text-xs font-medium;
+}
+
+.detail-code {
+  @apply break-all font-mono text-xs text-muted;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

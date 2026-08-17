@@ -7,7 +7,7 @@ import path from "node:path";
 import { pipelineStages, type PipelineRunView } from "@domain-analysis/shared";
 import { describe, expect, it } from "vitest";
 
-const databaseUrl = process.env.DBOS_SYSTEM_DATABASE_URL;
+const databaseUrl = process.env.POSTGRES_DATABASE_URL;
 const describeWithDbos = databaseUrl ? describe : describe.skip;
 const workerUrl = new URL("./fixtures/dbosPipelineRecoveryWorker.ts", import.meta.url);
 
@@ -43,7 +43,7 @@ function spawnWorker(
 ) {
   return fork(workerUrl, [mode, runId, materialPath, logPath], {
     execArgv: ["--import", "tsx"],
-    env: { ...process.env, DBOS_SYSTEM_DATABASE_URL: databaseUrl, DBOS_TEST_SCHEMA: schemaName },
+    env: { ...process.env, POSTGRES_DATABASE_URL: databaseUrl, DBOS_TEST_SCHEMA: schemaName },
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
 }

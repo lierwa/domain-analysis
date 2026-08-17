@@ -1,6 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import {
   categoryDefinitionVersions,
@@ -9,20 +7,28 @@ import {
 } from "@domain-analysis/db";
 import type { ProductProjectDraftInput } from "@domain-analysis/shared";
 import { eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createProductProjectModule,
   ProductProjectError,
 } from "./productProjectModule";
 
-describe("ProductProjectModule", () => {
+const databaseUrl = process.env.POSTGRES_DATABASE_URL;
+const describeWithPostgres = databaseUrl ? describe.sequential : describe.skip;
+const clients: Array<ReturnType<typeof createProductKnowledgeDb>["$client"]> = [];
+
+afterEach(async () => {
+  await Promise.all(clients.splice(0).map((client) => client.end()));
+});
+
+describeWithPostgres("ProductProjectModule", () => {
   it("atomically saves, confirms and reads a complete project version", async () => {
-    const db = await temporaryDatabase();
+    const db = await openTestDatabase();
     const module = createProductProjectModule(db, deterministicOptions());
 
     const draft = await module.saveDraft(createDraft());
-    expect(draft.project).toMatchObject({ id: "project-1", revision: 1, status: "draft" });
+    expect(draft.project).toMatchObject({ revision: 1, status: "draft" });
     expect(draft.categoryDefinition.contentHash).toMatch(/^[a-f0-9]{64}$/);
 
     const confirmed = await module.confirm(draft.project.id, draft.project.revision);
@@ -35,7 +41,7 @@ describe("ProductProjectModule", () => {
   });
 
   it("preserves project creation time and stable content hashes across revisions", async () => {
-    const db = await temporaryDatabase();
+    const db = await openTestDatabase();
     const options = deterministicOptions([
       "2026-08-14T01:00:00.000Z",
       "2026-08-14T02:00:00.000Z",
@@ -64,7 +70,7 @@ describe("ProductProjectModule", () => {
   });
 
   it("rejects stale revisions without overwriting the current project", async () => {
-    const db = await temporaryDatabase();
+    const db = await openTestDatabase();
     const module = createProductProjectModule(db, deterministicOptions());
     const first = await module.saveDraft(createDraft());
     await module.saveDraft({
@@ -84,34 +90,52 @@ describe("ProductProjectModule", () => {
   });
 
   it("validates the whole collection board before writing", async () => {
-    const db = await temporaryDatabase();
-    const module = createProductProjectModule(db, deterministicOptions());
+    const db = await openTestDatabase();
+    const idPrefix = `validation-${randomUUID()}`;
+    const module = createProductProjectModule(db, deterministicOptions(undefined, idPrefix));
     const invalid = createDraft();
     invalid.collectionBoard.lanes[0]!.targetKeys = ["brand:not-in-scope"];
 
     await expect(module.saveDraft(invalid)).rejects.toThrow("搜集板引用了未纳入范围的目标");
-    expect(await module.get("project-1")).toBeNull();
+    expect(await module.get(`${idPrefix}-project-1`)).toBeNull();
   });
 
   it("rolls back the project when a version insert fails", async () => {
-    const db = await temporaryDatabase();
-    const first = createProductProjectModule(db, deterministicOptions());
+    const db = await openTestDatabase();
+    const idPrefix = `rollback-${randomUUID()}`;
+    const first = createProductProjectModule(db, deterministicOptions(undefined, idPrefix));
     await first.saveDraft(createDraft());
     const conflicting = createProductProjectModule(db, {
       now: () => new Date("2026-08-14T03:00:00.000Z"),
-      createId: (kind) => kind === "project" ? "project-2" : `${kind}-1`,
+      createId: (kind) => kind === "project"
+        ? `${idPrefix}-project-2`
+        : `${idPrefix}-${kind}-1`,
     });
 
     await expect(conflicting.saveDraft({ ...createDraft(), name: "第二个项目" })).rejects.toThrow();
-    expect(await conflicting.get("project-2")).toBeNull();
+    expect(await conflicting.get(`${idPrefix}-project-2`)).toBeNull();
   });
 
   it("returns a typed not-found error when confirming a missing project", async () => {
-    const db = await temporaryDatabase();
+    const db = await openTestDatabase();
     const module = createProductProjectModule(db, deterministicOptions());
 
     await expect(module.confirm("missing", 1)).rejects.toBeInstanceOf(ProductProjectError);
     await expect(module.confirm("missing", 1)).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("lists project summaries by most recent update", async () => {
+    const db = await openTestDatabase();
+    const module = createProductProjectModule(db, deterministicOptions([
+      "2026-08-14T01:00:00.000Z",
+      "2026-08-14T02:00:00.000Z",
+    ]));
+    const first = await module.saveDraft(createDraft());
+    const second = await module.saveDraft({ ...createDraft(), name: "第二个知识项目" });
+
+    const projectIds = new Set([first.project.id, second.project.id]);
+    expect((await module.list()).filter((project) => projectIds.has(project.id)).map((project) => project.name))
+      .toEqual(["第二个知识项目", "冰箱知识项目"]);
   });
 });
 
@@ -168,18 +192,21 @@ function createDraft(): ProductProjectDraftInput {
   };
 }
 
-function deterministicOptions(timestamps = ["2026-08-14T01:00:00.000Z"]) {
+function deterministicOptions(
+  timestamps = ["2026-08-14T01:00:00.000Z"],
+  idPrefix = `project-module-${randomUUID()}`,
+) {
   const counters = { project: 0, definition: 0, scope: 0, board: 0 };
   let timeIndex = 0;
   return {
     now: () => new Date(timestamps[Math.min(timeIndex++, timestamps.length - 1)]!),
-    createId: (kind: keyof typeof counters) => `${kind}-${++counters[kind]}`,
+    createId: (kind: keyof typeof counters) => `${idPrefix}-${kind}-${++counters[kind]}`,
   };
 }
 
-async function temporaryDatabase() {
-  const directory = await mkdtemp(path.join(tmpdir(), "product-project-module-"));
-  const databaseUrl = `file:${path.join(directory, "database.sqlite")}`;
-  await migrateProductKnowledgeDatabase(databaseUrl);
-  return createProductKnowledgeDb(databaseUrl);
+async function openTestDatabase() {
+  await migrateProductKnowledgeDatabase(databaseUrl!);
+  const db = createProductKnowledgeDb(databaseUrl!);
+  clients.push(db.$client);
+  return db;
 }

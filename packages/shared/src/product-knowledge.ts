@@ -20,9 +20,30 @@ export const sourceAuthorityTypes = [
   "brand_flagship_store",
   "official_manual",
   "regulatory_source",
+  "standards_body",
+  "government_research",
+  "intergovernmental_technical",
+  "primary_research",
+  "professional_association",
+  "component_official_technical",
 ] as const;
 
 export const versionStatuses = ["draft", "confirmed", "superseded"] as const;
+
+export const collectionAccessModes = [
+  "public_web",
+  "browser_session",
+  "licensed_api",
+  "document",
+] as const;
+
+export const collectionStopConditions = [
+  "login_required",
+  "verification_required",
+  "access_denied",
+  "sensitive_data_detected",
+  "source_abnormal",
+] as const;
 
 export const categoryAttributeSchema = z.object({
   code: z.string().regex(/^[a-z][a-z0-9_.-]+$/),
@@ -30,12 +51,18 @@ export const categoryAttributeSchema = z.object({
   description: z.string().min(1).max(1000),
   knowledgeLayer: z.enum(knowledgeLayers),
   valueKind: z.enum(["text", "decimal", "boolean", "enum"]),
-  canonicalUnitCode: z.string().min(1).max(32).optional(),
-  allowedValues: z.array(z.string().min(1)).min(1).optional(),
-  externalMappings: z.array(z.string().min(1)).default([]),
+  canonicalUnitCode: z.string().min(1).max(32).nullable().optional()
+    .transform((value) => value ?? undefined),
+  allowedValues: z.array(z.string().min(1)).min(1).nullable().optional()
+    .transform((value) => value ?? undefined),
+  externalMappings: z.array(z.string().min(1)).nullable().default([])
+    .transform((value) => value ?? []),
   filterable: z.boolean(),
   comparable: z.boolean(),
-}).strict().superRefine((attribute, context) => {
+}).strict().transform((attribute) => attribute.valueKind === "enum"
+  ? attribute
+  // WHY：strict structured output 必须返回所有 property；非枚举值域在进入领域事实前统一丢弃。
+  : { ...attribute, allowedValues: undefined }).superRefine((attribute, context) => {
   if (attribute.valueKind === "enum" && !attribute.allowedValues) {
     context.addIssue({ code: "custom", path: ["allowedValues"], message: "枚举属性必须声明 allowedValues" });
   }
@@ -101,7 +128,7 @@ function validateDefinitionContent(
 
 export const scopeTargetSchema = z.object({
   key: z.string().min(1).max(200),
-  kind: z.enum(["brand", "model", "variant"]),
+  kind: z.enum(["foundational_concept", "category", "brand", "model", "variant"]),
   label: z.string().min(1).max(200),
   parentKey: z.string().min(1).max(200).optional(),
   evidenceReferenceIds: z.array(idSchema).min(1),
@@ -139,17 +166,11 @@ export const confirmedScopeVersionSchema = z.object({
 export const collectionLaneSchema = z.object({
   id: idSchema,
   sourceAuthorityType: z.enum(sourceAuthorityTypes),
-  accessMode: z.enum(["public_web", "browser_session", "licensed_api", "document"]),
+  accessMode: z.enum(collectionAccessModes),
   targetKeys: z.array(z.string().min(1)).min(1),
   knowledgeLayers: z.array(z.enum(knowledgeLayers)).min(1),
   refreshPolicy: z.enum(["manual", "on_source_change", "daily", "weekly", "monthly"]),
-  stopConditions: z.array(z.enum([
-    "login_required",
-    "verification_required",
-    "access_denied",
-    "sensitive_data_detected",
-    "source_abnormal",
-  ])).min(1),
+  stopConditions: z.array(z.enum(collectionStopConditions)).min(1),
 }).strict();
 
 export const collectionBoardContentSchema = z.object({
@@ -197,6 +218,13 @@ export const productProjectDraftInputSchema = z.object({
   validateDefinitionContent(draft.categoryDefinition, context);
   validateCollectionLanes(draft.categoryDefinition, draft.confirmedScope, draft.collectionBoard, context);
 });
+
+export const productProjectViewSchema = z.object({
+  project: productKnowledgeProjectSchema,
+  categoryDefinition: categoryDefinitionVersionSchema,
+  confirmedScope: confirmedScopeVersionSchema,
+  collectionBoard: collectionBoardVersionSchema,
+}).strict();
 
 export const confirmedProjectSnapshotSchema = z.object({
   project: productKnowledgeProjectSchema.extend({ status: z.literal("ready") }),
@@ -256,6 +284,7 @@ function requireConfirmedAt(
 }
 
 export type ProductKnowledgeProject = z.infer<typeof productKnowledgeProjectSchema>;
+export type SourceAuthorityType = (typeof sourceAuthorityTypes)[number];
 export type CategoryDefinitionVersion = z.infer<typeof categoryDefinitionVersionSchema>;
 export type ConfirmedScopeVersion = z.infer<typeof confirmedScopeVersionSchema>;
 export type CollectionBoardVersion = z.infer<typeof collectionBoardVersionSchema>;
@@ -264,3 +293,4 @@ export type CategoryDefinitionContent = z.infer<typeof categoryDefinitionContent
 export type ConfirmedScopeContent = z.infer<typeof confirmedScopeContentSchema>;
 export type CollectionBoardContent = z.infer<typeof collectionBoardContentSchema>;
 export type ProductProjectDraftInput = z.infer<typeof productProjectDraftInputSchema>;
+export type ProductProjectView = z.infer<typeof productProjectViewSchema>;

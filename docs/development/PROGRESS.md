@@ -1,407 +1,396 @@
 # Agent 知识生产平台开发进度
 
-这是当前阶段、已验证事实、阻塞项和下一步的单一权威来源。
+这是当前阶段、已验证事实、阻塞项和下一步的单一权威来源。阶段计划只看 `ROADMAP.md`，技术候选只看 `RESEARCH.md`。
 
-更新日期：2026-08-14
-当前阶段：阶段 2——项目与可恢复流水线骨架（DBOS adapter 与强杀恢复已完成，进入 Workbench 基础页面）
-总体状态：阶段 0、1A～1D 全部完成；项目、独立产品库、持久流水线和真实恢复均已通过；下一步接 Product HTTP adapter 与基础页面
+更新日期：2026-08-17
+当前阶段：M0～M7 恢复路线的最小真实纵切片已通过；`ROADMAP.md` 阶段 1A 的完整市场/媒体矩阵仍在实施，真实京东 reader/探针因缺少书面许可保持停止
+总体状态：系统已用电视第二品类贯通 confirmed brief→服务端 Planner→DBOS→真实 DOE/EPA 来源→Source Dataset→最小 Evidence→Factory/Review→SQLite Package→复制后离线 Runtime，并在 PC Workbench 显示底层概念、型号、来源、证据、候选和激活包。R-034 保存 4 条真实来源记录、4 条最小证据，生成 22 条已审核候选和 3 条关系；同内容重建哈希一致。该结果证明跨品类最小链路，不等于京东真实数据、三品类、多站点、动态页、图片、目标 Linux/Windows 或完整市场总体已经通过。历史 737 identity 仍不是当前来源数据或商品知识。
+当前积分：85.5（以 `AGENT-SCORECARD.md` 为准）
 
-## 1. 当前 Git 与环境基线
+## 1. 当前 Git、环境和接续边界
 
 - 仓库：`/Users/guojunxi/Desktop/work/domain-analysis`
 - 分支：`master`
-- 本轮修改前 HEAD：`787597e84ed3fee74ff3e3bc90a0e3c6fb0bde03`
-- 本轮修改前本地/上游一致：`HEAD == origin/master`，ahead/behind `0 0`
-- Node：`v21.7.3`
-- npm：`10.5.0`
-- `node_modules`：已通过锁文件恢复；本轮新增并精确锁定官方 `@openai/codex-sdk@0.147.0`
-- CodeGraph：已初始化；59 个文件、527 个节点，`codegraph status` 显示索引为最新
+- 本轮开始 HEAD：`47ffb78b4baa32c5a392747fa9370716cfe2eec8`
+- 本轮开始上游：`origin/master` 同 SHA，ahead/behind `0 0`
+- 交付范围：用户已授权把本轮 M0～M7 实现、必要文档、测试、迁移和跨电脑启动交接一并提交并推送；本地数据库、Evidence、知识包、浏览器状态和认证材料仍排除。动态 Git 状态以 `git status`、`git rev-parse` 和远程 ahead/behind 为准。
+- Node 基线：根 `package.json#engines` 固定 Node `>=24 <25`、npm `>=11 <12`，`.nvmrc` 选择 `24.12.0`，`.npmrc` 启用 `engine-strict`，`devEngines` 为 npm 11 官方门，根脚本再用 `check-node-version@4.2.1` 兼容拦截旧 npm；新上下文必须先 `nvm use`，不能沿用系统默认版本。
+- CodeGraph：已初始化；本轮开始为 151 files、1611 nodes、2082 edges。清算后状态读数为 153 files、1660 nodes、2207 edges，但删除查询仍返回已不存在文件的旧节点，说明 watcher 对删除的索引状态不可信；最终结构死代码结论同时以真实文件/导出、TypeScript 和测试为证，未擅自重建索引。
+- 跨电脑启动入口为 `docs/development/HANDOFF.md`。接续点只有在包含该文件的 `master` 已推送且本地/远程 SHA 经动态核对一致时成立；本文不固定自身提交 SHA，避免自引用失真。
+
+## 2. 2026-08-15 架构纠偏决定
+
+用户明确确认采用目的驱动的最小证据，并否定以下旧方向：
+
+- 不能认为“一个官网写一个解析器”可以满足跨品类和未知 DOM；
+- 采集必须带着明确事实/知识问题寻找证据并记录来源 URL；
+- 不把完整原始页面永久保存下来；
+- 图片何时保存、如何证明图片与对象/知识点关系必须单独设计和验证；
+- 文档正确后才允许删除旧错误/死代码并写新实现，不保留垃圾兼容层。
 
-Git 信息是 2026-08-14 本地核对结果；Node/npm 基线来自 2026-08-13。新上下文必须重新验证，不能永久当作当前事实。
+2026-08-17 用户进一步纠正了上述边界的适用阶段：最小 EvidenceItem 约束不能反向裁掉京东第一轮来源数据发现。京东必须先有界保存分类/筛选体系、核实后的自营/官方旗舰店商品目录、每款商品完整内容区，以及评价汇总和前 50/100 条样本；再从这些来源快照归纳市场总体、属性、比较维度和知识问题。整页导航、广告、账户、Cookie、Header、Profile 与无关个性化内容仍禁止保存。详细方案为 `JD-COLLECTION-DESIGN.md`；用户已授权实施，R-031 已由工程按 ADR-0014 冻结并完成本地跨品类纵切片。
 
-## 2. 已确认的产品与工程决定
+当前权威结论：
 
-- 继续在现有 `domain-analysis` 仓库上开发，不新建项目或仓库。
-- 最新六份产品文档是产品需求、边界和验收输入，不是现成详细架构。
-- 工程架构由当前项目真实代码、产品约束和开源调研共同形成。
-- 能使用成熟开源方案或官方实现的能力必须优先使用，禁止先自研再调研。
-- 任何架构或技术决策必须先记录调研证据，不能凭直觉冻结。
-- 开发周期跨多个上下文，仓库文档而不是聊天摘要承担长期事实源。
-- 每个非平凡任务必须对应路线图阶段和最终架构目标；局部问题不能脱离架构直接堆补丁。
-- 每次开发结束必须更新本文件并记录架构影响；模块职责、事实源、依赖方向或公共 contract 变化时同步更新 `ARCHITECTURE.md`，没有变化时明确记录而不制造文档噪音。
-- 跨电脑接续只以已提交并推送的 Git 内容为准；聊天、模型记忆和本机未跟踪文件不算共同事实源。
-- 当前阶段只授权阶段 2 的隔离 migration、正式 contract 和最小骨架收敛，不授权无关全面重构。
-- 通用能力一律先采用最合适的成熟开源库或官方实现；调研后确无合适方案时必须停下并请用户决定，未经确认不得自行实现替代品。
-- 项目自身实现仅限产品特有领域规则、成熟组件的薄 adapter 和已验证组件的流程组装；“MVP 简化版”不能作为自研通用能力的理由。
-- MVP 直接复用用户本机已安装并登录的 Codex CLI 完成知识加工，不接通用模型 API，也不要求本地推理服务。
-- Cookie、认证 Header 和浏览器 Profile 不进入 Codex 任务；项目不读取、复制或持久化 Codex CLI 的用户认证文件。
-- 知识项目围绕可被多个 Agent/Skill 复用的商品知识资产，不围绕单一目标 Agent。
-- 所有商品品类共用稳定商品知识模型和共享属性字典；品类差异必须是版本化数据。冰箱不得成为生产 Schema、类、数据库列或 Runtime API。
-- 首轮只采品牌官网/说明书、平台官方自营或经核实旗舰店、监管/标准资料；普通第三方与小型商家排除。用户已明确选择教育研究用途的京东网页采集；技术上只组装成熟开源能力，不自研反检测、验证码或账号切换。淘宝作为京东闭环后的下一来源单独调研。
-- Tutor 不属于知识库且不作参照；`Perfume` 只可参考下游引导式交互，不能定义本项目知识架构。
-- Runtime 使用精确匹配、结构化筛选、全文检索、关系导航、证据/质量状态的查询顺序；向量或语义检索只可作为真实缺口证明后的可选增强。
-- 更新按来源和知识变化速度分层，稳定知识与时点信息不强制同频；任何接受的变化生成新快照和新知识包版本，不覆盖历史。
-- 本地 Workbench Web 是日常入口，Codex 负责引导，结构化页面负责审核、恢复、差异和发布；CLI 只用于开发、诊断和自动化。
-- 采集、Codex 加工、审核、评测和建包留在本机；本地或远程 Runtime 只消费已发布知识包，基础查询不依赖模型、网络或 embedding。
-- 当前仓库原地演进并复用工程底盘；旧 Social Intelligence 领域对象、API、UI 和未合并分支不作为兼容目标。
+- `Knowledge Need` 拥有“要解决什么”；`EvidenceRequest` 拥有“为什么采”；
+- `SourceObservation` 只记录访问发生了什么；访问成功不等于证据充分；
+- `EvidenceItem` 拥有“当时实际看到了什么”，只保存支持明确请求的最小不可变内容、URL、时间、哈希、locator、对象关系和隐私等级；
+- HTML/完整文档/页面图片可以在本机临时读取，证据提交或失败后清除未选内容；URL-only 不是证据；
+- 文本、PDF、表格和图片分别使用可复核 locator；图片关系无法证明时保持 unknown/人工审核；
+- 规则、结构化数据、OCR、Codex 或视觉模型都只产生 ExtractionCandidate，必须引用 evidence ID，不能自动发布；
+- 用户在批次级确认知识范围、证据政策、例外和发布，不逐字段排网页；其他独立任务不会因一个未知项停下；
+- “同类”只按 typed request/reason/source/evidence/category version 筛选，不再调用 LLM 先判断同类。
+
+ADR-0011 已接受上述决定；ADR-0005 已被取代；ADR-0010 只保留 `cacache` 内容寻址和公开/受限物理隔离，存储对象收窄为最小证据。
+
+### 2.1 2026-08-15 品类启动采访决定
+
+用户确认先按以下方向推进：
+
+- 新品类从 Workbench Chat Timeline 开始，用户可以直接说“开启冰箱品类”；
+- 专用 `interview-product-category` Skill 一次只问一个必须由负责人决定的问题，系统自行调查品牌、型号、参数、部件、原理和来源；
+- Workbench 分别保存规范化消息、append-only Interview Decision、未决项和版本化 Category Research Brief，并独占多轮继续上下文；Codex 每轮 ephemeral 执行不拥有持久 thread；
+- 模型建议不是项目事实，只有用户确认的决定才能进入 confirmed brief；confirmed brief 再生成 Product Project 草稿和阶段 1A 冻结输入；
+- 现有 ProductProjectForm 改为检查修改面，不再作为从零创建事实源；
+- 前端接受 `assistant-ui` ExternalStoreRuntime；旧 Codex App Server `stdio` 例外已撤销。R-029 当前接受官方稳定 `codex exec --ephemeral` 薄 adapter，真实验收已证明全局 Session 零新增；UI 与运行时仍是两个独立通过门；
+- MVP 不引入 Pi Agent、agent registry、多 Provider 或自动 fallback；采访 modelId/reasoning 用真实采访样本另行评测，不继承批次 `gpt-5.3-codex-spark + low`；
+- DBOS 从任务书确认后的正式研究 Pipeline 开始，不持久化每一条聊天消息。
+
+ADR-0012 已接受产品流程、Workbench 事实归属、“不引入 Pi”和无 Session 的 ephemeral exec adapter；它没有提前接受尚未重写/验收的采访 Skill 行为或整个阶段 0I。
+
+## 3. 当前阶段判定
+
+| 阶段 | 当前判定 | 可复用证据 | 尚缺什么 |
+| --- | --- | --- | --- |
+| 0R 文档与清算 | 通过 | 权威文档一致性/链接/diff 门通过；错误 contract/module/route/UI/test/dependency 已删除；跨电脑交接入口已加入提交范围 | CodeGraph 删除索引仍陈旧；索引重建需单独授权 |
+| 0I 品类采访与任务书 | 已通过 | R-028 Chat Timeline、R-029 ephemeral exec/Session 隔离、采访 Skill、真实 Workbench 决策树/调查/任务书/确认/项目草稿、取消/失败/重试/重启与 PC 主流程均通过；确认后自动推进且不合成用户消息 | 无；后续只能消费 confirmed brief，不得恢复第二套创建事实源 |
+| 1A 来源与证据 | 最小真实纵切片通过；完整矩阵未通过 | confirmed brief 驱动 Planner；DOE/EPA/监管资料经 DBOS 形成 Source Dataset 和最小 Evidence；许可禁止或未知时失败关闭 | 京东真实许可与 1＋3 探针、完整市场总体、动态页、图片、更多官网/监管对象和第三品类 |
+| 1B 证据到候选 | 最小 Factory/Review 纵切片通过；完整质量门未通过 | 确定性转换与固定 `gpt-5.3-codex-spark + low` 分开；模型只产待审候选；底层概念 owner、关系、许可和人工决定均有 typed contract | 完整共享属性字典、冲突/unknown 统计、图文机制、多型号比较与人工频次门 |
+| 1C 包与离线查询 | 当前 Evidence contract 复核通过；跨平台门未通过 | 内容寻址 SQLite＋FTS5 包、激活/回滚、精确/筛选/全文/关系/证据查询；复制单文件后离线查询通过 | 目标 Linux/Windows 安装与离线验收、完整验收集和安全升级处置 |
+| 1D 第二品类迁移 | 电视最小真实迁移门通过；完整迁移门未通过 | R-034 未修改公共 Schema/Factory/Review/Package/Runtime interface 即贯通电视底层概念、型号与真实 DOE/EPA 来源 | 第三品类、动态/图片/多站点矩阵以及更大规模质量门 |
+| 2 Product/Pipeline | 最小生产组合可达 | confirmed brief、Planner、两个 DBOS Queue、typed lifecycle/取消/强杀恢复和 API 组合根已接通 | 完整阶段处理器、总验收与发布权限闭环 |
+| 3 数据搜集板块 | 通用最小链路通过；京东真实采集未通过 | Source Dataset、Provider Router、持久工作项、显式频控/熔断/取消/恢复、PC 查看和导出已通过；电视真实来源通过 | 已许可的 JD reader/探针、动态/图片、多品牌和多站点完整门 |
+| 4 Knowledge Factory | 通用最小链路通过；完整知识质量门未通过 | Evidence→确定性/模型候选→Review 已在电视真实证据上通过；无品类分支、无模型 fallback | 完整知识需求矩阵、冲突/unknown、图文原理和比较质量门 |
+| 5～6 | 最小包/Runtime/PC 联调通过；正式交付未通过 | SQLite 包、离线查询、内容重建稳定、PC Workbench 真实表面通过 | 跨平台、完整故障矩阵、第三品类和发布总验收 |
+
+不得把“M0～M7 最小纵切片通过”写成“阶段 1A～1D 全量完成”或“京东已抓取”。两者的验收范围不同。
+
+## 4. 仍然成立的已验证资产
+
+以下只是可复用资产，不等于新阶段已通过：
+
+- 项目、品类定义、确认范围和搜集板的版本化 PostgreSQL/Drizzle 事务；
+- DBOS workflow 的稳定 identity、重试、人工等待、失败 fork 和强杀恢复；
+- Crawlee 请求队列/恢复、Patchright/Playwright 本机浏览器访问、登录/验证/风控等历史 POC 证据；旧 Provider 实现已删除，待按新输出 contract 重写；
+- Crawlee sitemap/FileDownload、文件签名与大小门的历史 POC 证据；旧整页/完整文件交付代码已删除；
+- `cacache` 原子内容寻址、SRI 完整性、公开/受限物理隔离；
+- `unpdf@1.7.0` 对历史真实 16 页 PDF 的页级读取、`read-excel-file@9.3.10` 对监管表精确行读取、`mathjs@15.2.0` 的确定性单位处理历史证据；旧依赖和 projector 已从生产包删除，复用前必须按 R-026 重新 POC；
+- 候选/冲突/unknown、evidence ID 绑定和 append-only Review Decision 的历史局部不变量；旧 contract/module 已删除，阶段 1B 重新设计；
+- SQLite＋FTS5 只读、离线、版本切换/回滚知识包方向；
+- 旧窄用途 Codex 批次曾以正确 `gpt-5.3-codex-spark + low` 真实返回结构化候选。旧 adapter/SDK 依赖已删除；该历史证据只适用于“未映射最小事实 → 待审候选”，不授权网页语义寻找、图片理解、OCR 后推理或富知识抽取。
+
+所有历史测试/构建结果只是当时证据；代码清算后必须重新运行，不能直接继承为当前通过。
+
+## 5. Patch Disposition
+
+### Delete
+
+- `OfficialProductMaterialProjector`、京东/官网商品字段 DOM projector 及其站点 selector；
+- `Capture Snapshot / Restricted Capture Snapshot / Processable Material Projection` 作为公共/领域 contract 的实现；
+- 默认保存 HTML、全页截图、完整页面文本和资源清单的持久化路径；
+- 为旧 projector、整页重放或错误完成声明服务的 helper、wrapper、test、fixture 文案和 UI 投影；
+- 只在测试注入、生产组合根不可达且不保护新不变量的 Stage 3/4 interface/route/module；
+- 重复事实源、兼容 fallback、误导命名和无调用方扩展点。
 
-## 3. 已完成并有证据的事项
+### Keep
 
-### 产品资料入库
+- confirmed/frozen project 版本、typed lifecycle/source state、DBOS/Crawlee 恢复和人工接管；
+- 来源授权/隐私门、内容哈希/公开受限隔离和 evidence binding；
+- 模型只产候选、服务端按 evidence ID 恢复/校验、append-only Review、人工发布门；
+- 知识包/Runtime 与 Workbench/浏览器/模型物理隔离。
 
-- `91ec1fb` 已新增六份产品文档和一份历史接续文档，共 7 个文件、1247 行；该提交没有业务代码修改。
+### Rewrite
 
-### 当前代码只读盘点
+- Acquisition Plan → EvidenceRequest Plan；
+- Provider capture → SourceObservation＋临时待选证据；
+- Raw Material/Snapshot/CAS catalog → EvidenceItem catalog；
+- coverage/source revision → 请求充分性＋独立来源观察；
+- Knowledge Factory 输入 → EvidenceItem；
+- Workbench 页面 → 请求/证据/例外队列，不显示旧快照/字段投影语义；
+- 生产组合根 → 全部真实 handler 可达后一次接通。
 
-- 已核对 monorepo、Fastify、React/Vite、Zod、Drizzle/SQLite、Crawlee、Project/Run/Task、Collection Plan、Raw Content、scheduler 和 worker placeholder。
-- 已确认现有领域契约、表、运行编排和 UI 主流程仍被 Reddit/Social Intelligence 语义贯穿。
-- 已确认 `clean`、`analyze`、worker `report` 仍为 placeholder。
-- 已确认本轮接入前的 `master` 没有 Codex CLI、模型 SDK 或 AI Provider 的真实调用；只有 job、API/UI 状态和 deterministic report 骨架。
-- 已确认未合并分支 `origin/codex/analysis-batch-delete-fix` 存在 `AiInsightAnalyzer`、批处理、Zod/证据校验和子进程模式，但实际 Provider 是 Vercel AI SDK＋API Key，不是 Codex CLI。
-- 已确认进程内 `TaskQueue` 在进程重启时会丢失 running 任务。
-- 已确认 `rawHtmlPath` 和 `screenshotPath` 只是预留字段，当前主流程没有完成原始页面和截图保存。
-- 已只读检查两个未合并远程分支；其中浏览器运行、失败分类和恢复代码只作为参考，不视为 `master` 已有能力，也不计划整体合并。
-- 已移除 `.env.example` 中当前代码未读取且与 Codex CLI 路径冲突的 `OPENAI_API_KEY`、`OPENAI_BASE_URL` 和 `OPENAI_MODEL`，避免继续暗示需要另配模型 Provider。
+删除前必须用 CodeGraph 从真实 entry/组合根检查调用和影响，再核对 package exports、CLI/migration/config/动态入口和测试不变量；不可达只是删除候选，不能机械删除。此次不引入 Knip：当前 Node 21 与其最新 Node 22 engine 不匹配，且多 workspace entry 未配置会级联误报；详见 R-027。
 
-### 工程治理和跨上下文文档
+历史执行结果：旧 `acquisition/raw material/processable material/knowledge factory/review` 共享 contract、Workbench module、Provider/projector、API route、Web 区块、测试和直接依赖曾被删除；Product Project、DBOS Pipeline、`cacache` 和内容哈希被保留。该历史记录不再证明 Rewrite 已完成。当前必须重新审计所有未提交改动，并为采访 Skill、Session 运行时、生产组合入口和市场总体采集分别给出新的 `delete / keep / rewrite` 结论；审计前不删除文件、不清理全局 Session、不继续叠补丁。
 
-- 已以成熟项目规则为母版重建根目录 `AGENTS.md`，移除与本项目无关的专属架构规则。
-- 已强化开源优先、调研先于决策、禁止先自研、架构基准和跨上下文 progress 协议。
-- 已建立根目录领域词汇表 `CONTEXT.md`。
-- 已建立开发文档导航、架构基线、阶段路线图、技术调研登记和本进度文件。
-- 已完成 R-004 第一轮只读调研：当前 `schema.ts` 与 `initializeDatabase()` 手写 DDL 是双重事实源且已有约束漂移；候选收敛为项目现有 Drizzle Kit/ORM migration，不新增 migration 库、不升级现有依赖。
+### 5.1 2026-08-16 当前 dirty diff 审计
 
-## 4. 当前架构状态
+审计范围：`63` 个 tracked 修改文件、`105` 个 untracked 文件，共 `168` 个文件；已排除所有 `node_modules`。本表是后续修复的文件处置基准，未列为 Delete 的用户 WIP 不得清理或覆盖。
 
-以下是提议基线，尚未经过阶段 1 原型冻结：
+| 路径/文件组 | 处置 | 审计结论与下一动作 |
+| --- | --- | --- |
+| `AGENTS.md`、`CONTEXT.md`、`docs/product/agent-knowledge-platform/**`、`docs/development/{README,ARCHITECTURE,ROADMAP,RESEARCH,REQUIREMENTS-ALIGNMENT,PROGRESS,AGENT-SCORECARD}.md`、`docs/adr/0001,0002,0004,0005,0008～0012` | Keep＋纠错 | 保留需求、事实源和架构边界；删除错误完成措辞。只有 Session 方案或事实源归属改变时再更新 RESEARCH/ADR/ARCHITECTURE。 |
+| `docs/development/pocs/r001,r014,r015,r016` | Keep | 作为历史调研证据，不是当前完成证明；本轮不运行、不扩写。 |
+| `docs/development/pocs/r026/**`（7 个 untracked） | Keep/Frozen | 保留 PDF/XLSX/图片/网页的隔离样本证据；阶段 0I 未通过前禁止继续运行或升级为生产依赖。 |
+| `docs/development/pocs/r028/**`（原 16 个 untracked） | Compact completed | 生产 Chat Timeline 已接入并完成 PC 验收；删除平行应用、测试、构建配置、独立 package/lockfile，只保留一份压缩 README。 |
+| `docs/development/pocs/r029/**`（原 12 个 untracked） | Compact completed | App Server/SDK thread 已拒绝，生产改为 `exec --ephemeral` 并有 Session 零新增回归/acceptance；删除旧探针、POC Skill、独立 package/lockfile 和配置，只保留一份压缩 README。 |
+| `.agents/skills/interview-product-category/{SKILL.md,agents/openai.yaml}` | Rewrite | 现有 Skill 只复制了一次一问规则，没有实际组合 `grilling`＋`domain-modeling` 的行为和文档沉淀纪律；按 `skill-creator` 最小更新并重新校验。 |
+| `packages/shared/src/category-interview.ts`、`packages/shared/tests/category-interview.test.ts` | Keep＋Rewrite | 保留 Message/Decision/Unresolved/Brief 分离和 strict typed output；补有来源主动调查、任务书充分性和不依赖持久 Codex thread 的 contract。禁止把空 `factReferences` 或固定少量属性视为完成。 |
+| `packages/db/src/productKnowledge{Schema,Client}.ts`、对应 tests、`drizzle/product-knowledge-postgres/**`、DB package/config | Keep＋Rewrite（Session 部分已完成） | PostgreSQL、职责分表和 append-only 事实保留；`codexThreadId` 已从 schema/contract 删除并生成追加 migration，未 reset 现有数据库。 |
+| `packages/workbench/src/categoryInterviewModule.ts`、其 integration test、`productKnowledgeWorkbench.ts` 及测试 | Keep＋Rewrite | 保留 Workbench 作为消息/决定/Brief 单一事实源、revision 和失败记录；改写 runtime continuation、主动调查阶段和任务书完成门。 |
+| `packages/workbench/src/codexAppServerClient.ts`、`codexCategoryInterviewRuntime.ts`、相关 package/config | Delete＋Rewrite（已完成） | 删除 App Server client、`thread/start/resume`、`codexThreadId` 和只服务旧路径的 JSON-RPC/stream-json 依赖；runtime 改为 `codex exec --ephemeral`，fake 与真实验收均证明 Session 零新增。 |
+| `apps/api/src/routes/categoryInterviewRoutes.ts`、API tests、`apps/web/src/pages/CategoryInterviewTimeline.tsx`、`apps/web/src/lib/api.ts` 相关采访部分、SSE/assistant-ui 依赖 | Keep＋Rewrite | HTTP/SSE 与 ExternalStoreRuntime 是可复用薄 adapter；改写为新 runtime contract，并从真实页面验证一次一问、恢复、取消、失败和确认，不保留文案反推。 |
+| `apps/web/src/pages/{ProductProjectWorkspacePage,ProductProjectForm,CategoryDefinitionSection,ScopeCollectionSections}.tsx`、form model/labels、App/AppShell/styles | Keep＋Rewrite | 保留任务书确认后的检查修改面和项目浏览；禁止恢复第二套从零创建事实源。UI 只在真实采访门通过后验收。 |
+| `packages/workbench/src/productProjectModule.ts`、`productPipelineModule.ts`、DBOS pipeline 及 tests、`apps/api/src/routes/productProjectRoutes.ts` | Keep＋Rewrite composition | 冻结 project 和 durable pipeline 不变量保留；当前 ProductPipeline 只在测试注入，生产 `apps/api/src/index.ts` 未注入，不能称完整链路。待批量 plan handler 存在后接一次真实组合根。 |
+| `packages/shared/src/{evidence,source-access}.ts`、Evidence tests、`packages/workbench/src/{evidenceModule,evidenceCandidateValidation,evidenceError,cacacheContentStore,contentHash,projectEvidenceReader}.ts` 及 tests | Keep | 请求/观察/最小不可变证据、对象关系、SRI/CAS 和按目标充分性是有效不变量；保留并作为后续批量规划的下游 seam。 |
+| `apps/api/src/routes/evidenceRoutes.ts`、API evidence tests、`packages/worker/src/{publicWebTextSource,documentExcerptSource,energyLabelRecordSource,cnisRegistryTableSource,sourceTextLocator,sourceAccessError}.ts` 及 tests | Rewrite production entry | Source adapter 中真实外部协议、HTTPS allowlist、typed failure 可复用；当前四类 POST 由调用者手填 URL/selector/requiredText/型号，并在 HTTP route 临时创建单条 EvidenceRequest，必须移出正式用户入口，改由 Acquisition Planning 批量编排。 |
+| `apps/api/src/{index,server,config}.ts`、`.env.example`、各 workspace package/tsconfig、root lockfile | Partial Rewrite | 采访 runtime 已改为无状态 ephemeral exec 并收敛旧依赖；四类手工 source 与未注入 ProductPipeline 仍待恢复顺序第 6/7 项处理，当前不得顺手扩张。 |
+| `apps/api/data/evidence/**`（原 16 个 untracked CAS 文件） | Delete completed | 已从源码工作树移出并原样迁移到根目录忽略区 `data/evidence`；API 现在将 Evidence/Knowledge Package 相对路径锚定仓库根，`.gitignore` 同时阻止 `apps/*/data/` 再次进入 Git。Evidence 字节未丢失。 |
+| 2026-08-16 全局 Codex `sessions` 中与 cwd/POC/采访相关记录 | Delete/Archive candidate | 只读盘点发现当日有 `18` 个 cwd 指向本仓库的 JSONL，其中包含正常 Codex 对话、R-029 探针和采访尝试，不能按 cwd 整批删除。下一步必须按 session id、首个业务输入和来源逐条生成精确清单；用户确认前不删除。 |
+| `packages/worker/src/adapters/{reddit,x}.ts`、既有 DBOS 恢复修改等非本轮采访/采集修复 WIP | Preserve | 属于共享 dirty worktree 的既有修改；除非依赖收敛证明必须联动，否则不借本轮顺手重构或回退。 |
 
-- 模块化单体 Workbench＋独立只读 Runtime；
-- Workbench 控制库、原始资料区、知识包区物理分离；
-- Provider、数据搜集板块、来源对象、采集快照和证据引用分离；
-- 数据搜集板块运行前必须冻结来源身份、允许用途、访问方式和敏感数据边界；JD Web Adapter 使用 Crawlee＋Patchright＋本机 Chrome，登录态原始页只进受限采集快照区，通过白名单投影和严格 Schema 后才能进入清洗和 Codex 加工；
-- Pipeline 阶段、生命周期、任务尝试和人工介入分离；
-- Runtime 通用 interface 保持品类中立、消费者中立；
-- Knowledge Factory 使用稳定商品知识模型、共享属性字典和数据化品类知识定义；规格、功能、机制、适用条件、取舍与决策维度进入知识包；
-- 架构冻结前必须通过第二商品品类迁移门，生产 Schema、数据库结构、通用 interface、Runtime API 和同来源 Provider 实现零修改；
-- Knowledge Factory 通过 `CodexExecutionPort` 使用薄 `CodexSdkAdapter`；官方 SDK 在内部驱动 Codex CLI，SDK/CLI 类型不泄漏到领域 module；
-- 现有工程底盘保留，旧 Social Intelligence 产品核心重构或淘汰。
+已确认的两条生产路径：
 
-SQLite＋FTS5 单文件知识包已按 ADR-0006 接受，京东 adapter 已按 ADR-0004 接受 Crawlee＋Patchright，正式编排器已按 ADR-0007 接受 DBOS。DuckDB、Orama、Temporal、Restate、向量数据库和 Great Expectations 不进入 MVP 当前依赖。
+1. 采访旧路径已重写：`apps/api/src/index.ts` → `openProductKnowledgeWorkbench` → `CategoryInterviewModule.runTurn` → `codexCategoryInterviewRuntime` → `codex exec --ephemeral`；每轮从 Workbench typed state 重建上下文，不写 `codexThreadId`，不创建/恢复 Codex thread。
+2. 收集：`apps/api/src/index.ts` → 四个 Source adapter → `registerEvidenceRoutes` 的人工单条 POST → route 内创建 EvidenceRequest → capture/commit。`ProductPipelineModule` 只在测试注入，生产组合根不可达；该路径必须 Rewrite 为 `MarketUniverseVersion/Knowledge Need → batch EvidenceRequest → Source Access → Evidence`。
 
-## 5. 决策记录与待人工事项
+本轮 Patch Disposition：没有删除任何文件或 Session；Keep 项保护的真实不变量如上，Rewrite 项按第 9 节顺序推进，Delete candidate 只有在精确目标、影响和恢复方式确认后执行。
 
-### B-001 知识加工执行器（已纠正并解决）
+## 6. 调研与实现硬门
 
-用户已于 2026-08-13 纠正执行前提：MVP 不接外部模型 Provider，也不要求本地模型；直接复用用户本机已登录的 Codex CLI。先前“受控外部模型 API”解释无效，已从文档和 ADR 中替换。
+R-026 当前结论：
 
-本机已验证全局 `codex-cli 0.144.5` 且 `Logged in using ChatGPT`。R-005 已接受官方 `@openai/codex-sdk@0.147.0`：真实 read-only thread 成功复用登录并返回符合 JSON Schema 的结构化结果。图片、并发、超时、取消、恢复和错误分类仍是阶段 1B 的 adapter 验证项。
+- 已接受：W3C selector 语义、Playwright 定点 screenshot/clip、现有 `cacache` 作为最小证据 CAS；
+- 已通过 POC：`unpdf` PDF 单页、`libarchive-wasm`＋`read-excel-file` RAR/XLSX 最小区域、`sharp` 整图 hash/格式/尺寸/单帧与 macOS/Linux 安装门；
+- 待 POC：动态页面；Stagehand 在未知 DOM 上寻找候选；Tesseract.js 中文印刷 OCR；图片裁片原图一致性；任何多模态模型；
+- 已拒绝：Firecrawl 作为 Workbench 基础设施，原因是 AGPL、自托管多服务、默认截图/Cloud 能力差异、全量/远程内容边界和退出成本。
 
-### B-002 CodeGraph 初始化（已解决）
+候选未完成真实 POC 前不得进入生产依赖或写成既定架构。任何新的 Codex/模型用途必须先与用户确认任务粒度、输入输出、modelId、推理深度、数据边界、批次和人工门。
 
-用户已于 2026-08-13 明确授权，已运行 `codegraph init -i`。初始化生成本机索引和可提交的 `.codegraph/.gitignore`；数据库文件由该规则忽略。
+## 7. 人工参与边界
 
-验证：索引覆盖 59 个文件、527 个节点、973 条边，`codegraph status` 返回 `Index is up to date`。该事项不再阻塞后续结构分析。
+预期人工动作：
 
-### B-003 MVP 验收范围
+- 在品类采访中确认研究目标、边界、质量/成本/时效取舍和最终 Category Research Brief；系统不得要求用户枚举可自行调查的品牌、型号、参数、部件、原理或来源；
+- 批次级确认知识范围、权威来源与证据政策；
+- 必要时完成登录/验证码（登录部分不属于本轮能力承诺）；
+- 批量处理来源冲突、证据不足、对象/图片关系不明、异常值和模型候选；
+- 批准品类定义变化和知识包发布。
 
-用户已确认目标是覆盖目标市场中某品类的大多数主流品牌和型号，并排除普通第三方卖家；覆盖口径选择“监管合规台账＋官方在售总体＋有许可时才增加市场份额优先级”。原文中的固定数量和准确率不得作为门槛。
+系统不得每遇一个未知字段就暂停整个运行。人工频次目前不足以给数字；阶段 1B 必须报告每 100 个请求/候选的例外数量、原因、可批量比例和耗时，数据出来后再决定产品门槛。
 
-影响：产品覆盖口径和质量分层已确认，R-010/R-011 隔离 POC 已完成；实际来源枚举、更新窗口、分层数值门槛和最终工具组合必须在阶段 1A/1C 从真实样本派生。
+## 8. 当前文档改动与架构影响
 
-### B-004 需求基线逐项确认（已完成）
+本轮已更新：
 
-用户要求使用 `grill-with-docs` 完成需求对齐，并要求剩余问题每 8 个一组。2026-08-14，用户先确认 Q005、Q006、Q008～Q013 全部选择推荐 A，随后确认 Q014～Q018 全部选择推荐 A；固定问题树的 18 项产品决定已全部确认。详细审计见 `REQUIREMENTS-ALIGNMENT.md`。
+- `AGENT-SCORECARD.md`：按用户明确要求追加 -5，积分 94.5；
+- `RESEARCH.md`：新增 R-026、R-027，并追加 R-028 Chat Timeline 与 R-029 Codex 交互运行时/Pi 边界；
+- ADR-0001 批次用途边界、ADR-0005/0010，并新增 ADR-0011、ADR-0012；
+- `CONTEXT.md`、`AGENTS.md`；
+- 六份产品文档中的导航、PRD、总体方案、Provider、知识包、MVP 计划；
+- `ARCHITECTURE.md` 与 `ROADMAP.md`；
+- 本文件；
+- 新增 `packages/shared/src/evidence.ts` 与 `packages/workbench/src/evidenceModule.ts`，并在 Workbench 组合根启用；
+- 数据库收窄为项目版本＋Evidence 三表，迁移从未提交 WIP 重生；
+- 删除旧 Stage 3/4 contract、module、Provider/projector、route、UI、测试和直接依赖；API 不再初始化 Codex 或空 Provider。
 
-2026-08-14 用户进一步纠正：数据目标是覆盖目标市场中某品类大多数主流品牌与型号，只需要官方直营、经核实官方旗舰店、品牌官网/说明书和监管/标准资料；普通第三方与小型商家无必要。知识价值必须覆盖参数、功能、机制、适用条件、取舍、需求映射和比较，而不是只做规格库。
+架构影响：改变。EvidenceRequest 成为采集目的事实源，SourceObservation 拥有来源 identity/URL/typed 状态，EvidenceItem 成为观察内容事实源；充分性按每个目标对象的证据数量和独立 source identity 计算，不能以全局数量掩盖未覆盖对象。Raw Material/Snapshot/Projection 目标 contract 已被删除；Source Access、Evidence、Factory 的依赖方向和公共 seam 发生变化。
 
-同日确认最高优先级是低成本跨品类：冰箱只是首个完整 MVP，换电视或微波炉时不得重新造系统。第一版 LinkML `RefrigeratorModel` 子类方向因此被拒绝；R-008 已改为稳定商品知识模型＋共享属性字典＋数据化品类知识定义，并用冰箱/电视两个数据文件验证同一 Schema。该 POC 仍是隔离候选，不是生产组件决定。
+历史架构影响（已由 2026-08-16 Session 纠错覆盖 thread 部分）：Category Research Brief 成为阶段 1A 冻结研究输入的权威来源；阶段 0I 插入阶段 1A 之前，ProductProjectForm 的目标职责从启动录入改为任务书/项目草稿检查修改面。Workbench 现已进一步独占继续上下文，不再保留 Codex thread。
 
-用户明确 `opencode-dev` 的 Tutor 不算知识库，不得作为参照物。已确认不从 Tutor 继承任何知识建模、检索或 Runtime 设计；`Perfume` 只保留下游主动提问/工作流参考，知识资产仍通过独立知识包和 Runtime/SDK 交付。
+2026-08-16 冰箱公开网页纵切片架构影响：无变化。实现沿用 ARCHITECTURE 5.4～5.6 已确认的 Acquisition Planning → Source Access → Evidence 依赖方向；没有改变事实源、模块职责或 Evidence contract，也没有增加 Provider registry、fallback 或站点/品类字段 projector。
 
-该边界满足难逆转、易被未来误解且存在真实取舍的 ADR 条件，已记录 ADR-0002。官方依据包括 Schema.org `additionalProperty`、Akeneo Family/Variant 和 Pimcore Classification Store；它们证明数据化品类属性有成熟实践，不代表直接引入整套 PIM。
+2026-08-16 能效备案纵切片架构影响：无变化。新增薄 `EnergyLabelRecordSource` 只隔离已 POC 的外部两步 POST JSON 协议，输出仍是现有未清洗 `EvidenceItem`；Workbench/PostgreSQL/CAS 的事实归属、Evidence contract 和依赖方向未改变。
 
-R-010/R-011 已完成产品口径调查和隔离验证：覆盖总体拆成合规身份台账、官方在售总体和有许可的市场优先级；质量门拆成确定性数据硬门与 Runtime/下游任务评测。用户已确认产品口径；R-010 领域 contract 和 R-011 质量 contract 已接受。真实来源枚举、知识存储和当前评测器仍分别留到阶段 1A/1C，不得直接进入生产 Schema、数据库或流水线实现。
+2026-08-16 PDF 页摘录 POC 架构影响：无变化。复用既有 `document_excerpt` locator/Evidence contract，新增薄 `DocumentExcerptSource` 隔离 Crawlee HttpCrawler＋unpdf；没有改变 Workbench/PostgreSQL/CAS 事实归属。正式写入因已确认 Collection Board 缺少 `official_manual` 路线而保持阻塞，未绕过冻结范围。
 
-最后一批确认同时锁定：结构化/全文优先查询、按变化速度分层更新、Workbench Web＋Codex 引导、本地重生产＋轻量 Runtime、只复用当前仓库工程底盘而不兼容旧社交业务。以上是产品与模块责任基线，不冻结 SQLite/DuckDB/Orama、编排器或最终物理 Schema。
+2026-08-16 CNIS RAR/XLSX 纵切片架构影响：无变化。复用既有 `table_region` locator 与 `regulatory_check` 路线，薄 `CnisRegistryTableSource` 只隔离 CNIS 外部归档/工作簿布局；未改变 EvidenceItem、Workbench/PostgreSQL/CAS 事实归属或依赖方向。
 
-### B-005 京东采集路线（用户改选并已完成首轮验证）
+2026-08-16 海尔整图 POC 架构影响：无变化。`sharp` 只增强既有图片候选的字节真实性验证；正式图片 Source/API/UI 尚未接入，二进制读取公共 contract 未改变。该 contract 获确认前保持 HARD STOP，不以 POC 冒充功能完成。
 
-2026-08-14 官方规则和开源方案调研的历史依据保留；用户随后明确改选“教育研究用途的京东网页采集”。ADR-0003 已被 ADR-0004 取代，不再是当前执行门。新路线仍排除普通第三方店铺、自动验证码、账号切换、未公开接口和自研反检测基础设施。
+2026-08-16 R-029 纠错架构影响：无变化。没有修改生产模块、事实源、依赖方向或公共 contract；只删除越界的隔离 POC 产物并纠正候选证据。此前由单一“不调用工具”样本外推 TypeScript SDK 缺少富事件的判断作废。
 
-离线同条件对照显示：Playwright 报告 `navigator.webdriver=true`，Patchright 报告 `false`，两者均使用有界面的本机 Chrome。使用 Patchright＋Crawlee、已登录专用 Profile、并发 1 和零重试后，S01 真实商品页返回 200，型号、标题和关键规格进入不可变 HTML/文本/截图/资源清单，哈希复核一致。新建匿名 Profile 到达普通登录页而非风险页，说明当前商品详情仍需人工登录。第一次只抓到页面骨架的假成功已用“型号就绪＋Crawlee 成熟滚动器”纠正。
+2026-08-16 Session 持久化纠错架构影响：改变。删除 App Server thread 事实与 `codexThreadId` 公共/数据库 contract；Workbench 成为多轮继续上下文的唯一拥有者，Codex 改为官方稳定 `exec --ephemeral` 私有执行 adapter。同步更新 R-029、ADR-0012、ARCHITECTURE、ROADMAP、CONTEXT 和 migration；沿用本机 Codex 登录，不新增 Provider/API 凭证。
 
-登录态原始页可含配送地区等个性化数据。JD 原始产物已标为 `restricted`；S05 当次为正常商品，S06 当次正确分类为 `discontinued`。按 ADR-0005 用 Cheerio 白名单投影＋Zod 严格结构门实测得到 S05 34 个、S06 26 个商品属性，输出不含整页正文、账户/地址容器或浏览器材料。公开样本的中断恢复也已通过：先完成 1 条，重启后只补齐剩余 2 条并正常退出。
-
-## 6. 下一步唯一执行顺序
-
-1. 把 Product Module 接入薄 HTTP adapter 和 Workbench 基础页面，支持完整草稿保存、确认和读取；页面不逐表提交。
-2. 展示 Pipeline typed 状态和人工事项；没有真实阶段 handler 前不提供会启动空流水线的按钮。
-3. 完成阶段 2 页面验证后进入阶段 3 官方来源搜集板块。淘宝仍不插入当前核心链路。
-
-R-007 依赖治理已从当前执行顺序移出，未来必须作为独立、可回退的工作处理。阶段 2 按上述顺序连续推进，不以汇报、提交或推送作为停工点。下一次需要用户介入的正常节点是专用 Profile 登录失效、出现验证码、权限审批或会改变产品方向的决定，不再追加产品访谈问题。
-
-## 7. 验证记录
-
-### 2026-08-13 文档基线
-
-执行结果：
-
-- 专属术语检查通过：`AGENTS.md`、`CONTEXT.md` 和 `docs/development/` 未发现来源项目的产品名、模块名或专属架构规则。
-- 导航路径检查通过：本轮声明的现存权威文档路径均存在。
-- 格式检查通过：已运行 tracked diff 的 `git diff --check`，并对所有新增文档执行行尾空白扫描，均无错误。
-- 变更范围检查通过：`git status --short --branch` 仅显示 `AGENTS.md`、`CONTEXT.md` 和 `docs/development/`，没有业务代码变化。
-- 未运行测试、类型检查和构建：本轮仅修改 Markdown 治理文档，且 `node_modules` 尚未恢复；工程基线验证保留为下一阶段的明确任务。
-
-### 2026-08-13 CodeGraph 初始化
-
-- 已按用户授权执行 `codegraph init -i`，命令成功退出。
-- `codegraph status` 确认 59 个文件、527 个节点、973 条边，索引状态为最新。
-- 初始化器曾提示无法解析 `mcp.json` 并将备份后重写；项目目录内未发现该文件或备份，Git 变更中也没有对应文件。
-- 新增 `.codegraph/.gitignore`，本机数据库 `codegraph.db` 已被正确忽略，不会进入版本控制。
-
-### 2026-08-13 Codex CLI 知识加工边界
-
-- 用户明确 MVP 直接连接其本机 Codex CLI；先前外部模型 A/B 解释被纠正。
-- 本机 `codex-cli 0.144.5` 已安装，并通过 ChatGPT 登录。
-- OpenAI 官方文档和仓库确认 `@openai/codex-sdk` 是封装 Codex CLI 的 TypeScript SDK，可复用 CLI 登录并提供 structured events、JSON Schema、thread 继续与恢复能力。
-- 当前 `master` 只有接入骨架和 placeholder；未合并分支有可提取的 analyzer/批处理/子进程模式，但没有 Codex CLI adapter。
-- 已在 worker workspace 精确锁定 `@openai/codex-sdk@0.147.0`；不再自写 CLI 子进程、JSONL parser 或 session 层。
-- 真实 SDK 调用使用 read-only sandbox、never approval、禁用网络与 Web 搜索，并返回符合 JSON Schema 的 `{status: "ok", message: "Codex SDK connected."}`；R-005 已接受官方 SDK，不建设多 Provider 模型层。
-
-### 2026-08-13 依赖恢复与工程基线
-
-- `.env`、`.env.local` 和各应用本地 env 文件均不存在；数据目录只有受忽略规则保护的 `.gitkeep`，没有需要迁移的现有业务数据。
-- 在项目原有 Node `v21.7.3`、npm `10.5.0`、x64 环境中，`npm ci` 多次成功。npm 的旧锁文件 warning 不影响当前安装结果，未把它扩大为运行时或架构迁移。
-- `npm test` 通过：12 个测试文件、52 个测试全部通过。
-- `npm run typecheck` 通过：shared、db、worker、api、web 五个 workspace 全部通过。
-- `npm run build` 通过：五个 workspace 全部成功；Web 生产 bundle 构建成功，1641 个 module 完成转换。
-- `npm audit` 报告 37 项，`npm audit --omit=dev` 报告 24 项生产依赖风险；已登记 R-007，未运行 `npm audit fix` 或 `--force`。
-
-### 2026-08-13 依赖误扩张回退
-
-- 曾尝试把现有基线迁移到 Node 24 arm64，并移除根目录 Rollup x64 包；该动作超出当前任务范围，也违背“原项目已能直接运行”的已验证事实。
-- 已删除新增的 `.nvmrc` 和 Node `engines`，恢复根 `package.json` 的原有 Rollup 依赖，并回退 npm 11 产生的 lockfile 重排。
-- 回退后根 `package.json` 相对 HEAD 无变更；`package-lock.json` 只新增 `@openai/codex-sdk@0.147.0`、其官方 CLI/平台包和 worker workspace 依赖声明。
-- 回退后的当前环境重新验证：`npm ci` 成功；12 个测试文件、52 个测试通过；五个 workspace 类型检查通过；五个 workspace 构建通过。
-
-### 2026-08-13 R-004 数据库迁移只读调研
-
-- CodeGraph 定位到 `createDb()`、`initializeDatabase()`、repository 和 API 启动链；目标读取确认 `schema.ts` 与手写 DDL 同时维护 9 张表。
-- 已发现真实漂移：手写 DDL 的 `sources.platform` 有 `UNIQUE`，Drizzle schema 没有；继续复制维护会扩大差异。
-- 官方 Drizzle 文档确认 `schema.ts` 可作为 migration 事实源，现有 Drizzle Kit 支持 `generate` 和带 migration log 的 `migrate`。
-- 当前结论只收敛候选，不生成 migration、不修改数据库、不升级 Drizzle；隔离原型的输入、对照、通过门、回退和停止条件已落入 R-004。
-
-### 2026-08-14 R-008 商品知识模型与验收生成隔离原型
-
-- 所有候选依赖通过 `uvx`、`uv run` 和临时 Node 目录运行；项目 `package.json`、lockfile、数据库和业务代码未因 R-008 改动。
-- `linkml==1.11.1`：schema lint 返回 `No problems found`，metamodel validate 返回 `No issues found`；正确用途样例通过，错误样例按预期报告 5 项错误。
-- LinkML 原生 TypeScript 生成结果存在多值枚举、枚举和 decimal 类型降级，已明确拒绝；`json-schema-to-typescript@15.0.4` 生成结果保留 union、非空数组和必填约束。
-- RJSF `6.5.3` 服务端渲染成功，输出 10,907 字节 HTML 并包含 5 个核心必填字段和枚举选项；默认暴露内部字段的问题已记录为必须通过公开 schema/`uiSchema` 解决的产品边界。
-- `allpairspy==2.5.1`：324 个全组合生成 16 个 pairwise 场景，独立核对 102/102 个值对覆盖且无缺失；NIST 对高阶交互的警告已进入停止条件。
-- `statsmodels==0.14.6`：四组演示目标算出 25、73、457、165 个样本；59/59 全部成功的单侧 95% Clopper–Pearson 下界约为 95.05%。这些数字只证明计算链路，不是已接受产品门槛。
-- 持久化后的 POC 再次真实运行：两个 Python 脚本分别复现 16/102 场景结果和四组样本量，RJSF 脚本再次输出 10,907 字节 HTML；LinkML lint/validate 通过，错误样例按预期非零退出。
-- `git diff --check` 通过；对治理、开发、产品 Markdown/YAML/Python/MJS 的行尾空白扫描无命中；所有本轮文件均不超过 500 行，两个 POC 函数脚本均不超过 100 行。
-- 未运行业务 test/typecheck/build：本轮只修改治理/需求文档和隔离 POC，没有改生产代码或项目依赖；此前工程基线结果仍单独保留，不能冒充本轮业务回归。
-
-### 2026-08-14 跨品类架构纠偏
-
-- 按用户确认撤销 `RefrigeratorModel`/每品类生产 Schema 方向；新增 ADR-0002，领域词汇改为稳定商品知识模型、共享属性字典、品类知识定义、下游知识消费者和品类迁移门。
-- PRD、总体方案、Provider、知识包、实施计划、工程架构、路线图、调研和需求记录均已同步“官方来源、主流型号、专业知识分层、第二品类迁移门”。
-- Tutor 明确排除出知识库参照；`Perfume` 只保留下游交互参考，独立知识包＋Runtime/SDK 路线未改变。
-- R-008 LinkML `1.11.1` 重新真实验证：lint 为 `No problems found`，metamodel validate 为 `No issues found`；冰箱和电视两份 `CategoryKnowledgeDefinition` 均由同一 Schema 校验通过；正确 `KnowledgeUseBrief` 通过。
-- 错误 `KnowledgeUseBrief` 按预期非零退出，报告空用途、空能力问题、错误新鲜度枚举、错误风险枚举和错误时间共 5 项。
-- 本次验证只修改文档和隔离 POC；未修改业务代码、数据库或生产依赖，未把 LinkML/Akeneo/Pimcore 接受为生产组件。
-
-### 2026-08-14 R-010/R-011 第一轮调研与需求批次
-
-- 中国标准化研究院能效备案、市场监管总局 2026 新规和京东自营入口证明：合规身份、当前在售与市场份额是三个不同总体；2026 新旧能效标识允许并存，市场总体必须版本化并带快照日期。
-- W3C DQV/SHACL、Ajv、Great Expectations、Soda Core、Spectral 和 Promptfoo 的官方资料证明：结构、批次质量与 Runtime/Agent 效果需要分层评测。SHACL 不适合当前非 RDF 包；Soda Core 因 ELv2 托管限制淘汰；Ajv 优先复用现有依赖；其余组件均未写入生产依赖。
-- 已把 Q005、Q006、Q008～Q013 共 8 项改写为产品行为、简单说明和专业推荐；用户于 2026-08-14 确认全部选择 A。确认结果已进入需求记录和领域词汇，但不会跳过 R-010 来源许可/枚举和 R-011 组件原型停止门。
-
-### 2026-08-14 R-010 市场总体版本隔离原型
-
-- 京东自营标识、品牌官方目录和授权店铺规则已形成来源核验依据；仅凭“旗舰店”店名不得进入白名单，必须保存品牌反链、平台资质或授权证据。
-- 新增非生产 `MarketUniverseVersion` LinkML POC；冰箱与电视用同一 Schema 表达合规身份、官方在售、许可、未知项和关闭的市场优先级，不新增品类类或通用字段。
-- Schema lint 和 validate 均无问题；冰箱、电视正确样例通过；错误样例按预期报告错误日期、非法状态和三个空列表共 5 项。R-010 产品/领域口径已接受，LinkML 未转为生产依赖，真实完整枚举移入阶段 1A。
-
-### 2026-08-14 R-011 知识质量分层隔离原型
-
-- 许可证复核纠正了第一轮候选：Soda Core 当前主分支是 Elastic License 2.0，存在托管服务限制，已淘汰；Great Expectations 为 Apache-2.0，Ajv/Promptfoo 为 MIT，Spectral 为 Apache-2.0。
-- 复用现有 `ajv@8.17.1` 的结构 POC：正确 JSON 通过；错误 JSON 以 5 项错误被拒绝，但重复 `claim_id` 未被发现，证明 JSON Schema 不能代替批次一致性。
-- `great-expectations==1.20.0` 仅在 `uvx` Python 3.12 隔离环境运行，安装 35 个隔离包；正确 CSV 通过，错误 CSV 因重复 ID、非法枚举、空证据、错误时间和冲突标记触发 6 个失败规则。
-- Promptfoo 最新版与 Node 21 不兼容；兼容的 `0.119.0` 隔离下载超过两分钟无输出后主动终止。评测配置已保留，正式采用前须在受支持 Node LTS 上用当前版本复验。没有升级 Node、修改项目依赖或接受旧版为生产组件。
-- R-011 质量 contract 已接受；Great Expectations/Promptfoo 的生产采用仍分别受真实知识存储和当前 Node LTS 原型约束，禁止自写通用质量或评测引擎填补空白。
-
-### 2026-08-14 最终需求确认与阶段 0 结束门
-
-- 用户确认 Q014～Q018 全部选择 A；固定 18 项产品问题树全部闭环，没有遗留产品方向待拍板。
-- 需求记录、领域词汇、架构基线和开发入口已同步查询顺序、分层更新、Workbench Web 主入口、本地重生产/轻量 Runtime 和旧项目复用边界。
-- `ROADMAP.md` 已为阶段 1A～1D 分别冻结输入、代表样本、输出、通过门和停止门；阶段 0 的工程基线、产品范围和下一阶段验证 contract 满足通过条件。
-- 阶段状态已切换到阶段 1；这不授权全面业务代码重构或任何未调查依赖变更。
-
-### 2026-08-14 R-001 当前依赖与持久登录调研刷新
-
-- 当前安装的是 Apache-2.0 的 Crawlee 3.16 系列；其 Playwright 集成已经存在，但项目没有安装可选 peer `playwright` 或 `playwright-core`，因此未把“包可引用”误报为“真实浏览器可运行”。
-- Crawlee 3.16 官方能力已覆盖持久 RequestQueue、`uniqueKey` 去重、重试统计和 Playwright `userDataDir`，方向收敛为复用现有队列和浏览器集成，不自研队列、Profile adapter 或登录态层。
-- Playwright 官方要求使用专用自动化 Profile，并将认证状态视作敏感资料；阶段 1A 将使用隔离命名存储、禁止启动清空、Profile 并发 1，且 Profile/Cookie/Header 不进入 Codex、日志或发布物。
-- 本次只读刷新没有安装 Playwright、下载浏览器、访问京东或修改业务代码；随后已完成有界样本清单，实际安装与登录接管仍是原型执行时的明确依赖门和人工停止门。
-
-### 2026-08-14 阶段 1A 有界真实样本清单
-
-- 已核验京东自营判断规则、京东冰箱自营入口、美的官方商城和海尔官方产品/说明书页面；普通第三方和无法举证的旗舰店未纳入。
-- `pocs/r001/README.md` 固定 6 个真实官方页面和 8 个执行场景，覆盖正常、匿名受限、人工登录、同型号多颜色、图片/说明书、风险验证、下架和中断恢复。
-- 京东 MR-531WSPZE 调查访问发生风险验证跳转；海尔 BCD-505WGHTD14S8U1 调查结果显示已下柜。两者保留为异常样本，不尝试绕过或换页制造成功。
-- 本轮架构影响：无变化。只形成阶段 1A 原型输入，没有安装依赖、运行浏览器、修改业务代码或把页面调查结果当成真实采集结果。
-- 下一条动作：调查并确定与 Crawlee 3.16、当前 Node 环境兼容的 Playwright runtime 和浏览器二进制，再开始隔离原型。
-
-### 2026-08-14 R-001 浏览器运行兼容与首轮结果
-
-- Playwright 当前官方运行要求为最新 Node 22/24/26 和 macOS 14+；项目现用 Node 21 不在官方支持列表，但本机已有 arm64 Node 22.22.3。
-- npm registry 当前 `playwright` 为 1.62.1；Playwright 官方支持本机 Stable Chrome，Crawlee 3.16 也提供 `useChrome`。当前改为复用本机 Chrome 151.0.7922.138，只隔离项目 Profile，不再按原型下载浏览器。
-- 已在 `pocs/r001` 增加隔离 package 和匿名采集脚本，固定 Crawlee 3.16.0 与 Playwright 1.62.1。它不属于根 workspace，不修改根依赖、根 lockfile、Node 21 运行基线或业务代码。
-- 隔离 `npm audit` 发现 Crawlee 3.16 的 `file-type 20.5.0` 有两个中危拒绝服务公告。当前原型不走文件类型识别/上传路径，允许继续验证；3.16 不得直接进入生产，Crawlee 3.18.1 的升级兼容与回退留给 R-007 单独处理。
-- 首次限制 2 个请求的运行完成：S03 美的官网返回 200 并完整保存；S01 京东正常自营样本被重定向到“京东验证”，正确分类为 `challenge`，没有绕过。Crawlee 停止后剩余 4 个请求仍在持久队列中。
-- 首次运行使用了已下载的配套 Chromium；用户指出长期重复下载没有必要，已纠正为复用本机 Chrome 程序＋项目专用 Profile。用本机 Chrome 恢复后，S02/S04 正常，S05 进入验证，S06 进入登录；证明队列能跨进程恢复且浏览器程序无需重复下载。
-- S06 v1 的最终 URL/HTML/截图正确，但分类器把登录页误标为 `loaded`。旧快照保持不变，已增加明确的 `login_required` 规则和新请求 key；下一条动作只重跑 S06 验证纠正，然后进入人工登录/验证码停止门。
-- S06 v2 实际再次进入京东验证并正确标为 `challenge`，证明页面状态会变化，不能预设成登录或下架。全部 7 个请求记录已处理且没有重试；HTML/截图 SHA-256 与 metadata 逐项匹配。
-- 已准备 `login:jd` 和 `capture:jd` 两个最小入口：复用本机 Chrome 程序，但隔离京东专用 Profile。阶段 1A 现在到达明确人工停止门，等待用户在窗口内自行登录或处理验证码。
-- 用户完成登录后，同一 Profile 的京东首页连续 3 次正常返回 200；S01 商品页在等待型号后进入 `pc-frequent-pro.pf.jd.com`，页面标题为“PC频控页 - 京东商城”。这只证明商品详情访问进入京东风险响应页，不证明真实原因是短时频率过高。
-- 已停止后续京东请求；没有点击刷新/切换账号，没有运行 `capture:jd`，也没有尝试反检测或绕过。误导性的 `rate_limited` 分类已改为 `risk_controlled`。
-
-### 2026-08-14 R-001 京东合规与自动化信号历史结论
-
-- 本节保留当时调研和停止决策的历史；用户后续明确改选京东教育研究网页采集，当前执行以 ADR-0004 和 B-005 为准。
-- 京东 2026-01-20 生效的用户协议明确限制未获书面许可的第三方工具接入、站内内容和交互数据复制；JOS/京东联盟提供需 app key、OAuth/权限申请的官方 API，普通网页登录不属于替代授权。
-- 2025 年修订的《反不正当竞争法》第十三条明确规制避开或破坏技术管理措施获取、使用其他经营者数据；项目不会实现指纹伪装、验证码绕过或未公开接口回退。
-- 7 次已保存样本导航各自加载 12～117 个资源。因此“尚未开始批量抽取”与“浏览器已经产生多次网络访问”可以同时成立；但京东具体命中规则仍未知。
-- 离线空白页探针验证有头/无头 Playwright Chrome 均为 `navigator.webdriver=true`；只有无头模式 User-Agent 含 `HeadlessChrome`。探针不访问京东或其他外部网站。
-- package 已移除全部采集/登录命令，只保留离线浏览器信号探针；历史采集脚本中的默认样本也只保留美的/海尔官方页面。品牌官网完成逐源授权调查前不重新开放运行入口。
-- 架构影响：已改变。来源身份与来源授权分离，Provider 只运行获准入口；同步更新 PRD、Provider 规范、实施计划、领域词汇、架构图、路线图，并新增 ADR-0003。
-
-### 2026-08-14 长期维护与跨设备接续约束
-
-- 用户明确要求后续开发不能依赖普通聊天上下文，所有工作必须服务于最终架构，并共同维护架构说明和进度说明。
-- 已把“任务必须映射路线阶段/架构目标”“结束时记录架构影响”“架构变化才同步修改架构正文”和“跨电脑必须验证 Git 远程一致性”写入根 `AGENTS.md` 与开发导航。
-- 本轮架构影响：澄清开发治理和接续规则，没有改变系统模块、数据流、品类复用方案或阶段 1A～1D 原型 contract。
-- 当前跨 Session 的本机恢复入口已经存在；但架构、进度和治理文档仍有未提交内容，因此当前状态只能标记为“仅本机，尚未形成跨电脑接续点”。在未获得提交/推送授权前不得宣称跨电脑可继续。
-- 按用户要求复核 `work/opencode-dev/AGENTS.md` 的 `Anti-AI-Code Rules`，已将其通用约束补入本项目并移除平台专属内容；新增直接实现优先、禁止机械分层、禁止纯转发 wrapper、禁止重复注释/类型/校验和无调用方扩展点等明确规则。
-- 本轮补充只收紧代码生成与审查纪律，不改变商品知识平台的系统架构或阶段顺序。
-- 已按用户要求建立独立积分账本 `AGENT-SCORECARD.md`：初始 100 分，明确“扣分”减 1 分并记录原因/纠正/防复发，明确“加分”加 0.5 分并记录正确行为；本轮未发生积分变化。
-
-### 2026-08-14 R-012 京东官方与开源路线调查
-
-- 京东联盟不能被当成“免费完整商品参数库”；VOP/B2B 的真实费用和字段依合作方案确认。这些调研作为路线取舍证据保留，但用户已明确不走官方 API 路线。
-- 开源候选包括 Patchright、fingerprint-suite、rebrowser 和 Camoufox。现有项目已用 Crawlee/Playwright，Crawlee 的 `launchContext.launcher` 支持注入 Playwright 兼容 BrowserType；因此首选 Patchright 是最小替换，不新建浏览器、队列或指纹层。
-- 隔离原型精确锁定 Patchright 1.61.1，使用本机 Chrome、持久 Profile、有界面、原生 viewport，并关闭 Crawlee 默认 JS 指纹注入。它不修改根项目依赖或业务代码。
-- 本地空白页对照：Playwright 的 `navigator.webdriver=true`，Patchright 为 `false`；两者均不含 `HeadlessChrome`。这只证明 Patchright 消除了一个已观测差异，不猜测京东完整规则。
-- S01 真实运行：首轮骨架页没有冒充成功；增加型号就绪门和 Crawlee `infiniteScroll` 后，已登录专用 Profile 返回真实商品标题、型号和主要规格，HTTP 200，HTML/文本/截图/资源清单及 SHA-256 均已保存并复核。
-- 新建匿名 Profile 进入普通京东登录页，不是风险页；当前详情访问需人工登录。登录态原始页可含个性化数据，已分类为 `restricted`；只有标记 `sanitized` 的白名单投影可进 Codex 或知识管道。
-- 使用同一路线各访问一次 S05/S06：S05 当次正常加载，S06 当次正确分类为 `discontinued`；两者均是 HTTP 200、型号存在、零重试。这证明异常状态必须来自当次页面证据，不能由 URL 或 HTTP 状态预设。两次产物的 HTML/文本/截图/资源清单 SHA-256 与 metadata 逐项一致，受限目录和 Profile 均已确认被 Git 忽略。
-- R-013 对比后拒绝以 Presidio/黑名单作为主门：官方明确自动 PII 检测不保证找全，中文需额外 NLP/识别器配置。隔离 POC 显式锁定工程已有的 `cheerio@1.0.0-rc.12` 和 `zod@3.25.76`；S05/S06 分别产生 34/26 个属性的 `sanitized` 投影，只有标题、描述、亮点、属性和快照证据，不携带整页 HTML 或个性化容器。Node 官方测试验证正常投影通过，故意注入受限地址文本时失败关闭，2/2 通过。
-- 本轮白名单投影改变 Raw Material 到 Knowledge Factory 的依赖方向，已更新 `CONTEXT.md`、`ARCHITECTURE.md`、`ROADMAP.md` 并新增 ADR-0005；Knowledge Factory 不再允许直接读受限采集快照。
-- 本轮架构影响：已改变。ADR-0003 已被 ADR-0004 取代；JD Web Adapter 采用 Crawlee＋Patchright＋本机 Chrome，原始资料增加受限隔离区，淘宝登记为京东闭环后的下一 Provider。fingerprint-suite/Camoufox 只在 Patchright 出现可复现能力缺口时重新评估。
-- Crawlee 3.16 的首次恢复实测保住了剩余请求，但进程没有自行退出；官方 3.17/3.18 发布说明包含 `maxRequestsPerCrawl` 防误丢请求、浏览器关闭计时器不再阻止 Node 退出和存储修复。隔离 R-001 因此升级到 3.18.1，未修改根依赖；`npm audit` 从 13 个中危依赖项降为 0。
-- 3.18.1 真实恢复门通过：首次只处理 S02，结果 1 条、退出码 0；同一持久队列重启后只处理 S04/S03，结果 2 条、累计 3 条、退出码 0。Crawlee 统计按官方 `statisticsOptions.id` 与队列版本隔离，避免旧 POC 累计统计误占本轮限额。
-- 调查队列时曾误调用 `queue.drop()`，随后一次只读检查又因遗漏 `CRAWLEE_PURGE_ON_START=false` 触发默认清理；两次只影响可从固定公开样本重建的本地 R-001 公共测试队列，没有删除页面快照、京东 Profile、代码或 Git 数据。已停止直接检查队列，换用新队列版本并通过端到端结果验证恢复。
-- 本轮新增版本升级和恢复证据不改变既定模块边界；架构影响：无变化。下一步第一条动作是完成 1A 品牌官网/监管代表来源范围闭环。
-
-### 2026-08-14 R-001 官方目录、文件资料与阶段 1A 结束门
-
-- 调研并采用 Crawlee 3.18.1 已提供的 `SitemapRequestList` 和 `FileDownload`；目录解析、嵌套 sitemap、去重、过滤和文件传输均未自研。文件签名校验采用 MIT `file-type@22.0.1`，只安装在隔离 R-001 目录。
-- 海尔官方根 sitemap 指向 `product.xml`；真实完整读取后，`/cooling/` 目录得到 1,341 个唯一产品 URL，已知 S04 在集合内。不可变目录 JSON 的字节数为 79,085，SHA-256 为 `fef40b76b00fffb9e6647100c99a91bd3daf902fcfb5a00bdc471e5995b4304d`。
-- 美的官方 MR-457WUSPZE 说明书保存为 1,154,097-byte PDF，SHA-256 为 `bd173c352c759dea6a4128dcc4dda079b1a8102dec7a01f40f96846036ca2478`；Poppler 对 16 页渲染正常，第 5 页可定位型号、尺寸和安装图。
-- 中国标准化研究院冰箱能效备案附件保存为 2,301,639-byte RAR，SHA-256 为 `d493ec919949a655c8d9dae9d0319ebaa5eacd257cfa2cf97dcefa618ac97f11`。服务器声明 `text/plain`，文件签名仍正确识别 RAR；`bsdtar` 列出 13 个 XLSX，2024 年 12 月表含 516 条数据及生产者、型号、备案号和能效等级字段。
-- 两个下载源最终均为 HTTP 200，独立 `shasum` 与 metadata 一致。一次 response API 用法错误和一次 RAR MIME 别名不符保留为失败尝试，没有覆盖原文件或误报成功。
-- 隔离脚本新增目录发现和文件资料入口，共用 Node 核心不可覆盖 JSON/哈希辅助；所有 MJS 语法通过，Node 测试 4/4 通过，固定 Node 22 环境 `npm audit --omit=dev` 为 0。
-- 阶段 1A 通过：候选发现、详情/多规格、图片与说明书、监管资料、正常/登录/风险/下架、敏感数据隔离、不可变保存、证据定位、失败分类和恢复门均有真实证据。该结论只接受可行性与 contract；完整多品牌官方总体属于阶段 3，不把 1,341 个历史 URL 误报为当前在售或销量总体。
-- 本轮服务路线阶段 1A 和“官方来源到受控原始资料”架构目标；架构影响：无变化，新增的是既有 Provider/SourceObject/Raw Material 边界的实证。下一步进入 1B 样本冻结与开源候选调研。
-
-### 2026-08-14 R-014 首轮混乱资料加工与 Codex 候选
-
-- 经开源比较，隔离采用 Cheerio、unpdf/Mozilla PDF.js、`read-excel-file`、mathjs、Zod、`zod-to-json-schema` 和官方 Codex SDK；拒绝审计含 2 个中危项的 ExcelJS，不安装尚无真实缺口依据的 Fuse.js/Splink，不自写 PDF/XLSX/单位/模型协议。
-- 规则抽取真实生成 63 条带快照哈希和页/行/CSS 定位的证据；官网两个同型号变体共同 26 项、颜色差异 1 项、单页缺失 3 项。复跑去除 `createdAt` 后排序内容哈希同为 `a612c316e9ab500dabaa64361dcb7b5b56172c64aa7142316c8cde8080d8cb6a`。
-- 本地 Codex CLI 由官方 SDK 直接调用，不接外部模型；真实图片＋文本轮次生成 10 条待审核候选、0 条冲突和 3 条 `unknown`。产物输入哈希、thread ID、token usage、SDK item、原始环境告警和候选均可审计，任一未知 error item 或伪造证据引用都会失败关闭。
-- 两次模型输出的结构门和计数一致，但属性拆分与措辞不同；因此模型重放保证相同输入/Schema/证据门和可审计记录，不承诺字节相同。规则抽取才承担字节级确定性。
-- 当前 0 冲突是正确结果：颜色变体和字段缺失都不是事实矛盾。下一步使用明确标注的 contract fixture 验证冲突分支，禁止为通过门污染真实知识样本。
-- R-014 Node 测试 6/6 通过，最终候选产物独立 SHA-256 复核一致；隔离生产依赖审计为 0。业务代码、根生产依赖、真实数据库和浏览器 Profile 均未修改。
-- 根 `npm test` 首次把 `docs/development/pocs/**` 的 Node 原生测试误交给 Vitest；按 Vitest 官方 `--exclude` 参数明确测试边界后，根业务测试 12 个文件、52 项全部通过，R-001/R-014 仍由各自 `node --test` 独立通过。根类型检查和生产构建同时通过。
-- 本轮服务阶段 1B 与 Knowledge Factory 证据化候选目标；架构影响：无变化。现有 Raw Material 白名单边界、确定性规则优先、Codex 只产待审核候选和人工发布门得到实证，尚无理由修改总体模块职责。
-- I05/I06 真实脱敏投影补入确定性抽取后，分别归到独立的美的/海尔型号；S06 的 `discontinued` 和 description 缺失被保留。Codex 输入使用显式主型号字段白名单，两个其他主体没有进入模型上下文。
-- 受控双值 fixture 生成 `X001` 待审核冲突；真实样本继续为 0 冲突。审核 Zod contract 同时约束 claim 接受/拒绝、冲突解决和 unknown 确认，真实候选无审核记录时发布门实测失败。
-- 新版真实 Codex thread `019fffe0-50c0-7772-a102-e5b780d806d6` 生成 10 条 claim 和 3 条 unknown，稳定 ID、证据白名单、输入哈希和 SDK 告警均入库；R-014 测试 11/11 通过。
-- 阶段 1B 通过；架构影响：澄清但无模块变化。模型输出仍只能到 `review_required`，发布权属于人工审核 contract。下一步已进入 1C，不等待额外人工确认。
-
-### 2026-08-14 R-015 知识包与离线查询对照
-
-- 先查 SQLite/FTS5、DuckDB FTS/extension、DuckDB Node Neo、Orama Mandarin/持久化官方资料；DuckDB FTS 因首次扩展下载不满足离线门，未自研扩展分发器。
-- SQLite＋FTS5 与 DuckDB＋Orama 均通过 9 项冻结查询、跨目录复制、只读写入失败、哈希校验、原子切换和回滚；查询期间不调用网络、模型或 embedding。
-- Orama 官方持久化插件 3.1.18 恢复后实测丢失 Mandarin tokenizer；改用 Orama 核心官方 `save/load` 后通过，没有编写兼容层。该候选仍因双产物一致性成本被拒绝。
-- 1000 商品/2000 claim 放大 fixture 中，SQLite 为 1.77 MB、构建 2675.27 ms、查询 4.85 ms；DuckDB＋Orama 为 4.60 MB、构建 1740.56 ms、查询 25.29 ms。两边全文结果统一限制 10 条，避免口径偏差。
-- 接受 ADR-0006：MVP 知识包为 SQLite＋FTS5 单文件，Runtime 只读、哈希校验、原子指针激活和保留旧包回滚；不引入 DuckDB、Orama、向量数据库或 Great Expectations。
-- R-015 测试 3/3 通过，隔离依赖审计 0 漏洞；对照产物 SHA-256 为 `e75d490266d4a0671661f79e8df37eb133fdc3d6c515d2b243109d7748a890cf`。
-- 阶段 1C 通过；架构影响：改变。`ARCHITECTURE.md` 已把知识包物理存储从候选更新为 SQLite＋FTS5；下一步已直接进入 1D 第二品类迁移。
-
-### 2026-08-14 R-016 第二品类零分支迁移
-
-- TCL 65T7G 官方页通过同一 R-001 公共网页 Provider 采集：HTTP 200、`loaded`、公开快照；只增加 S07 来源数据，采集实现未改。
-- 官方页覆盖身份、144Hz、1000 nit、96% DCI-P3、分区控光、画质机制、游戏接口和场景；正文把一处型号写成 T7E，该异常保留为 `unknown`，未静默纠正。
-- 电视定义通过 LinkML 1.11.1；R-016 测试 2/2 通过，同一 R-015 Schema/SQLite Runtime 完成型号、中文全文、144Hz、五层知识、证据和 unknown 查询。
-- 阶段 1 全回归：R-001 4/4、R-014 11/11、R-015 3/3、R-016 2/2；根测试 12 文件/52 项、typecheck、build 均通过。
-- 阶段 1D 通过，四项可行性验证全部完成；架构影响：澄清。品类中立边界由候选变为实证，没有新增电视模块、表列、Runtime 方法或流程分支。
-
-### 2026-08-14 R-017 可恢复编排器对照
-
-- 先比较 Temporal、DBOS、Hatchet、Restate、Inngest、Trigger.dev、Kestra 与现有队列；Restate/Inngest 因许可证拒绝，Hatchet/Trigger.dev/Kestra 因额外平台部件拒绝，未自研工作流能力。
-- Temporal 1.22.0 在 Worker 与服务均终止后，从 CLI SQLite 文件恢复等待状态；`collect` 和 `package` 各执行一次。其本轮依赖约 170 MB、CLI 约 128 MB，且单文件 `start-dev` 不是生产入口。
-- DBOS 4.25.14 在首进程 `SIGKILL` 后从 PostgreSQL 恢复；同 ID 幂等、三次步骤重试、取消、恢复和消息幂等均通过，2/2 测试通过；本轮 `@dbos-inc` scope 约 2.2 MB。
-- 接受 ADR-0007：Pipeline adapter 使用 DBOS，系统库为 PostgreSQL；不扩展 `p-queue`，不自研队列/事件日志/重放/信号。临时 PostgreSQL 已停止。
-- 架构影响：改变。`ARCHITECTURE.md` 新增 DBOS 执行历史边界；Workbench 业务库处置仍由 R-004 决定，未授权双写或数据库迁移。下一步已直接进入 R-004。
-
-### 2026-08-14 R-018 Drizzle migration 与业务库边界
-
-- 根旧 Kit 因 npm workspace 提升问题找不到 db workspace ORM；相同锁定版本隔离共址后成功生成，未误判为 Schema 错误。
-- 旧 ORM 命中 GHSA-gpj5-g38j-94v9 high。隔离升级到 ORM 0.45.2、Kit 0.31.7、libSQL 0.17.4 后同一 snapshot 无变化，migration contract 3/3 通过。
-- 空库重复 migration 只记录一次；9 表/9 索引/外键/默认值与 `schema.ts` 一致；失败 SQL 整批回滚。旧手写 DDL 库明确失败，未自研 baseline/repair。
-- 根依赖完成同版本最小升级；根 generate、12 文件/52 测试、五 workspace typecheck、build 全通过。生产 audit 仍有历史 23 项，但 Drizzle 公告已消失；未运行自动修复。
-- 接受 ADR-0008：Workbench 业务库保留 SQLite，新产品使用新文件和正式 migration；DBOS PostgreSQL 只保存执行历史，禁止跨库双写。架构影响：改变。下一步直接进入 Product/Pipeline typed contract。
-
-### 2026-08-14 阶段 2 typed contract 与新产品库
-
-- 按 `codebase-design` 把 Product 冻结输入收敛为项目、品类定义版本、确认范围版本和搜集板版本；跨对象引用、市场、来源策略、已纳入目标和确认时间由一个共享 Zod contract 校验。
-- Pipeline module 对调用者只暴露 `start / command / get`；生命周期、当前阶段、阶段执行和人工事项分离，DBOS workflow/step/message 类型未泄漏。
-- 新产品库只建 4 张业务表，版本内容保存在严格 contract 下的 JSON 列；没有 Pipeline/TaskAttempt 复制表。Drizzle 正式 migration 已生成到 `drizzle/product-knowledge/`，默认新文件 `data/product-knowledge-workbench.sqlite`。
-- 新增 contract/migration 测试 10/10；`npm ci` 从锁文件干净恢复成功。根全量现为 15 文件/62 测试，五 workspace typecheck 和 build 全通过。
-- 架构影响：澄清。`codebase-design` 使 SQLite 作为 module 内部本地依赖直接用临时库测试，没有新增假想 DatabasePort；下一步进入 Product Module，不等待额外确认。
-
-### 2026-08-14 Product Module
-
-- 新增 `@domain-analysis/workbench`，外部只暴露 `saveDraft / confirm / get`；调用者提交完整草稿，不接触 4 张表的 CRUD。
-- module 内部用 `canonicalize@3.0.0` 按 RFC 8785 规范化内容，再生成 SHA-256；相同语义内容跨版本保持同一指纹，没有自研 JSON 规范化算法。
-- 项目、品类定义、确认范围和搜集板在一个 Drizzle 事务内保存或确认；乐观 revision 冲突、读取时严格契约复验和数据库 `null` 边界均在 module 内收敛。
-- 真实临时 SQLite 集成测试 6/6 通过，覆盖保存/确认/读取、稳定哈希、旧版本 supersede、并发旧 revision 拒绝、整笔回滚和 typed not-found。
-- 根全量回归通过：16 个测试文件、68 项测试；6 个 workspace typecheck 和 build 全部通过，Web 生产构建完成。生产依赖审计仍为历史 23 项，新增无依赖的 `canonicalize` 未增加生产风险项。
-- 架构影响：澄清。Project Module 已成为深 module，版本、哈希、事务和表结构全部隐藏；下一步直接接新产品库 Workbench 启动链，不等待提交或汇报确认。
-
-### 2026-08-14 Workbench 新产品库启动链
-
-- 新增 `openProductKnowledgeWorkbench()` 组合根：先运行 Drizzle 官方 migrator，再暴露 Product Module；数据库 client 随 Fastify `onClose` 生命周期关闭。
-- API 配置新增独立 `PRODUCT_KNOWLEDGE_DATABASE_URL`，默认指向 `data/product-knowledge-workbench.sqlite`；旧 `DATABASE_URL` 和 `initializeDatabase()` 未修改、未扩表。
-- 重启集成测试通过：首次启动保存电视项目，关闭并重复 migration 后仍能读取；证明新库不是一次性测试对象。
-- 真实 API 启动通过：`/health` 返回 200；临时旧库保留原 9 张表，新产品库独立生成 4 张业务表和 `__drizzle_migrations`。第一次沙箱内启动被 `tsx` IPC 权限拒绝，按权限边界在沙箱外原命令复验成功。
-- 架构影响：澄清。两库隔离和 migration 入口从设计变为真实启动事实；下一步直接实现 DBOS Pipeline adapter。
-
-### 2026-08-14 DBOS Pipeline adapter 与进程恢复
-
-- Workbench 精确锁定已在 R-017 验证的 `@dbos-inc/dbos-sdk@4.25.14`；外部仍只见 `start / command / get`，DBOS workflow、step、message 和 PostgreSQL 类型没有进入共享 contract。
-- 冻结输入经 RFC 8785 规范化后生成稳定 `workflowID`；6 个业务 handler 直接运行在 DBOS durable step 中。暂停/恢复和人工事项使用持久消息，取消使用官方管理 API，业务 SQLite 没有新增 Pipeline/Task 表。
-- 真实 PostgreSQL 集成测试 3/3 通过：暂停/恢复/人工处理、同输入幂等、取消、三次自动重试和显式失败阶段重试。DBOS 已持久化的失败 step 不用 `resumeWorkflow` 假覆盖；按官方 `forkWorkflow(startStep)` 保留旧失败运行，新运行记录 `forkedFromRunId`。
-- `SIGKILL` 恢复测试通过：首进程提交不可变资料并进入人工审核后被强杀；第二进程连接同一 DBOS schema 后完成后续阶段，资料 SHA-256 不变，6 个阶段各执行一次。
-- 带真实 PostgreSQL 的根全量回归通过：19 个测试文件、75 项测试；6 个 workspace typecheck 和 build 全部通过。生产 audit 仍是历史 23 项，没有来自 `@dbos-inc/dbos-sdk` 或 `canonicalize` 的新增公告。
-- 架构影响：澄清。DBOS 执行历史事实源、人工消息、取消、恢复和 fork 重试已经从 POC 变成正式 adapter；下一步接 Workbench 基础页面，不等待提交或汇报确认。
-
-## 8. 结束上下文更新模板
-
-每次结束上下文前，在本文件更新：
+2026-08-16 第 5 项真实验收中间修复架构影响：无变化。typed `question` 已由 Codex adapter 产生，但 Workbench 时间线只持久化 `assistantText`；在既有 adapter seam 增加确定性投影，确保问句可见，不新增事实源、公共 contract、fallback 或模块职责。旧补丁没有删除；保留 typed question，重写其用户可见投影。
+
+2026-08-16 第 5 项主动调查完成门架构影响：澄清。Category Research Brief 公共 contract 加强为至少一条来源引用、六类 `investigatedFacts`（品牌、型号、参数、部件、原理、来源入口）及引用闭包；Codex adapter 还必须从官方 JSONL 观察到 `web_search` item 才能接收 brief candidate。事实源、模块职责和依赖方向不变；Skill 负责采访/调查行为，Workbench 仍独占消息、决定、未决项和 confirmed brief。
+
+2026-08-16 第 5 项移动首次恢复修复架构影响：已被后续 PC-only 纠正覆盖。该工作不是当前产品要求；`restoreComplete` 条件挂载补丁已删除，不再作为阶段 0I 完成门。
+
+2026-08-16 PC 采访主流程修复架构影响：改变。Category Interview turn 公共 contract 新增 `user_message / decision_confirmed` discriminated trigger；显式确认仍先追加 Workbench Decision 事实，再由 Web application orchestration 自动发起下一轮。系统推进不写入用户消息，Codex adapter 从 typed trigger 读取本轮语义；事实源、模块依赖和 ephemeral Session 边界不变。ADR-0012 与 ARCHITECTURE 已同步。
+
+2026-08-16 / 6.3 监管生产批任务架构影响：改变。新增 `RegulatoryReconciliationRun` 与逐型号 typed outcome 公共 contract，以及专用 `MarketUniverseRegulatoryPipelineModule` 父/子 workflow；WorkBench PostgreSQL 仍独占 Market Universe 事实，DBOS 只拥有运行执行，API/Web 只投影。最终业务写通过冻结 candidate ID/version/hash、稳定 operation ID 和乐观锁一次生成新 candidate，取消/失败不写半版。没有新增工作流引擎、Provider registry、fallback 或监管全表枚举；ADR-0007、ADR-0013、ARCHITECTURE 与 RESEARCH 已同步。
+
+2026-08-16 / 6.3 监管运行恢复与取消修复架构影响：澄清。保留父/子 workflow、Queue concurrency=1、稳定 ID 和最终一次 Workbench 写入；父级改为当前型号完成后再入队下一个，并记录至多一个在途子任务供取消。父运行 ID 同时作为输出 candidate operation ID；API 增加按项目读取最近运行，Web 刷新不再依赖 React 本地状态。事实源、模块职责和公共领域状态枚举不变；ADR-0007、ADR-0013、ARCHITECTURE 与 RESEARCH 已同步。
+
+2026-08-16 / 6.3 海信集团目录架构影响：无变化。复用既有 Crawlee/Cheerio、`OfficialCatalogSource` 与 Market Universe 聚合 seam，只新增隔离海信集团官网目录/详情差异的薄 adapter 和生产组合注入；Workbench/PostgreSQL 事实归属、公共 contract、来源角色枚举和依赖方向均未改变。该集团多品牌来源保持 `partial`，不能替代海信/容声两个独立官网完成证明。
+
+2026-08-16 / 6.3 美菱官方目录架构影响：无变化。复用既有 Crawlee `HttpCrawler`、`OfficialCatalogSource` 与 Market Universe 聚合 seam，只新增隔离美菱商城分页/型号字段差异的薄 adapter 和生产组合注入；Workbench/PostgreSQL 事实归属、公共 contract、来源角色枚举和依赖方向均未改变。
+
+2026-08-16 / 6.3 统帅官方目录架构影响：无变化。复用现有 JSON 分页 Source 实现、Crawlee `HttpCrawler`、`OfficialCatalogSource` 与 Market Universe 聚合 seam，只补充 Leader 官方参数和品牌投影；未新增协议、事实源、公共 contract、fallback 或模块层级。
+
+## 9. 恢复开发的唯一执行顺序
+
+以下顺序是恢复开发的唯一控制文件。必须逐项完成并记录证据；前一项未通过时，禁止启动后一项。不得用内部 thread、手工 API、固定 fixture、组件测试或少量定点样本代替真实用户表面和生产路径验收。
+
+1. **纠正事实与冻结扩张**：撤销 `0I 已通过`、`当前已进入 1A`、四份样本代表收集成果等错误结论；暂停动态页面、图片正式接入、电视/微波炉、数据清洗、Knowledge Factory 和新 POC。停止门：本文件的阶段判定、阻塞项与用户原话一致，且无其他权威文档继续宣称错误完成状态。
+2. **旧补丁清算**：对当前 dirty diff 按文件和生产可达路径列出 `delete / keep / rewrite`，重点覆盖采访 Skill、Category Interview Module、Codex runtime、HTTP/UI、Product Pipeline、四份 Evidence 数据与全部 POC。停止门：每个保留项都能说明其保护的业务不变量；每个删除项都有影响范围和可恢复方式；未经确认不删除全局 Session 或本机数据。
+3. **冻结 Session 隔离方案（已通过）**：官方稳定 `codex exec --ephemeral` 替代 App Server `thread/start/resume`；Workbench 持有全部多轮上下文。已删除 `codexThreadId` 与旧 client/依赖，完成/取消 fake 回归通过；一次真实 `gpt-5.6-terra / medium` acceptance 完成，`~/.codex/sessions` 前后新增文件为 `[]`。停止门已满足。
+4. **重写系统内采访 Agent（已通过）**：Skill 已内联组合 `grilling` 的决策依赖树/一次一问/每问推荐与 `domain-modeling` 的术语挑战、具体场景、代码/资料核对；因 runtime 只读且 Workbench 是事实源，原版写 `CONTEXT.md`/ADR 的产物被正确映射为 proposed Decision、未决项和 Brief candidate。真实第 5 项发现首版 Skill 仍允许跳过调查生成空 `factReferences`，该旧完成门已清算：现在生成 brief 的同一轮必须实际搜索并打开官方来源，六类 `investigatedFacts` 全部绑定非空来源，runtime 还必须观察到官方 JSONL `web_search` item。`quick_validate.py` 与 fake 成功/拒绝回归通过；Skill SHA-256 `2a500ca0d30aab0f0cafb955d0d093eb87857f72204307b86ab49b61d8d32001`。
+5. **真实采访验收（已通过）**：真实 Workbench 已完成主动调查、一次一问、推荐理由、显式决定、任务书确认、项目草稿、刷新/进程重启恢复、取消、失败与重试；PC 流程回归证明显式确认后自动进入下一问且不新增“继续”用户消息。任务书包含有来源的品牌、型号、参数、部件、原理和来源框架；全局 Codex Session 没有新增采访线程。
+6.0 **覆盖与能力审计（已完成）**：已证明 7 个品牌标签只来自 3 个目录，当前 contract 不含产品类型覆盖，京东无生产 Source adapter，实际数据库无市场总体和 Evidence；13 个属性/4 个判断维度不是知识成果。证据见本文件第 11 节。
+6.1 **修正 R-010 覆盖定义（已完成调研）**：已形成品牌投影＋发现来源账、型号唯一总体、分轴类型覆盖、scoped blocking unknown、官方来源矩阵、8 项 contract 缺口和 12～20 型号隔离原型计划；未修改生产 Schema。证据登记在 `RESEARCH.md` R-010/6.1。
+6.2 **修正 Market Universe contract（已完成）**：20 条真实型号观察隔离原型归并为 19 个 identity，16 个拟纳入、2 个冷柜和 1 个酒柜明确分开；同型号跨官网/CNIS 只增加来源引用。共享 Schema、Workbench、API、PC 投影和测试已一次更新，显式 confirm 使用 expected version/hash 并拒绝 blocking unknown、未核验 identity 和必填分类未知。实际库旧行数为 0，JSONB 无 DDL 变化，因此没有生成空 migration。
+6.3 **完成品牌官网与监管同窗分母（已通过）**：九个生产来源同窗只读并集为 737 个唯一“品牌＋厂商型号”、15 个实际目录品牌：海尔 271、统帅 49、美的系 222、TCL 44、海信/容声 16、美菱 85、康佳/新飞 6、西门子 43、荣事达 1。当前 19 个已观察品牌标签均已有来源状态：5 个独立完整目录，7 个仅有完整多品牌官方目录，2 个仅有集团 partial，荣事达仅有官方渠道 partial，米家/小米、志高、奥克斯 5 个保持 typed missing。最终生产监管批次完成 737/737：381 matched、338 not_found、18 producer_conflict、0 failed，生成 v2；399 个型号带至少一个监管生产者，358 个 blocking unknown 保留。6.3 的任务是形成可审计品牌官网/监管分母与 unknown，不把缺口冒充完成；京东仍显示“更多”，品牌与渠道市场总体要到 6.4/6.5 才能冻结。
+6.4 **真正接入京东（工程前置门通过，真实访问继续停止）**：R-031/R-032 已实现通用来源 run/object/snapshot/asset、逐条落盘、失败保留、JSONL/CSV、API/PC、DBOS 逐对象持久工作项与强杀恢复；真实 60 秒窗口验收为每分钟最多 2 次，第三次在 `60.029s` 后派发。通用 JD Provider 已通过电视＋冰箱 fixture，并在没有已验证 reader 或显式政策时失败关闭。尚缺书面访问许可、真实 JD reader、三个相互冷却窗口及每窗口 1 目录＋3 详情受控探针，因此未访问京东，不能称为京东频控现实门或数据抓取已完成。
+6.5 **确认 R-010 市场总体（待开始）**：完成监管、官网、官方自营和核实旗舰店的同窗并集、去重、差异及 unknown 审核。停止门：品牌、类型、型号都有可审计分母；关键 unknown 未处置时只能保持 candidate。
+7.0 **冻结 Knowledge Need 矩阵（最小纵切片通过，完整矩阵待完成）**：电视任务书已显式覆盖底层概念、品类知识和型号事实；完整身份/类型/安装/规格/功能/机制/条件/边界/取舍/时点/说明书/图片矩阵仍待扩展。
+7.1 **批量生成 EvidenceRequest（最小纵切片通过，完整范围待完成）**：Planner 已从 confirmed brief 的显式来源分配确定性生成请求；没有从客户端字段或 Provider 猜测。完整 Market Universe × Knowledge Need × 来源矩阵仍未完成。
+7.2 **执行批量来源访问与最小证据（最小纵切片通过，完整范围待完成）**：电视真实 DOE/EPA 来源已形成 4 条 Source Dataset 和 4 条最小 Evidence；PC 又通过显式 TextQuote 选择提交 349-byte Evidence。完整官网/动态/图片/JD 范围仍待完成。
+8.0 **完成 1A 真实矩阵（部分通过）**：静态 HTML、PDF 页和结构化开放数据已通过；动态页、图片、登录/验证/下架/限流、三品类/双站点和目标 Linux 门仍未通过。
+9.0 **建立可审核比较知识（最小纵切片通过）**：Evidence→确定性/模型候选→Review 已在真实电视证据上产出 22 条已审核候选和 3 条关系；完整属性字典、冲突/unknown 统计、多型号与品牌范围比较仍待完成。
+10.0 **建立技术原理图文知识（文本最小纵切片通过）**：电视底层显示架构、适用关系和来源定位已入候选/包；图片区域、OCR/视觉模型和完整机制质量门仍未通过。
+11.0 **构建知识包与 Runtime（最小纵切片通过）**：当前 Evidence 已构建内容寻址 SQLite＋FTS5 包，支持激活/回滚、精确/筛选/全文/关系/证据查询，相同内容重建版本一致，复制单文件后离线查询通过；完整问答集和目标平台门仍待完成。
+12.0 **联调与总验收（第二品类最小联调通过，正式总验收待完成）**：PC Workbench 已显示电视底层概念、型号、来源、Evidence、22 条已审核知识和激活包；完整故障矩阵、质量/人工频次、第三品类、另一机器和发布门仍未通过。
+
+执行纪律：一次只推进一个编号；任何失败先清算本编号产生的旧补丁，再决定删除、保留或重写。公共 interface、依赖与测试策略由工程在完成调研/原型后通过 ADR 负责；新增模型用途、产品目标、业务边界、人工权限或发布取舍才提交对应负责人确认。
+
+## 10. 当前阻塞与未通过项
+
+- 0I 已通过，不再是阻塞项：真实 Workbench 已证明采访 Skill 的主动调查、完整负责人决策树、有来源任务书、显式确认、项目草稿、失败/取消/重试、重启恢复和 PC 主流程；确认后自动推进，不需要额外“继续”。
+- Session 隔离已通过，不再是阻塞项：本轮基线时间后全局 `~/.codex/sessions` 新增文件为 0，且没有残留 `codex exec` 进程；既有全局 Session 仍不擅自删除。
+- 6.2 已完成：`variantCount` 已删除；品牌 identity/监管生产者、型号身份状态、三类覆盖维度、来源完整性和 scoped blocking unknown 已进入同一版本事实。6.3 已完成来源角色 contract、专用 DBOS 生产 seam、九个生产来源的 737 型号同窗候选和 737/737 监管对账；不再继续改 Market Universe 核心 contract。容声 TLS、米家/小米厂家型号、志高/奥克斯目录等缺口作为 typed unknown 保留，下一门由 6.4 京东官方渠道补充分母。
+- 京东商品规格停止门：监督式 Codex Browser 已完成 5 页目录并真实读取前 16 个详情观察，第 17 个请求进入京东安全验证；用户人工扫码后仍转入 403 频控，单次正常重试未恢复。现有本机自动化启动/连接候选仍未通过，Codex Browser 也没有 Workbench 可调用的稳定 Provider contract。当前没有从标题猜型号、没有复刻签名、没有绕过验证、没有输出 Cookie/Profile；完整 299 个详情、验证恢复和生产 Provider 门通过之前，6.4 保持未通过。
+- 1A 最小真实纵切片已通过但完整矩阵未完成：R-034 已贯通电视真实 DOE/EPA 来源、最小 Evidence、Factory/Review、SQLite Runtime 和 PC；官网市场总体、动态页、图片、三品类/多站点与目标 Linux 门仍未通过。
+- 京东真实访问仍被权限和现实探针门阻塞：DBOS 逐对象持久工作项/强杀恢复、真实 60 秒窗口和本地熔断门已经通过；尚缺书面许可、已验证 JD reader、连续三个冷却窗口和受控 1＋3 探针。完成前不得访问京东，也不得把本地工程门称为京东现实频控已解决。
+- 整图 hash/格式/尺寸/单帧验证已通过；裁片原图一致性仍失败关闭。图片字节暂不能通过现有 `contentText` 公共读取 contract 诚实投影，确认判别联合前不接正式图片入口。
+- Stagehand/OCR/图片语义仍待原型；在用户确认新的模型用途前，不能冻结模型辅助证据寻找或图片判断方案。
+- 本机当前使用的是本轮新建的 `domain_analysis` 开发库，0000～0004 migration 已追加执行；实际项目仍为 draft，`market_universe_versions` 为 0。昨晚旧 WIP 数据不在该 Homebrew 实例，位置仍未确认。没有 drop/reset 其他数据库；若后续找到旧数据，保留、迁移或删除必须先只读盘点并取得单独授权。
+- CodeGraph 删除索引仍返回已删除节点；未获授权时不执行重建。当前以真实文件、导出、类型和测试证明代码清算，结构索引的删除一致性仍需后续处理。
+- Node 24 LTS 已正式落地为 `package.json#engines/devEngines`＋`.nvmrc`＋`engine-strict`＋`check-node-version` 根脚本门；根目录硬编码的 darwin-x64 Rollup 包已删除，Node 24.12.0 arm64 重新安装和全仓门通过。反向门已证明系统 Node 21.7.3/npm 10.5.0 下 `npm install` 以 `EBADENGINE` 失败，`npm run typecheck:shared` 在 TypeScript 启动前失败；正确 Node 24.12.0/npm 11.6.2 下全门通过。生产依赖 audit 当前报告 1 low/6 moderate/10 high/3 critical；未执行 `audit fix`，处置需单独调研和回归。
+- 用户已授权本轮提交/推送。交付完成必须同时满足：工作区无遗漏、`master` 与 `origin/master` ahead/behind 为 `0 0`、本地 HEAD 与远程 SHA 一致；否则仍不能声明跨电脑可继续。
+
+### 1.1 其他来源实际采集审计（2026-08-17）
+
+- 九个品牌官网来源历史隔离运行分别得到：海尔 271、统帅 49、美的系 222、TCL 44、海信/容声 16、美菱 85、康佳/新飞 6、西门子 43、荣事达 1，共 737 个唯一“品牌＋厂家型号”。监管对 737 个型号的结果为 381 matched、338 not_found、18 producer_conflict。
+- 这些数字只证明当时读取过目录并完成 identity 投影。生产 `OfficialCatalogEntry` 每项只允许 `brand / manufacturerModel / sourceItemId / sourceUrl`，另有可选 identity 状态、监管生产者和分类；没有商品详情参数、功能文案、图片、价格、库存、说明书或评价。
+- 各 Crawlee 来源使用 `MemoryStorage({ persistStorage:false })`；原始目录 JSON、详情 HTML 和请求队列没有持久化。历史监管批次所在隔离 PostgreSQL、临时证据目录和一次性脚本已经删除。
+- 当前开发库 `market_universe_versions=0`，所以 737 个 identity 也没有保存在当前 Workbench。当前 5 个 SourceObservation 和 3 个 EvidenceItem 全部来自 `official-site:example.com` 测试夹具，不是海尔、美的、监管或其他真实来源。
+- 因此准确结论是：“九源目录 identity 纵切片和监管对账曾在隔离环境跑通，但没有形成当前可查看的品牌官网原始资料库。”不得再说“其他官网数据已抓完”。
+- 本轮仅只读审计，没有删除12个项目行、测试 observation/evidence 或任何文件。后续是否清理必须先识别每行归属并取得单独授权。
+
+下一步第一条可执行动作：新电脑先按 `HANDOFF.md` 完成 Git/Node/PostgreSQL/API/Web 启动门，再继续 `ROADMAP.md` 阶段 1A 冰箱纵向第 6 步，用现有跨品类 `Planner → DBOS → Provider → Source Dataset → Evidence` 链完成可许可的官网、监管和底层知识小批次。不得重写已通过的来源 typed contract、逐条持久化、PC 查看、导出和 DBOS 恢复；京东仍须等待书面许可、合格 reader 和三个冷却窗口的 1＋3 现实探针。
+
+## 11. 本轮当前验证证据
+
+以下条目是历史组件、POC 或人工定点样本证据，只用于保留审计链；任一条都不能单独证明阶段 0I、1A、真实系统内采访 Agent 或批量数据收集已经完成。
+
+- 6.3 监管生产与真实批次：隔离业务库经真实生产 API 从海尔 271、美的系 222、TCL 44 得到 537 个唯一型号；运行 `market-universe-regulatory:29d4883c158a05ce33db5c682b2b81aef8db8b11a395ca8a2ed3ba2192cb426d` 完成 537/537，结果为 matched 274、not_found 251、producer_conflict 12、failed 0，并生成 v2 candidate。v2 仍为 537 型号、537 identity confirmed、286 个型号带监管生产者；监管全局 unknown 被移除，251 个未找到与 12 个冲突转为逐型号 blocking unknown，另保留京东与其余品牌来源阻塞。隔离 PostgreSQL 和 131,072-byte 临时 SQLite 已精确删除，未写开发库。
+- 6.3 恢复/取消回归：旧 Web 只把 run ID 放在 React state，刷新后看不到正在运行；旧父 workflow 又预先入队全部子任务，取消父级仍可能继续访问。旧补丁处置为：保留 DBOS Queue/稳定 ID/最终一次写入，重写逐项入队、在途子任务取消和服务端 latest-run；删除输出 candidate ID 的二次 hash。真实 PostgreSQL 集成 `2/2` 证明成功运行可刷新恢复，取消后最多访问一个已在途型号且不写候选；API/Web 定向 `29/29`。全新隔离 PostgreSQL 全仓 `37` 个测试文件 / `140` 项通过，`1` 个真实模型 acceptance 按设计跳过；测试库已精确删除。
+- 6.3 海信集团真实目录：标准 TLS/Crawlee concurrency=1 读取官方类目声明 21、发现详情链接 21、详情成功 21；title/meta/主标题可明确确认 20 行，按品牌＋厂商型号得到 16 个唯一 identity，品牌为海信和容声。产品 1340“海信222冰箱”只在图片 alt/文件名出现 `BCD-222WTDGS`，按失败关闭规则不纳入。生产 Source 标为 `multi_brand_official_catalog/partial`；fixture 回归与 API 四源组合 `9/9`、worker/API typecheck 通过。没有保存完整页面、Cookie、Profile 或认证信息。
+- 6.3 美菱真实目录：官方类目接口确认冰箱 `columnId=721`，生产 Crawlee `HttpCrawler` 以 concurrency=1 读取 5 页、93/93 个在线 SKU，得到 85 个唯一厂商型号；8 组重复为颜色/SKU，不新增型号 identity。`400WP9BT`、`505WP9BT`、`503WP9BT`、`506WQ3ST`、`MRF-205WPBG1` 等按官网原文保留，不擅自补 `BCD-`。官网返回非标准 `text/json`，adapter 复用 Crawlee 官方 `additionalMimeTypes` 能力显式允许，没有自研 HTTP。生产 Source 标为 `independent_brand_catalog/complete`；定向测试 `13/13`、六 workspace typecheck、隔离 PostgreSQL 全仓 `37` 文件 / `142` 项通过，`1` 项真实模型 acceptance 按设计跳过；隔离库已精确删除。
+- 6.3 统帅真实目录：官方 `leader_product/getProduct` 对 `channelId=41824`、`psale=0` 声明 49、读取 49、缺失型号 0、唯一型号 49；复用已有 JSON 目录分页实现并接入第六个生产来源，标记为 `independent_brand_catalog/complete`。定向测试 `14/14`；最终隔离 PostgreSQL 全仓 `37` 文件 / `143` 项通过，`1` 项真实模型 acceptance 按设计跳过，隔离库已精确删除。
+- 6.3 六源当前并集：同一轮真实只读枚举得到海尔 271/271、统帅 49/49、美的 384/384（接收 284 SKU、222 identity）、TCL 44/44、海信集团 21/21（接收 20、16 identity、partial）、美菱 93/93（85 identity），合并为 687 个唯一“品牌＋厂商型号”和 11 个实际目录品牌。没有写开发库；新增的 150 个 identity 尚未跑监管，待品牌来源稳定后统一对账。
+- 6.3 九源最终并集与监管：同一轮真实枚举得到海尔 271、统帅 49、美的系 222、TCL 44、海信集团 16、美菱 85、康佳集团 6、西门子 43、荣事达 1，合并为 737 个唯一“品牌＋厂家型号”和 15 个实际目录品牌。康佳集团 7/7 商品排除 1 个冷柜后接收 6；西门子“商城在售”46/46 排除 2 个酒柜和 1 个独立冷冻箱后接收 43；荣事达当前产品中心重复两次均为 1/1、`partial`。全新隔离 PostgreSQL 的生产监管运行 `market-universe-regulatory:9eed9da331b59fd56e76beb1d77267b64ba1978cac67acfbc49b78cf3101ba4f` 完成 737/737：matched 381、not_found 338、producer_conflict 18、failed 0；生成 v2，737 个 identity confirmed，399 个型号带监管生产者，358 个 blocking unknown 保留。隔离数据库、临时证据目录和脚本已精确删除，开发库未写入。
+- 2026-08-16 / 6.3 最终官网与监管门架构影响：无变化。新增康佳集团、西门子和荣事达薄来源 adapter，并为所有 Crawlee Source 注入每次枚举独立的官方 `MemoryStorage`，修复重复刷新误复用持久请求队列；未改变 Workbench/PostgreSQL 事实归属、公共 Market Universe contract、Provider 职责或依赖方向。Patch Disposition：保留已验证九源 adapter、DBOS 父/子 Queue 和最终一次业务写；重写过时的新飞 partial/西门子 candidate 文档；删除一次性监管运行脚本与隔离资源。Node 24.12.0 / npm 11.6.2 下六 workspace typecheck、production build、`git diff --check` 通过；全新隔离 PostgreSQL 全仓 38 文件 / 147 项通过，1 个真实模型 acceptance 按设计跳过，测试库已整库删除。Web 2,307 modules、主 JS 655.65 kB / gzip 194.94 kB，保留既有 >500 kB warning。
+- 2026-08-16 / 6.4 京东生产候选：新增薄 `JdOfficialRetailSource`，复用 Crawlee `BasicCrawler`/独立 `MemoryStorage` 与 Patchright 1.61.1 的系统 Chrome 持久 Profile；目录 5 页只发现自营 SKU，详情只以“品牌＋能效网规格型号＋类型”确认 identity，冷柜计读取但排除，标题永不入库。API 刷新成功时并入第十来源；typed 访问失败时保留九个官网结果并写 scoped `source_access` unknown。新专用 Profile 两次真实运行均返回 `verification_required`；第二次证明重定向竞态修复后无执行上下文异常，没有绕过验证或输出 Cookie/Profile。现有 shared `SourceObservation` 由 `EvidenceRequest` 拥有，只属于 7.1/7.2；6.4 按 ADR-0013 使用 `OfficialCatalogSnapshot`/scoped unknown，未提前伪造 EvidenceRequest。后续差分诊断又证明历史旧 Profile和无 Profile Patchright均进入 `risk_handler`，Playwright空骨架、Puppeteer频控、普通 Chrome＋CDP临时 Profile进入登录页；同时 Codex普通浏览器无需登录即可读取 `MC-186DMD` 等26项规格。因此“人工验证即可完成”结论作废，当前根因边界改为自动化浏览器表面差异。Patch Disposition：保留分页/详情 parser、九源成功隔离和 typed failure；重写页面状态检测并分开“详情已读取数/冰箱接收数”；删除“持久 Profile/登录是前置”的结论和未被既有 contract 接受的 `official_direct_retail` coverageKind 尝试。架构影响：澄清，Workbench/PostgreSQL 继续拥有 Market Universe，公共 contract、事实源和依赖方向无变化。Node 24.12.0 / npm 11.6.2 下六 workspace typecheck、production build、`git diff --check` 通过；全新隔离 PostgreSQL 全仓 39 文件 / 151 项通过，1 个真实模型 acceptance 按设计跳过，测试库已整库删除。Web 2,307 modules、主 JS 655.68 kB / gzip 194.98 kB，保留既有 >500 kB warning。6.4 仍因生产浏览器 Provider 未通过三商品真实门，不能进入 6.5。
+- 2026-08-16 / R-012 京东浏览器候选重评架构影响：澄清。OpenAI 官方文档确认 Codex 内置 Browser 仅在 ChatGPT/Codex 桌面会话可用，使用独立 Profile、站点权限和敏感操作确认，不在 Codex CLI/IDE 提供任意本地 Worker API；Chrome DevTools MCP 1.7.0 为 Apache-2.0、Node 24 可用且当前 Chrome 151 满足版本门，但可信 Profile `--autoConnect` 需要用户现场开启远程调试并点 Allow，且可读取整个所选 Profile。结合专用 CDP 原型失败，当前候选均未满足无人值守和最小权限门。Patch Disposition：删除 Patchright 的优先生产候选结论、自动浏览器生命周期、`JD_BROWSER_PROFILE_DIR` 配置和生产依赖；保留 Crawlee 编排、注入式 parser、typed failure、九源隔离与历史 POC；生产 bootstrap 未注入合格 reader 时立即 `source_abnormal`，不启动浏览器、不访问京东。未新增替代 Provider、fallback 或公共领域 contract；仅删除未交付 WIP factory 的失效 `profileDir` 输入。ADR-0004 已同步修正，6.4 继续失败关闭。Node 24.12.0 / npm 11.6.2 下定向 `12/12`、六 workspace typecheck、production build 和 `git diff --check` 通过；全新隔离 PostgreSQL 全仓 `39` 文件 / `152` 项通过，`1` 项真实模型 acceptance 按设计跳过，测试库已精确删除并复核不存在。Web 2,307 modules、主 JS 655.68 kB / gzip 194.98 kB，保留既有 >500 kB warning；依赖安装仍报告 1 low/6 moderate/10 high/3 critical，未擅自执行 `audit fix`。
+- 最终工程门：Node 24.12.0 下六 workspace typecheck 与 production build 通过，Web 2,307 modules、主 JS 655.53 kB / gzip 194.87 kB，保留 >500 kB 非阻塞 warning；`git diff --check` 通过，相关生产文件均小于 500 行。一次隔离全仓命令误用了本机不存在的 `postgres` 角色，26 个集成测试在鉴权前失败；该精确临时库已删除并验证不存在，改用实际本机角色后 143/143 通过，未触碰开发库。
+- 6.3 测试库纠错：首次 139 项全仓门误把开发库作为测试库，产生 11 个可精确识别的测试项目、8 个测试 Market Universe 及 4 个本轮 DBOS test schema。已在事务内只删除这些测试项目的关联行和对应 1 个测试采访会话，并精确删除 4 个测试 schema；复核本轮测试项目数 0、测试 schema 数 0，03:33 的真实“家用冰箱品类知识项目”仍为 draft。随后新建独立数据库 `domain_analysis_codex_test_20260816_1720` 重跑 139/139 通过并整库删除。该事故未删除真实项目，但以后 PostgreSQL 全仓门只允许使用本轮新建且可整库删除的测试库。
+
+- Session 隔离当前证据：官方稳定 CLI 文档明确 `codex exec --ephemeral` 不持久化 rollout；旧 App Server 路径的 fake 红灯会写 `rollout-pollution.jsonl`，改写后的完成/取消测试 `2/2` 通过；真实 acceptance 用 `gpt-5.6-terra / medium` 完成一轮，断言 `~/.codex/sessions` 新增文件为 `[]`。Workbench/DB/API typecheck 全通过；Drizzle 生成 `0003_wide_zombie.sql` 只删除 `codex_thread_id`。未删除任何既有全局 Session。
+- 第 5 项真实 Workbench 主流程：原 session `interview-session-03a1a45c-7c29-4782-a493-7d5001f1c34c` 已完成五项负责人取舍的显式确认、主动调查、任务书确认和项目草稿创建；当前 `confirmed/idle/revision 32`。confirmed brief 为 `category-brief-e9e7133a-39e3-4c06-abbd-da7845c4fa52`，项目为 `project-64f8c93f-53d2-4d27-ac1d-55cabf8439fc`。进程完整重启后 API 仍从 PostgreSQL 重读同一 session、brief 和 project 关联，证明不是进程内状态。
+- 任务书调查门真实证据：同一轮实际搜索并打开海尔官方型号页、国家标准平台 GB 12021.2-2025 和市场监管总局 2026 能效标识规则，共 3 条 `factReferences`；六类事实覆盖品牌、型号 `BCD-500WGHFDB5XAU1`、参数、部件、风冷/双变频原理和来源入口。海尔页可核对 500 L、830×1900×594 mm、283/185/32 L 分区、0.88 kW·h/24h、35 dB(A)、6.5 kg/12h、变频压缩机和变频离心风机。样本只验证研究框架与来源可达性，没有冒充市场总体或批量采集完成。
+- 取消/失败/重试真实表面：隔离 QA session `interview-session-8b18d308-a866-4ee7-a76a-fbf5ecdf3c34c` 在 Workbench 点击停止后持久化为 `interrupted`，只有用户消息、没有伪造 assistant 完成；用无效 model 启动后页面显示失败消息与重试按钮，恢复正确 model 后点击同一按钮成功，原用户消息未重复。
+- 历史移动表面证据：曾完成 390×844 检查，但用户已明确本产品是 PC Workbench；该证据不再属于当前通过门，也不再投入移动适配工作。当前有效表面是 1280px PC Workbench。
+- Session 隔离复核：从 `2026-08-16 08:55:35` 起按全局 Session 文件 birth time 核查，新增文件为 0；没有残留 `codex exec` 进程。ChatGPT/Codex App 自身已有进程未被本项目创建，也未终止。
+- 当前 Homebrew PostgreSQL 启动前没有 `domain_analysis` 数据库，昨晚四份样本不在该实例。为真实用户表面验收新建空的本机 `domain_analysis`，使用 Unix socket 连接并追加执行 0000～0003 migration；没有覆盖、drop/reset 其他数据库，也没有把旧样本冒充当前数据。API 4000、Web 6173 与 Homebrew PostgreSQL 当前保持运行，供第 6 项继续。
+- 第 5 项最终回归：Node `v24.19.0`、全新临时 PostgreSQL 上 `31` 个测试文件 / `118` 项测试全通过，`1` 个真实模型 acceptance 按设计跳过；测试库 `domain_analysis_codex_step5_20260816` 已精确删除。全 workspace typecheck 与 production build 通过；Web 2,305 modules，主 JS 638.73 kB / gzip 190.01 kB，保留 >500 kB chunk 警告。`git diff --check` 通过。
+- 第 5 项继续到五项负责人取舍全部显式确认后，真实模型生成了 draft brief，但其 `factReferences=[]`，且没有品牌、型号、参数、部件、原理的有来源调查事实。该草稿未确认、未生成项目；这是“主动调查完成门缺失”的真实失败，不是可接受的部分完成。
+- 本轮旧补丁处置：保留 ephemeral exec、Workbench 状态归属、一次一问和显式确认；删除移动专用 `restoreComplete` 条件挂载与所有成功 assistant 消息上的通用 Reload；重写 turn contract 和 Web orchestration，使确认后自动推进且不合成用户消息。临时 PC Playwright config/spec、失败 trace 和 test-results 在验收后清除。
+- R-010 真实官网候选：生产 API 在隔离 PostgreSQL 中从海尔中国冰箱目录读取 271/271 行、唯一型号 271；从美的官方商城读取 384/384 行，按冰箱类目和在售状态接收 284 行，按品牌＋厂商型号去重为 222；从 TCL 中国官网读取 44/44 行并得到 44 个唯一型号。合并枚举 699 行、接收 599 行，得到 537 个唯一型号、7 个品牌；62 个美的系重复行保留为同型号 SKU/颜色变体计数。版本状态为 `candidate`，3 类 unknown 明示监管交叉、京东官方自营和其他品牌目录。
+- R-010 PC 表面：1440×1100 Chrome/Playwright 真实打开 Workbench，显示 537、三行来源对账、3 项冻结缺口和“候选版本 v1·未冻结”；body `scrollWidth=clientWidth=1440`，axe 违规 0。未做移动端工作。
+- 2026-08-16 PC Workbench 信息架构纠正：新品类采访与项目详情改为互斥模式，项目内使用“概览 / 市场总体 / 原始证据”阶段导航；草稿项目前置条件未满足时后两项禁用，不再把采访面板堆在冰箱项目上方。1280px 真实 PC 页面验证项目模式采访区域为 0、采访模式只有一个标题且项目详情为 0、横向溢出为 0；Web typecheck 通过，x64 Node 21 production build 通过（2,307 modules，主 JS 641.94 kB / gzip 190.93 kB，保留 >500 kB 警告），`git diff --check` 通过。架构影响：无变化；只纠正 Web 组合与信息层级。
+- 2026-08-16 覆盖与下游能力审计：当前实际 PostgreSQL 只有 1 个 draft 项目，`market_universe_versions / evidence_requests / source_observations / evidence_items` 均为 0。历史 537 型号候选来自海尔、TCL 和美的商城 3 个目录；所谓 7 品牌为海尔、美的、COLMO/科慕、东芝、小天鹅、华凌、TCL，其中 5 个品牌标签来自同一美的商城，不等于 7 个独立品牌官网已覆盖。`MarketUniverse` 当前只记录品牌、厂商型号和变体计数，没有产品类型/门型/安装形态等分类维度，因此品牌覆盖未完成，类型覆盖目前甚至不可计算；京东没有生产 Source adapter、没有型号观察或 EvidenceItem，只保留 403/验证边界下的 typed unknown。项目草稿中的 13 个属性、4 个判断维度和 4 个能力问题只是待确认研究范围，不是已采集知识；当前没有生产 Knowledge Factory、知识包或 Runtime，不能提供品牌间/型号间证据化比较，也不能提供技术原理的图文知识查询。架构影响：澄清；暴露 R-010 contract 缺少类型覆盖维度，修改跨模块 contract 前须单独完成调研与确认。
+- 2026-08-16 执行顺序文档化：`ROADMAP.md` V0.6 已把冰箱纵向拆为覆盖定义、Market Universe contract、品牌/监管分母、京东实采、R-010 冻结、Knowledge Need、批量 Evidence、比较知识、图文知识和 Runtime 的顺序停止门；本文件用 6.0～12.0 记录唯一当前项及完成证据。架构影响：无变化；本轮只明确计划和进度控制，不冻结 taxonomy、不修改公共 contract、不新增 adapter。
+- 2026-08-16 / 6.1 官方调研：GB/T 8059—2025 给出四类按主要间室用途划分的监管产品类别；能效备案提供生产者/规格型号而非品牌/在售；当前京东自营冰箱页公开显示至少 48 个品牌标签和多个相互独立筛选轴，但三个商品详情均进入 risk handler。由此冻结候选语言：型号是唯一总体，品牌完整性另看发现来源账，类型是逐覆盖维度投影，监管类别、市场形态和技术配置不得混成一个字段；重复目录行/跨来源引用不是 Product Variant。生产代码审计另发现 `variantCount` 混计重复观察、unknown 无 scope/reason/blocking、basis/status 语义重叠且没有 confirm 命令等 8 项缺口。架构影响：澄清；尚未改变事实源、公共 contract、依赖方向或生产代码，等待 6.2 人工确认。
+- 2026-08-16 / 6.2 Market Universe contract：20 条真实型号观察原型、共享 Zod、Workbench 聚合/确认事务、API、PC 投影和测试已完成；删除 `variantCount`，增加品牌 identity/监管生产者、identity 状态、三类覆盖维度、来源 completeness 与 scoped blocking unknown。Node 24.12.0 arm64 下 104 tests 通过、30 条件跳过，临时 PostgreSQL 集成 2/2，全 workspace typecheck/build 与 1440×900 PC 表面通过；真实库未写入。架构影响：改变；Market Universe 公共 contract 与确认命令改变，事实源和依赖方向不变，ADR-0013 与 ARCHITECTURE 已同步。
+- 2026-08-16 / 6.3 品牌/监管同窗：`OfficialCatalogSnapshot` 来源账增加 `coverageKind / coverageStatus / observedBrandKeys`，明确区分独立品牌目录、多品牌官方商城、监管按型号查询和官方渠道发现。能效公开接口不能按 `data.total=500` 判定结束：pageSize 100 的第 6 页仍返回 100 条不同记录，且产品类型 81 混合冰箱与冷柜，因此拒绝监管全表枚举。薄 `EnergyLabelRegulatoryCatalogSource` 对官网已知型号逐项交叉；真实 `BCD-501WSPM(Q)`、`BCD-500WGHFDB5XAU1`、`R555Q10-SS` 全部 matched，共 4 条备案，海尔同型号两条备案被保留且生产者一致，不再误判异常或无意义重试。全仓门更新为 Node 24.12.0 arm64 下 106 tests 通过、30 条件跳过，六 workspace typecheck、production build 和 `git diff --check` 通过；Web 2,307 modules、主 JS 650.42 kB / gzip 193.58 kB，保留 >500 kB warning；Market Universe 临时 PostgreSQL 集成 2/2，测试库已精确删除，真实库未写入。架构影响：澄清；来源 contract 增加可审计角色，但 Workbench/PostgreSQL 事实归属、依赖方向和确认门不变。生产批次接线仍未完成，6.3 不能标记通过。
+- 2026-08-16 / 6.3 DBOS 批任务 POC：CodeGraph 证明现有 `runStage` 将整个 handler 包成一个 `DBOS.runStep`，不能直接逐型号恢复。复用已接受的 DBOS 4.25.14 Queue 做隔离原型，3 个子 workflow 在 concurrency=1 下由父 workflow 收齐结果；强杀后已完成 M1 未重跑、进行中的 M2 按至少一次语义重做、M3 接续，执行序列 `M1/M2/M2/M3` 且最终结果完整。临时库、marker 和脚本已删除。架构影响：澄清；证明候选组件满足恢复门，但尚未修改公共 Pipeline contract、模块职责或生产组合根。下一步涉及公共 batch seam，未确认前保持候选。
+- 2026-08-16 / Node 运行门：Node/npm version 事实源统一为根 `engines`，`.nvmrc` 负责本机选择，`.npmrc engine-strict` 阻断错误安装，npm 11 `devEngines` 与 `check-node-version@4.2.1` 阻断错误脚本运行。实测系统 Node 21.7.3/npm 10.5.0 下 install 与 typecheck leaf 均在业务执行前失败；Node 24.12.0 arm64/npm 11.6.2 下 106 tests 通过、30 跳过，六 workspace typecheck、production build 和 `git diff --check` 全通过。架构影响：无变化；只固定开发运行基线，未改变产品模块、事实源或公共业务 contract。
+- R-010 全仓门：全新 PostgreSQL 上 `35` 个测试文件 / `130` 项通过，`1` 个真实模型 acceptance 按设计跳过；六个 workspace typecheck、production build 与 `git diff --check` 通过。Web 为 2,307 modules，主 JS 639.55 kB / gzip 190.34 kB，保留既有 >500 kB chunk 警告。首次门禁只因 Unix socket 简写 DSN 缺少 DBOS 要求的 username/hostname 而失败，未修改代码；改用本机显式 DSN 后在第二个全新数据库完整通过。真实官网/UI 验收库和全仓测试库已精确删除，没有向实际草稿项目写入候选总体。
+- R-010 架构影响：改变。新增 Market Universe 公共 typed contract、Workbench/PostgreSQL 单一事实源、三个官方目录 Source adapter 与 API/PC 投影；型号 identity 固定为品牌＋厂商型号，SKU/颜色只计变体。ADR-0013、ARCHITECTURE 与 RESEARCH 已同步；TCL 仅增加同一 typed seam 的来源 adapter，未改变事实源归属，也未新增 Provider registry、模型、fallback 或 Codex Session。
+- 本轮验证：x64 Node `v24.19.0`＋全新临时 PostgreSQL 上 `31` 个测试文件 / `119` 项通过，`1` 个真实模型 acceptance 按设计跳过；全 workspace build、四层定向 typecheck、`git diff --check` 通过。生产 PC 页面 1280px Playwright 红灯先稳定复现“确认后请求数为 0”，修复后 `1/1` 通过，并断言下一轮请求为 `decision_confirmed`、页面无“继续”用户消息、成功消息无“重试”。临时数据库已精确删除。
+- 第 5 项移动修复回归：生产 390×844→1280 Playwright/Chrome `1/1` 通过；Web typecheck、API client `23/23` 测试和 production build 通过。Web 为 2,305 modules、主 JS 639.14 kB / gzip 190.09 kB，保留 >500 kB chunk 警告。
+
+- 真实冰箱采访：同一 PostgreSQL session 完成一次一问、显式 confirmed decision、Category Research Brief v1 确认并生成 Product Project revision 1 草稿；实际数据库核对仍为 `draft`，未冒充项目已冻结。刷新恢复不依赖 localStorage 作为事实源。两次 strict schema 失败均持久化明确错误，修复 nullable/非枚举 `allowedValues` seam 后用同一用户消息重试成功。
+- 真实来源访问：Crawlee `3.18.1` 在 Node `v24.19.0` x64 访问海尔官方 `BCD-500WGHFDB5XAU1` 页面，HTTP 200；选中原始 Schema.org Product JSON-LD 3,997 bytes，SHA-256 hex `c4819d551a766ed09955c115205af4472f5de367127b8800b9571a26d47e529d`。缺失型号样本在成熟重试后返回 typed `evidence_not_found`；`persistStorage:false`，未保存完整页面或 Crawlee 队列。
+- 第二官方来源：同一 adapter 访问美的 `BCD-501WSPM(Q)` 页面，HTTP 200；选中 `#product_spec` 中 5,873-byte 未清洗 HTML 规格表文本，SHA-256 hex `3c11f72f24589a90d49c4806fad715b1f297ea742079945f6359c127e8970b06`。EvidenceRequest `request-066f8c40-75ac-4c33-8677-514c07086141`、SourceObservation `observation-15ebdf60-d41f-4639-a29f-b3a9e1c8e0aa`、EvidenceItem `evidence-ff00ae46-d4d6-41d8-8229-4b9880f29993`；SRI `sha256-PBH3LyRYmpDUnEgG+tcVsfKX6nQgeZRfY1nBJ+iXCwY=`；assessment `sufficient`。Workbench 桌面与 390px 重读均显示海尔/美的两份内容；390px 下 document/body scrollWidth 均为 390，无横向溢出。
+- 真实监管来源：中国能效标识网对 `BCD-501WSPM(Q)` 返回 1,079-byte 原始 JSON，SHA-256 hex `9d7b01b670d89bdc0d40f83ff90c4832b1b6caca8722afc3016d0ce049494cc3`；EvidenceRequest `request-396fed91-eeb5-4085-9ec4-fe65d1e85c43`、SourceObservation `observation-af2a04d5-538b-4131-ad6f-319b2d7bf31e`、EvidenceItem `evidence-778aacce-674c-4b54-b78d-1ca5eb0d2f41`；SRI `sha256-nXsBtnDYm9wNQPg/+QxIMrG2ysqHIq/DAW0M4ElJTMM=`；assessment `sufficient`。首次正式组合尝试因将 JSON 文本误标为 `application/json` 被 Evidence 核心拒绝；改为已确认的 `text/plain; charset=utf-8` 后成功，原始字符串未改变，首次真实访问的 SourceObservation 仍保留在请求历史。
+- 真实 PDF：美的官方说明书 HTTP 200，1,154,097 bytes、16 页、源 SHA-256 `bd173c352c759dea6a4128dcc4dda079b1a8102dec7a01f40f96846036ca2478`；型号出现在 5 页，按“型号＋年综合耗电量＋外形尺寸”唯一定位第 14 页，保留 3,768-byte 原始文本，SHA-256 `97c17f2d1bbea79422a82854bb5153503d157f1b9a5f467cbc38cc6fec6dbc96`。HttpCrawler＋unpdf 的成功/缺失 POC、worker/API typecheck 和 `6/6` 定向测试通过；完整 PDF 未持久化。正式 EvidenceItem 因项目缺少 `official_manual` 路线尚未提交。
+- 真实 CNIS RAR/XLSX：公开归档 2,301,639 bytes、14 个条目/13 个 XLSX；目标 2023 工作簿 307,787 bytes。sheet `结果` 中 `A2:G2` 表头与 `MR-457WUSPZE` 唯一 `A479:G479` 行形成 261-byte 原始 JSON；EvidenceRequest `request-7bf21455-54e5-41e5-b93c-ddcc471bb5d9`、SourceObservation `observation-a6d6eebf-1cb3-4c86-a9dc-a336176bcf4b`、EvidenceItem `evidence-3c60c601-cb59-4c99-8fbd-fda7ca6223f6`，内容 SRI `sha256-fdq+uI0tnZSy2qVIXwoarYfaXtq+SsbOH1grUEAEEJM=`、manifest SRI `sha256-r+0CdanrN7slHxzOyGt92JrcRV/T1V09O1bPJ80EcOk=`。完整 RAR/XLSX 只在内存，缺失型号为 typed `evidence_not_found`。
+- 真实海尔整图：官方产品页图片无 Referer 首次为 403；只加入官方来源页 Referer 与标准 Accept 后为 200，内容协商为 88,486-byte WebP、1200×1200、单帧，SHA-256 `90a96450d6c91ba5225cb78145fb3415630fff339f99be6e049d8c7a6f474ff6`。macOS 解码与 Linux x64 glibc 隔离安装均通过；完整图片未持久化，正式 API/UI 未接入。
+- 完整停止并以 Node `v24.19.0` 重启 API/Web 后，API 从 PostgreSQL/CAS 重读同 ID、同 SRI 的四份冰箱 EvidenceItem；新增 CNIS 内容仍包含 `MR-457WUSPZE`、`GB 12021.2-2015` 和 261-byte 原始区域，证明不是进程内假数据。Workbench 桌面 1280px 与 390×844 均显示这些内容；390px 下 document/body scrollWidth 均为 390，无横向溢出，验收后已恢复普通视口。
+- 真实持久化：EvidenceRequest `request-d2ba7c17-c286-4c09-b9ce-f6a1c9e19af7`、SourceObservation `observation-9e5572bd-2230-480f-a0fd-ca91fe78aad6`、EvidenceItem `evidence-1cecd512-13f5-4819-a18b-9f29e20bbd51`；CAS SRI `sha256-xIGdVRp2btCZVcEVIFr0Ry9d42cSe4gAuVcaJtR+Up0=`；assessment `sufficient`。API 重读与桌面/390px Workbench 均显示来源、字节、SRI 和未清洗原始内容；当前页面控制台新日志 0 error/0 warn。
+- 本轮新增定向自动化：CNIS worker、Evidence API 与 PostgreSQL integration 合计 `10/10`；图片整图真实性 PostgreSQL integration `4/4`。
+- 当前 Node 24 全仓验证：全新临时 PostgreSQL 上 `30 files / 114 tests` 全通过，测试库随后精确删除；DBOS 三次模拟失败日志是预期错误路径。六个 workspace typecheck 通过；production build 的 shared/db/workbench/worker/api TypeScript 与 Web Vite 全通过，Web 为 2,305 modules、主 JS 638.10 kB / gzip 189.76 kB，仍有 >500 kB chunk 警告。
+- 首次误用系统 Node 21 跑全仓门时，`execa@10` 因缺少 Node 22+ Set 方法使 6 个 API suite 在收集阶段失败；已执行的 90 项业务测试均通过。没有为错误运行基线修改业务代码或降级依赖，临时库已删除并在 Node 24 全新库重跑转绿。
+- `npm audit --omit=dev` 当前仍为 1 moderate/5 high，涉及 AJV/fast-uri、Fastify/find-my-way、brace-expansion、ws；Fastify 修复是 major 升级，未执行 `audit fix --force`。
+- 开发 API/Web 与 PostgreSQL 保持本机运行，便于用户次日直接查看四份原始冰箱数据；未新建 Codex App Server 常驻子进程。
+
+- Category Interview API 已提供 start/get、POST turn SSE、显式 decision confirm 和 brief confirm；SSE 使用 Fastify 4 兼容的成熟 plugin，事件逐项通过共享 schema。API typecheck 与 config/route 测试 `4/4` 通过。
+- 历史 App Server 样本曾用 `fridge-interview-v1`、`gpt-5.6-terra + medium` 真实执行；该 adapter 已因持久 Session 被删除，只保留为能力审计证据，不能作为当前完成证明。
+- PostgreSQL 新增五张职责分离表和 Drizzle migration `0001_bouncy_kingpin.sql`；全新临时 PostgreSQL 上 migrator `2/2` 与 CategoryInterviewModule 集成 `2/2` 通过。测试证明模型 proposal 不会直接成为 confirmed decision/brief/project，显式决定与任务书确认后才生成项目草稿；中断只保存 partial interrupted message，不提升决定。临时 cluster 已停止并移入废纸篓，未触碰已有数据库。
+- `packages/shared/src/category-interview.ts` 已冻结 Interview Session、规范化 Message、append-only Decision、Unresolved Item、版本化 Brief、单一 owner question runtime output 和 discriminated timeline event；没有把 Codex thread 暴露为业务事实。新增 contract 测试 `3/3` 通过，shared typecheck 通过。
+- 正式 `.agents/skills/interview-product-category` 已按 `grill-with-docs` 重写并通过 `skill-creator` 校验；当前内容 SHA-256 为 `4731f928ac9cbb88203ccb9d7c942dbe18a3347f7aff397713d59340084fbda3`。Skill 不保存消息、决定、未决项或任务书，运行时显式传入 Workbench typed state。
+- R-028 已用隔离 Node `v24.19.0` 原样复跑：安装无 engine 告警、typecheck、Vitest `2/2`、Vite build、桌面与 390px Playwright `2/2` 全通过；bundle 为 424.28 kB / gzip 127.82 kB。由此在 Node 24 基线和已记录包体/退出成本下接受 `@assistant-ui/react@0.15.14`。
+- R-029 TypeScript SDK 代表矩阵证明 `@openai/codex-sdk@0.147.0` 能返回 command execution 等丰富 item 事件、thread resume 和显式 `$skill-name`；真实缺口是无文本 delta，且 AbortSignal 返回后取消探针子进程仍存活。该残留 PID 仅针对 POC 精确终止并复核无残留。
+- R-029 App Server `stdio` 最小例外 POC 完成 initialize、未初始化错误、66 个 delta、typed Skill、interrupt、跨新进程 resume、stdin 正常退出和强杀异常；取消探针无残留。官方 schema 只生成到两个临时目录并删除，未向仓库写入生成代码。
+- R-028 首次 Node 21 隔离安装曾产生 `nanoid@6.0.1` engine 告警；该记录只解释为何切换到已获批准的 Node 24 基线，不能覆盖上述 Node 24 通过结论。尚未写根生产依赖。
+- R-028 `npm run typecheck`、Vitest `2/2`、Vite build 均通过；673 modules，主 JS 424.28 kB / gzip 127.82 kB。
+- R-028 Playwright/Chrome 完整套件 `2/2` 通过：桌面 43.4 秒，390px 9.1 秒；含持久化、流式、立即取消、错误、重试、axe、中文 IME composition、无横向溢出和无外部网络请求。
+- R-028 in-app Browser：真实复核消息刷新恢复、自动滚动、桌面/390px 和控制台；Vite/Playwright 进程均已退出，无孤儿进程。详细命令和失败分类见 `docs/development/pocs/r028/README.md`。
+
+- 2026-08-15 品类采访方向本轮只修改权威文档，尚未新增依赖或功能代码；因此没有新增 typecheck/test/build 或真实浏览器通过证据。下列运行证据来自本轮更早的代码清算/Evidence 验证，不能证明阶段 0I。
+- OpenAI 官方文档复核：App Server 面向富客户端、默认 `stdio`、支持 thread/turn/item/stream/interrupt 和显式 skill input，但官方当前仍把 App Server 命令及 WebSocket 标为 experimental/unsupported for production workloads；Codex TypeScript SDK 支持 start/continue/resume。R-029 已据此增加独立成熟度停止门。
+- R-029 早期无工具最小探针只证明 start/stream/resume；随后上述代表矩阵已经补齐富工具事件、显式 Skill、取消和错误证据，早期从无工具样本外推能力的判断维持作废。
+- R-029 清理：1,008 个 App Server 全量生成文件（133,534 行、3,536,891 字节）、Python `.venv`、两个 Python 探针、requirements 和 Python 专用 fixture 已从工作区移到 `/Users/guojunxi/.Trash/domain-analysis-r029-cleanup-20260816/`；可从废纸篓恢复。生产依赖、正式数据库、公共 interface 和生产 Chat 入口均未改变。
+- 纠错清理当时 R-029 曾收窄到 5 个非安装文件；随后按正确 TypeScript 路径新增代表矩阵和薄 App Server `stdio` POC。当前 POC 文件/行数以工作区实况为准，不沿用清理时快照。
+- `npm run typecheck`：6 个 workspace 全通过。
+- `npm test`（未提供 PostgreSQL）：70 项通过、22 项按环境门跳过；此结果不用于证明数据库能力。
+- 全新临时 PostgreSQL 上 `POSTGRES_DATABASE_URL=... npm test`：23 个文件、92 项全部通过；包含 4 个并发 migrator、Evidence 三项集成、多目标充分性、DBOS 重试/强杀恢复和 API 项目路由。测试中故意模拟的 DBOS 三次失败日志属于预期错误路径。
+- `npm run build`：shared/db/workbench/worker/api TypeScript 与 Web Vite production build 全通过，1655 modules transformed。
+- 真实 API 进程：临时 SQLite＋全新 PostgreSQL 启动成功；`GET /health` 返回 200，`GET /api/product-projects` 返回 200/空列表；已删除旧 `knowledge-review` 路由返回 404。
+- 文档/补丁：`git diff --check` 通过；所有受控代码文件 ≤500 行。最终文档链接与状态检查仍在结束门执行。
+- 临时资源：本轮创建的所有临时 PostgreSQL cluster 和 API 临时 SQLite 均在验证后停止并删除；没有触碰现有数据库。
+- `npm audit --omit=dev`：仍有 6 个生产依赖告警（1 moderate、5 high），涉及 AJV/fast-uri、Fastify/find-my-way、brace-expansion、ws。自动修复包含 Fastify 5 breaking change，本轮未获升级授权且未绕过调研门，因此未执行 `audit fix`；应作为独立安全升级任务调研和验证。
+
+- 2026-08-17 / 京东来源开发方案落盘：新增 `JD-COLLECTION-DESIGN.md`，把用户确认的四类产物、来源数据事实边界、执行顺序、频控/停止/恢复、旧实现处置和 A～E 通过门写入项目；README、PRD、总体技术方案、CONTEXT、REQUIREMENTS-ALIGNMENT、ARCHITECTURE、ROADMAP 和 RESEARCH 同步纠偏。没有修改业务代码、公共 contract、迁移或运行京东页面。架构影响：改变（仅文档候选）；新增京东有界来源数据集位于来源访问和 Evidence 之间，等待用户复核后才允许冻结 contract 或实施。Patch Disposition：保留 typed 状态/授权/身份规则；重写窄 JD 输出和内存批处理；禁止继续把单并发当频控或只保存参数数量。验证仅为 `git diff --check` 和文档引用核对，不冒充代码/真实页面通过。
+- 2026-08-17 / 其他来源与开发库只读审计：当前开发库实际为12个项目行（7 draft、5 ready）、0个 Market Universe、5个 `example.com` 观察和3个 `example.com` EvidenceItem，纠正此前“1个draft且观察/证据全0”的过时进度。九个官网来源只在隔离运行中投影了737个品牌＋厂家型号，entry仅含品牌、型号、来源ID、URL及少量可选身份字段；原始目录/详情未持久化，隔离库已删除。架构影响：澄清；没有修改数据库、业务代码或来源文件。Patch Disposition：保留九源目录 adapter 作为覆盖候选；禁止把其描述为完整来源数据；来源数据层复核通过后再决定重写/复用范围。
+- 2026-08-17 / 商品知识目标与统一补救方案纠偏：用户明确商品知识库必须同时包含商品底层知识和商品品类知识，品牌/系列/型号属于品类知识的市场实例层；京东、官网商品页和评价不能单独证明压缩机、制冷、换热、控温或保鲜等通用原理。`JD-COLLECTION-DESIGN.md` 已合并历史数据合格性审计、官网/监管重采、底层知识补证、京东完整来源数据集和五层完成门；PRD、总体技术方案、REQUIREMENTS-ALIGNMENT、CONTEXT、ARCHITECTURE、ROADMAP 与 RESEARCH R-030 同步记录。架构影响：澄清（尚未修改模块职责或公共 contract）；商品知识资产内容边界及 Factory 输出关系被明确，具体权威来源白名单、质量分级和 contract 仍须 R-030 调研/原型并经人工确认。Patch Disposition：保留安全/typed failure、identity 规则、DBOS/PostgreSQL/CAS/Evidence 基础；历史 737 identity、监管统计和测试数据降级为历史运行/候选证据；重写九源与京东输出、持久化和底层/品类/型号知识关系。本轮没有修改业务代码、数据库或访问外部来源。
+- 2026-08-17 / 阶段 1A 实施 A 启动：用户已授权按开发文档开始开发。R-030 现已核对 NIST、USDA、SAMR、FAO、ASHRAE 与 Copeland 官方资料的证明范围和许可：首个制冷/保鲜原理纵切片候选使用可逐项核权的 NIST Technical Series 与 USDA 职务作品；ASHRAE 明确禁止出版物进入 AI，Copeland 默认仅个人非商业使用，FAO 默认非商业，均未获许可前排除出模型输入/知识包；`GB/T 8059-2025` 与 `GB 12021.2-2025` 已自 2026-06-01 生效，旧 2016/2015 版本不得充当当前基准。R-031 已登记唯一 `SourceDatasetModule` seam、四个跨品类 content kind、幂等/不可变/导出/许可门和冰箱＋电视 TDD 纵切片；按公共 contract 人工确认硬门，当前未写迁移、共享 Schema、Module、API 或 Web。架构影响：澄清；事实源和目标模块不变，公共 interface 候选尚未冻结。Patch Disposition：保留 PostgreSQL/Drizzle、DBOS、CAS、Zod、Evidence/Market Universe；拒绝逐站/逐品类表、`unknown metadata`、整页 CAS 和把来源数据直接冒充 Evidence；旧代码本轮未改。下一步第一条可执行动作：用户确认 R-031 seam 后，先写 `SourceDatasetModule` PostgreSQL integration 红灯测试。
+- 2026-08-17 / 阶段 1A R-031 与 R-032 本地纵切片：用户明确技术 interface、数据结构、依赖和测试策略由工程负责，不再作为产品负责人确认题。R-031 已实现 category/source-neutral `SourceDatasetModule`、四种 strict content kind、独立 authority/claim scope/使用许可、四张 PostgreSQL 表、CAS 附件关系、JSONL/CSV、只读 API 和通用 PC 来源数据页；冰箱与电视同 interface，未新增品类/京东字段或分支。R-032 采用 `p-queue@9.3.3`＋`cockatiel@4.0.0`，本地随机端口 fixture 通过缩放窗口、同域完成后间隔、抖动、批次冷却、首次 429 熔断、取消/最长运行 AbortSignal 与零残留；生产 JD reader 仍为注入式，没有 reader 或显式 `paced_http` policy 时失败关闭。干净临时 PostgreSQL 全仓 `44` 文件通过、`1` 文件按设计跳过，共 `172` 项通过、`1` 项真实模型 acceptance 跳过；六 workspace typecheck 和 production build 通过，Web `2309` modules、主 JS `673.87 kB / gzip 199.45 kB`，保留既有 >500 kB warning。本地 PC 真实表面已查看冰箱与电视记录、原始字段、用途/许可、导出和 `rate_limited / HTTP 429` 失败；没有访问京东。架构影响：改变；新增来源事实层及公共 contract，Workbench PostgreSQL 独占来源事实，DBOS 继续独占执行，ADR-0014 与 ARCHITECTURE 已同步。Patch Disposition：保留安全状态、identity、九源/JD adapter 的访问/解析候选和 PostgreSQL/DBOS/CAS/Evidence 基础；重写来源输出为统一逐条快照并将 JD 访问包入显式频控/熔断；旧窄 adapter 尚未删除，历史 737 仍仅为待重采候选。下一步第一条可执行动作：接通 DBOS 逐对象持久工作项与重启恢复，并用真实 60 秒窗口完成本地频控证据；通过前继续禁止京东探针。
+- 2026-08-17 / R-032 持久执行与真实分钟门：新增 category/source-neutral `SourceCollectionPipelineModule` 及共享 work item/provider result/run contract。DBOS 父/子 workflow 以稳定 ID 逐对象执行，Provider 访问 step 禁止自动重试，快照用工作项 ID 幂等提交；显式 `DBOS.sleep` 保存同域间隔与窗口等待，取消先中止来源 adapter 再关闭来源运行。第一条快照落库后 `SIGKILL` 的双进程验收恢复成功，访问日志为 A/B/C 各一次、三条快照完整且 3 秒等待跨进程保留；真实 60,000ms 本地 HTTP acceptance 运行 `60.029s`，任意一分钟窗口不超过 2 次。当前全仓 `47 files passed / 2 skipped`、`178 passed / 2 skipped`；显式分钟 acceptance 另为 `1/1`；六 workspace typecheck 和 production build 通过，Web `2310` modules、主 JS `675.49 kB / gzip 199.77 kB`，既有 >500 kB warning 保留。没有访问京东。架构影响：澄清；实现了 ADR-0014 已确定的“DBOS 执行、Workbench 来源事实”边界，没有改变事实源，但新增跨模块 typed 执行 contract。Patch Disposition：保留 R-031 事实层和 JD 安全 adapter；新增持久工作项编排；未在旧内存循环上叠恢复逻辑。下一步第一条可执行动作：把 Source Collection workflow 与现有监管 workflow 纳入单一生产 DBOS 组合入口并接注入式 JD reader，再复验取消/恢复；在此之前第 9.1 整体仍未通过，不执行京东探针。
+- 2026-08-17 / R-032 生产组合与跨品类 JD seam：`ProductKnowledgePipelineRuntime` 在同一次 DBOS launch 前注册监管和 Source Collection workflow，组合测试证明两个 Queue 在同一 PostgreSQL runtime 同时完成；生产 API 已换用该组合根，真实启动后 `/health` 和项目列表均为 200。`JdSourceCollectionProvider` 只负责京东页面协议到通用 catalog/ordered record 的转换，不判断品类；电视＋冰箱详情使用同一 adapter 测试，目录保留卡片顺序、自营标记和对象引用。没有 `JdPageReader` 时生产只落 typed `source_abnormal` 并停止，本轮没有访问京东。全新空 PostgreSQL 最终全仓 `49 files passed / 2 skipped`、`182 passed / 2 skipped`；首次复用旧测试库导致采访断言看到历史同名项目，未改测试，在全新库重跑转绿。六 workspace typecheck 和 production build 通过，Web `2310` modules、主 JS `675.51 kB / gzip 199.76 kB`，既有 >500 kB warning 保留。架构影响：澄清；生产 DBOS 生命周期收归一个组合根，事实源与依赖方向不变。Patch Disposition：重写独立 DBOS 启动为可组合 workflow 注册；保留两个模块的独立测试入口；删除了本轮一度新增的客户端 work item 写接口，因为它会让 UI 成为采集计划和许可事实源；Source Dataset HTTP 继续只读，正式启动必须由后续服务端 Planner 从 confirmed brief/board 生成；旧冰箱专用 Market Universe 京东枚举明确降级为兼容路径，尚未删除。下一步第一条可执行动作：实现服务端 Source Collection Planner，并完成真实 JD page reader 的 R-012 验收；之后才允许第 9.1 的 1+3 探针，旧冰箱专用入口退出主流程前不得宣称跨品类整链完成。
+- 2026-08-17 / M1 服务端来源 Planner：新增 `sourceAssignments`，由 confirmed brief 显式拥有“来源入口→路线→Knowledge Need”关系；新任务书缺少入口分配时确认失败，历史任务书保持可读但 Planner 不猜测。`SourceCollectionPlannerModule` 只接收 project ID，确定性生成并持久化 plan/batch/work item，许可未知/禁止和规则缺失保留 typed waiting；API 不接受客户端 work items。冰箱与电视同一 Planner 单测、采访确认负向集成和 Source Dataset 计划幂等通过。架构影响：改变；新增跨模块 typed plan contract 和 brief 来源分配，Workbench/PostgreSQL 仍为唯一事实源，UI/HTTP/Provider 不获得计划所有权。Patch Disposition：删除按同 lane 知识层交集扩大绑定的错误推导；保留 R-031/R-032 Source Dataset、DBOS 与 Provider seam；重写真实 POC 后确认每个来源只绑定其显式 Knowledge Need。
+- 2026-08-17 / M2 权威技术与监管小批次：正式 Category Interview→confirmed brief→Project→Planner→DBOS→Provider Router→Source Dataset 在隔离 PostgreSQL 保存 3 条真实快照；NIST/USDA 为 `document`，中国能效标识 `MR-457WUSPZE` 为保留官方 JSON 原文的 `ordered_record`，两个批次均 succeeded。美的说明书因法律声明禁止未经书面许可的爬虫/下载，计划为 `waiting / local_read_not_allowed` 且零访问；京东同样没有访问。新增 `full_resource / document_excerpt / structured_record_lookup` 通用资源选择，PDF/监管薄 adapter、AbortSignal 取消和未知字段失败关闭；不含冰箱、品牌、SKU、价格字段。全 workspace typecheck、本轮 16 项 Provider/Planner 定向测试、此前 13 项采访/Planner 数据库回归通过；真实隔离库均精确删除。架构影响：改变；扩展 Source Collection 公共 request contract，但事实源和依赖方向不变，ADR-0014、ARCHITECTURE、RESEARCH 已同步。Patch Disposition：保留已验证 Crawlee/unpdf/能效公开查询适配器；历史美的 PDF 降为不可重跑 POC，不以旧成功绕过当前权限；目标 Linux、全仓 test/build、官网完整详情重采仍待后续门。
+- 2026-08-17 / M0 基线、旧补丁和访问硬门：按权威阅读顺序核对 dirty WIP、事实源、模块依赖和历史数据；历史 737 identity 继续降级为隔离运行的目录身份候选，不冒充商品详情或商品知识。JD 真实访问被明确分成工程门、书面许可和现实探针门；本轮只完成工程门，没有发送京东请求。Patch Disposition：删除错误的完成表述和重复事实入口；保留 typed 状态、DBOS/PostgreSQL/CAS/Evidence 基础；后续真实 JD 只能在许可与 1＋3 探针门同时满足后启动。
+- 2026-08-17 / M3 通用来源执行与 JD 安全 seam：通用 Provider Router、JD taxonomy/store/product/review typed 输出、`p-queue@9.3.3` 访问节奏和 `cockatiel@4.0.0` 熔断已接入；电视＋冰箱 fixture 证明同一 JD adapter 无品类分支。DBOS 稳定父/子 workflow、逐对象幂等提交、取消和强杀恢复通过；真实 60 秒本地门证明每分钟最多 2 次且第三次在 `60.029s` 后派发。生产没有已验证 reader 或显式 policy 时失败关闭。本结论只表示京东工程前置门通过，不表示真实 JD reader、探针或数据抓取完成。
+- 2026-08-17 / M4 来源数据到最小 Evidence：新增唯一 `SourceEvidenceModule` bridge；Source Dataset 原始记录不自动成为证据，必须绑定 EvidenceRequest、沿用来源许可并提交精确 locator。Provider 已有 locator 时可确定性提交；无 locator 的长文本必须由 PC 显式选择 TextQuote，不能把整块正文伪装为最小证据。R-034 PC 真实提交 349-byte TextQuote 并在 Evidence 页重读成功。
+- 2026-08-17 / M5 Factory 与 Review：确定性属性转换和模型候选分开；`foundational_concept` 作为跨品类知识目标进入公共 contract，品类/型号知识通过 `subject_ref` 和 typed relation 引用底层概念。模型固定 `gpt-5.3-codex-spark + low`，关闭 Web search 和 fallback，只接收已许可最小证据并只产 `review_required` 候选；人工决定是发布状态唯一事实源。错误简称 `codex-5.3-spark` 及其失败补丁已删除，没有 alias/fallback。R-034 产出 22 条候选（模型 21、确定性 1）、0 conflict、0 unknown 和 3 条关系，全部完成人工审核。
+- 2026-08-17 / M6 SQLite Package 与离线 Runtime：Package Builder 以规范内容计算版本，不使用构建时间；相同输入重建复用同一版本。公开可再分发 Evidence 可携带最小内容，受限或许可未知 Evidence 只携带 locator/hash。Runtime 只读 SQLite＋FTS5 包，支持型号精确、结构化筛选、全文、关系、证据、激活/切换/回滚，不访问 Workbench PostgreSQL、浏览器或模型。R-034 包含 22 状态、4 Evidence、180224 bytes；复制单文件后离线查询通过。
+- 2026-08-17 / M7 电视第二品类真实迁移门：只增加电视 confirmed brief 和 DOE/EPA 来源规则，未修改公共数据库结构、Factory/Review/Package/Runtime interface，也未新增电视/冰箱流程分支。真实链路保存 DOE HTML×2、DOE PDF 页×1、EPA ordered record×1，形成 3 个底层概念、1 个真实型号和 3 条关系；PC Workbench 可见来源、最小证据选择、22 条已审核知识与激活包。Package version `b2bb867cdb10cc9be71a6cddbc30b2645c961b80a7a0037702318e85940e0442`，DB SHA-256 `c5e7379e0c61c2197f23de7c83dd4a415987b7999f5b6e14916330fa1e6552f4`。该门证明系统不是冰箱专用，不等于三品类、多站点、动态页、图片、JD 或目标 Linux/Windows 已通过。
+- 2026-08-17 / M0～M7 Baseline Impact：touched modules 为 Category Interview/Brief、Planner、DBOS Source Collection、Providers、Source Dataset、Evidence bridge、Factory/Review、Package/Runtime、API 和 PC Workbench；owning fact source 分别为 confirmed brief、Workbench PostgreSQL、append-only Review Decision、内容寻址 SQLite 包和 stable pointer。public interface changed：yes；新增 `sourceAssignments`、来源选择/locator、`foundational_concept`、候选关系和 package/runtime 查询 contract。new protocol/adapter/fallback：新增 DOE/EPA/Socrata/JD 薄 adapter，无 fallback。compatibility or legacy path changed：通用项目页不再暴露冰箱专用 Market Universe；历史冰箱 module 未在本轮无授权删除。research/architecture/ADR update required：yes，R-033/R-034、ARCHITECTURE、ADR-0001/0002/0006/0014 已同步。tests and real-surface validation：全仓 test/typecheck/build、R-034 真实来源链、内容重建/复制离线 Runtime、PC Source/Evidence/Factory 页面。
+- 2026-08-17 / M0～M7 Patch Disposition：delete 为错误 `codex-5.3-spark` 简称、通用 workspace 的冰箱专用入口和把整块正文自动提交为 Evidence 的路径；keep 为 PostgreSQL/Drizzle、DBOS、CAS、Crawlee、typed permission/failure、append-only Review 和历史冰箱 module 的非主流程兼容能力；rewrite 为旧 Codex ADR、模型 adapter、Source Dataset→Evidence bridge、Package 许可投影及受并发污染的测试数据命名。保留项分别保护持久事实、恢复、来源隔离、证据审计和历史调用 seam，不在错误补丁上叠 fallback。
+- 2026-08-17 / M0～M7 最终本机验证：Node `v24.12.0`、npm `11.6.2`、隔离 PostgreSQL 上全仓 `63 files passed / 2 skipped`、`222 passed / 2 skipped`；跳过项是显式真实分钟 acceptance 和真实模型采访 acceptance，二者已有独立历史验收，不在默认全仓门重复执行。七个 workspace typecheck 和 production build 全通过；Web 为 2316 modules、主 JS 687.39 kB / gzip 202.13 kB，仅保留既有 >500 kB warning。所有 apps/packages TypeScript/TSX 文件均不超过 500 行；超长模块按采访任务书投影、DBOS 身份、来源持久化、Factory 持久化、Web 业务客户端和测试夹具真实职责拆分，公共导出与行为不变。跨品类硬编码审计在 Runtime、共享知识 contract、Factory/Review/Package 和通用项目页中未发现 refrigerator/冰箱/JD/SKU/price 分支。R-034 PC Workbench 已真实查看来源、Evidence、Factory/Review 和激活包，并提交 349-byte TextQuote。验收后已停止并删除本轮精确临时 PostgreSQL 和 R-034 页面产物目录，进程复核无残留；未触碰仓库数据或其他数据库。架构影响：改变；新增底层概念目标、Source Dataset→Evidence bridge、Factory 模型 port 和 Package/Runtime contract，已同步架构/调研/ADR。当前仍是本机 dirty WIP，未提交推送，不是跨电脑接续点。
+- 2026-08-17 / 工作树异常文件与 POC 提交面清理：逐项审计初始 `227` 个未跟踪文件。`apps/api/data/evidence/**` 的 `16` 个运行时 CAS 文件已原样迁移到根目录忽略区 `data/evidence`，源码树中的 `apps/api/data` 已移除；迁移后仍为 `16` 个文件、`28,978` bytes，cacache 按 `8` 个索引记录逐项完成 SRI 读取与大小校验（内容/manifest 合计 `26,264` bytes）。R-028/R-029 已由生产 Chat Timeline 和 `codex exec --ephemeral` 路径替代，且根 workspace/test/build 从不调用其隔离项目；因此删除两个 POC lockfile、独立 package、构建配置、平行 UI、SDK/App Server 探针和 POC Skill 共 `26` 个文件，只保留两份压缩 README，并纠正仍把 App Server/SDK thread 写成当前候选的产品/工程文档。最终保留 `185` 个未跟踪文件：`90` 个生产代码、`49` 个测试、`10` 个 SQL＋`10` 个 matching snapshot＋journal、`14` 个压缩/仍有效 POC 文档、`7` 个其他文档、`2` 个采访 Skill 文件和 `2` 个根配置；Drizzle journal/SQL/snapshot 为 `10/10/10`，无 missing/orphan。当前“新增行”口径从初始 `61,749` 降为 `54,359`，减少 `7,390` 行；余量主要是生产代码/测试、根 lockfile 与 Drizzle 元数据，不冒充手写业务代码。架构影响：澄清；事实源和生产路径不变，只移除已替代/已拒绝的平行实验入口并落实 Evidence CAS 物理隔离。Patch Disposition：Delete＝源码树错误运行目录与两套无调用方 POC 执行树；Keep＝生产代码、测试、迁移链、根 lockfile和压缩调研证据；Rewrite＝API 路径配置、ignore、R-028/R-029 处置及权威说明。验证：Node `v24.12.0`，相关生产回归 `8/8`、七个 workspace typecheck、production build（2316 modules，保留既有 >500 kB warning）、`git diff --check`、忽略命中和 CAS 自校验通过；未运行京东或其他外部抓取，未提交/推送。
+
+- 2026-08-17 / 跨电脑本地数据库启动门：用户确认两台电脑的 PostgreSQL、Evidence 和知识包运行数据各自留在本地，不做跨电脑迁移，并允许把本地数据库连接账号直接提交到 `.env.example`。API 与本地数据库准备脚本改用 Node 24 官方稳定 `--env-file` 直接读取该文件；DBOS 拒绝省略用户名的连接串，因此删除隐式系统账号尝试，改为显式本地账号 `guojunxi`。`npm run dev` 现在先复用现有 `pg` 检查目标库，缺失时只创建空库，再由既有 Drizzle migrator 创建/升级 schema；不复制、覆盖或合并另一台电脑的数据。全新源码副本在无 `node_modules`、`.env`、数据库和 Evidence 的条件下 `npm ci` 成功，七个 workspace typecheck、production build、全新 PostgreSQL 全仓 `63 files passed / 2 skipped`、`223 passed / 2 skipped`，API `/health` 与 Web 均为 200；临时数据库已精确删除，临时源码副本移入废纸篓，未访问京东或其他外部来源。架构影响：无变化；Workbench PostgreSQL、DBOS schema、Drizzle migration 和本地数据分区不变，只补齐开发启动配置。Patch Disposition：Delete＝DBOS 不接受的无用户名 URL；Keep＝两机本地数据隔离、现有 PostgreSQL/Drizzle/DBOS；Rewrite＝提交的连接串与启动前空库准备。
+
+- 2026-08-17 / 跨电脑交接与 Git 交付门：新增唯一启动入口 `HANDOFF.md`，只记录新电脑恢复、权威阅读顺序、启动验证、当前边界和下一项工作，不复制 roadmap/progress/architecture。用户已授权提交和推送本轮全部必要 WIP；交付结论必须以最终工作区干净、`origin/master...HEAD = 0 0` 和本地/远程 SHA 一致为证。本地 PostgreSQL、Evidence CAS、知识包、Profile、Cookie 和 Codex 登录明确排除。架构影响：无变化；没有改变模块职责、事实源、依赖方向或公共 contract。Patch Disposition：Keep＝全部已验证生产实现、测试、迁移和权威记录；Delete＝本地运行数据及秘密材料不进入提交；Rewrite＝旧的“仅本机、未获提交授权”和已经完成的来源 contract 下一步表述。
+
+## 12. 结束更新模板
 
 ```text
 更新日期：
@@ -411,6 +400,7 @@ R-007 依赖治理已从当前执行顺序移出，未来必须作为独立、�
 新调研或决策状态：
 本轮服务的路线阶段与架构目标：
 本轮架构影响（无变化/澄清/改变）：
+Patch Disposition：
 阻塞和所需人工决定：
 下一步第一条可执行动作：
 实际运行的测试、构建和真实表面验证：

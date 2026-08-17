@@ -10,10 +10,15 @@
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
+    "@assistant-ui/react": "0.15.14",
+    "@domain-analysis/shared": "0.1.0",
+    "@hookform/resolvers": "5.8.0",
     "@tanstack/react-query": "^5.45.0",
+    "eventsource-parser": "4.0.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {}
+    "react-dom": "^18.3.1",
+    "react-hook-form": "7.85.0",
+    "zod": "^3.25.76"
+  }
 }

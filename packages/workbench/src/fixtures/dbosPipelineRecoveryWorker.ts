@@ -8,7 +8,7 @@ import {
 } from "../dbosPipelineModule";
 
 const [mode, runId, materialPath, executionLogPath] = process.argv.slice(2);
-const databaseUrl = process.env.DBOS_SYSTEM_DATABASE_URL;
+const databaseUrl = process.env.POSTGRES_DATABASE_URL;
 const schemaName = process.env.DBOS_TEST_SCHEMA;
 if (!databaseUrl || !schemaName || !mode || !materialPath || !executionLogPath) {
   throw new Error("DBOS recovery worker 参数不完整");

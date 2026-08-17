@@ -3,8 +3,10 @@ dist/
 .env
 .DS_Store
 *.log
-data/*
-!data/.gitkeep
+/data/*
+!/data/.gitkeep
+# npm workspace 会把应用进程 cwd 切到 apps/<name>；任何误落在这里的运行数据都不能进入 Git。
+/apps/*/data/
 coverage/
 .vite/
 storage/

@@ -1,6 +1,7 @@
 ---
-status: accepted
+status: superseded
 date: 2026-08-14
+superseded_by: 0009-unified-postgresql-runtime-store
 ---
 
 # Workbench 业务库保留 SQLite，DBOS 独占 PostgreSQL 执行库

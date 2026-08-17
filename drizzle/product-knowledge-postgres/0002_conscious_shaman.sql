@@ -1,0 +1,1 @@
+ALTER TABLE "workbench"."category_interview_messages" ADD COLUMN "error" text;

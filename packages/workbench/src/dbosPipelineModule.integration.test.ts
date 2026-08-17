@@ -7,10 +7,11 @@ import {
   type PipelineStageHandlers,
 } from "./dbosPipelineModule";
 
-const databaseUrl = process.env.DBOS_SYSTEM_DATABASE_URL;
+const databaseUrl = process.env.POSTGRES_DATABASE_URL;
 const describeWithDbos = databaseUrl ? describe.sequential : describe.skip;
 const calls: Array<{ revision: number; stage: string }> = [];
 let retryShouldFail = true;
+let loginResolved = false;
 let opened: OpenedDbosPipelineModule;
 
 describeWithDbos("DbosPipelineModule integration", () => {
@@ -85,12 +86,33 @@ describeWithDbos("DbosPipelineModule integration", () => {
     expect(calls.filter((call) => call.revision === 3 && call.stage === "produce_candidates"))
       .toHaveLength(4);
   }, 30_000);
+
+  it("runs acquisition again after a login intervention is resolved", async () => {
+    const started = await opened.pipeline.start(startInput(4));
+    const waiting = await waitFor(started.id, (view) => view.lifecycleStatus === "waiting_user");
+    const intervention = waiting.interventions.find((item) => item.status === "open")!;
+    expect(intervention.kind).toBe("login");
+
+    loginResolved = true;
+    await opened.pipeline.command(started.id, {
+      type: "resolve_intervention",
+      interventionId: intervention.id,
+      resolutionId: "jd-login-completed",
+    });
+    const succeeded = await waitFor(started.id, (view) => view.lifecycleStatus === "succeeded");
+
+    expect(succeeded.stages.find((stage) => stage.stage === "acquire")?.attemptCount).toBe(2);
+    expect(calls.filter((call) => call.revision === 4 && call.stage === "acquire")).toHaveLength(2);
+  }, 30_000);
 });
 
 function createStageHandlers(): PipelineStageHandlers {
   return Object.fromEntries(pipelineStages.map((stage) => [stage, async (context) => {
     calls.push({ revision: context.input.projectRevision, stage });
     if (stage === "acquire") await new Promise((resolve) => setTimeout(resolve, 150));
+    if (context.input.projectRevision === 4 && stage === "acquire" && !loginResolved) {
+      return { intervention: { kind: "login", prompt: "请完成京东登录" } };
+    }
     if (context.input.projectRevision === 3 && stage === "produce_candidates" && retryShouldFail) {
       throw new Error("模拟阶段失败");
     }

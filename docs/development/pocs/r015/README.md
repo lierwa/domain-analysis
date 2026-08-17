@@ -1,6 +1,6 @@
 # R-015 知识包与离线查询对照 POC
 
-状态：已通过，SQLite＋FTS5 已接受为 MVP 知识包基线
+状态：历史 POC 已通过；SQLite＋FTS5 方向保留，需用新 EvidenceItem 复核阶段 1C
 目标阶段：1C
 调查日期：2026-08-14
 

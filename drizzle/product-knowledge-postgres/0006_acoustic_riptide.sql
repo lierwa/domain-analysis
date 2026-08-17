@@ -1,0 +1,1 @@
+ALTER TABLE "workbench"."source_snapshots" ALTER COLUMN "content_json" DROP NOT NULL;

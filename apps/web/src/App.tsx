@@ -1,20 +1,11 @@
-import { useState } from "react";
 import { AppShell } from "./components/AppShell";
-import { LibraryPage } from "./pages/LibraryPage";
-import { ReportsPage } from "./pages/ReportsPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { WorkspacePage } from "./pages/WorkspacePage";
+import { ProductProjectWorkspacePage } from "./pages/ProductProjectWorkspacePage";
 
-// WHY: App 只包含新业务页面，旧 Topics/Queries/Sources/Tasks/Content 页面已从导航移除。
+// WHY: 当前主入口只展示已经接上新架构的数据面，避免把旧社媒分析页面误当成商品知识能力。
 export function App() {
-  const [activePage, setActivePage] = useState("workspace");
-
   return (
-    <AppShell activePage={activePage} onPageChange={setActivePage}>
-      {activePage === "workspace" && <WorkspacePage />}
-      {activePage === "library" && <LibraryPage />}
-      {activePage === "reports" && <ReportsPage />}
-      {activePage === "settings" && <SettingsPage />}
+    <AppShell>
+      <ProductProjectWorkspacePage />
     </AppShell>
   );
 }

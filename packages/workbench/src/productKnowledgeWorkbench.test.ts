@@ -1,26 +1,26 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import type { ProductProjectDraftInput } from "@domain-analysis/shared";
 import { describe, expect, it } from "vitest";
 
 import { openProductKnowledgeWorkbench } from "./productKnowledgeWorkbench";
 
-describe("openProductKnowledgeWorkbench", () => {
+const databaseUrl = process.env.POSTGRES_DATABASE_URL;
+const describeWithPostgres = databaseUrl ? describe.sequential : describe.skip;
+
+describeWithPostgres("openProductKnowledgeWorkbench", () => {
   it("migrates a new database and preserves projects across restart", async () => {
-    const databaseUrl = await temporaryDatabaseUrl();
     const first = await openProductKnowledgeWorkbench({
-      databaseUrl,
+      databaseUrl: databaseUrl!,
       productProjectModule: deterministicOptions(),
     });
     const saved = await first.productProjects.saveDraft(createDraft());
-    first.close();
+    await first.close();
 
-    const restarted = await openProductKnowledgeWorkbench({ databaseUrl });
+    const restarted = await openProductKnowledgeWorkbench({ databaseUrl: databaseUrl! });
     expect((await restarted.productProjects.get(saved.project.id))?.project.name)
       .toBe("电视知识项目");
-    restarted.close();
+    await restarted.close();
   });
 });
 
@@ -79,13 +79,9 @@ function createDraft(): ProductProjectDraftInput {
 
 function deterministicOptions() {
   const counters = { project: 0, definition: 0, scope: 0, board: 0 };
+  const idPrefix = `workbench-restart-${randomUUID()}`;
   return {
     now: () => new Date("2026-08-14T04:00:00.000Z"),
-    createId: (kind: keyof typeof counters) => `${kind}-${++counters[kind]}`,
+    createId: (kind: keyof typeof counters) => `${idPrefix}-${kind}-${++counters[kind]}`,
   };
-}
-
-async function temporaryDatabaseUrl() {
-  const directory = await mkdtemp(path.join(tmpdir(), "product-workbench-startup-"));
-  return `file:${path.join(directory, "database.sqlite")}`;
 }

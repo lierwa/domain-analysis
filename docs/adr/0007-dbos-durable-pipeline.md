@@ -23,3 +23,5 @@ MVP 的 Pipeline adapter 使用开源 `@dbos-inc/dbos-sdk`（MIT）承载持久�
 - `workflowID` 由冻结输入身份确定并作为幂等键；网页采集、Codex、文件提交等副作用仍必须按各自业务键保证重试安全，因为 DBOS step 的执行保证是至少一次。
 - DBOS adapter 必须把取消、等待、失败和恢复投影为 Pipeline module 的 typed 状态；应用层不得查询 DBOS 系统表推导业务状态。
 - 如果 PostgreSQL 部署成本或 DBOS 版本升级/恢复原型失败，重新打开本决定；不得退回扩展 `p-queue`。
+- 大批量外部逐项访问不得塞进单个 durable step。监管型号对账采用父 workflow＋DBOS Queue 子 workflow：冻结输入决定父 ID，每个品牌＋厂商型号决定稳定子 ID，Queue 并发为 1；父级只在当前子任务完成后入队下一个，使取消时至多需要停止一个在途子任务；已完成子任务在进程恢复后不重跑，执行中子任务仍按至少一次语义要求来源访问和最终业务写幂等。
+- 父 workflow 只投影 typed 进度并收集结果，全部完成后调用一次 Workbench 业务接口生成新 Market Universe candidate。DBOS 系统表和事件不能成为 Market Universe 的第二事实源，取消/失败也不能留下半版候选。

@@ -116,12 +116,12 @@
 
 ## MUST
 
-- 本地 Workbench、浏览器 Profile、原始资料、模型加工、审核、评测和建包必须遵守产品文档定义的本地边界。
+- 本地 Workbench、浏览器 Profile、临时来源内容、最小证据、模型加工、审核、评测和建包必须遵守产品文档定义的本地边界。
 - 脚本优先使用 Node/TypeScript，不依赖仅单一 shell 可用的命令和语法。
 - 文件路径使用 `path.join` / `path.resolve` 或等价跨平台接口，不手写平台分隔符。
 - 涉及原生模块、预编译包或 optionalDependencies 时，至少验证开发机平台与目标 Linux Runtime 的安装行为；若产品声明支持 Windows，再补 Windows 验证。
 - 新增依赖后必须更新 lockfile，并执行当前环境的安装、类型检查、测试和构建；无法完成的目标平台验证必须明确标注。
-- Cookie、登录凭证、浏览器 Profile、未脱敏原始资料不得进入 Git、日志、知识包或远程上传链路。
+- Cookie、登录凭证、浏览器 Profile、未脱敏临时来源内容和受限证据不得进入 Git、日志、知识包或远程上传链路。
 
 ## MUST NOT
 
@@ -157,11 +157,15 @@
 
 - 产品资料是需求和验收输入，不是详细架构；工程架构必须在现有 `domain-analysis` 仓库上设计，并明确复用、重构、淘汰和新增范围。
 - 权威阅读顺序遵守 `docs/development/README.md`。
-- Provider 只负责来源能力、页面状态识别和原始资料保真，不负责形成最终知识。
+- 新品类必须先通过 Workbench Chat Timeline 采访形成经用户确认的版本化 Category Research Brief，再进入来源访问；现有 ProductProjectForm 只作为任务书/项目草稿的检查修改面，不得保留第二套从零创建事实源。
+- 品类采访只向用户询问必须由负责人决定的取舍；品牌、型号、参数、部件、原理和来源等可调查事实由系统主动调查，不得要求用户先行枚举。
+- 专用品类采访 Skill 只定义采访行为；Workbench 拥有消息、Interview Decision、未决项、confirmed brief 和全部继续上下文，Codex 只做无状态 ephemeral 单轮执行，不拥有产品 thread 或事实源。
+- 阶段 0I 的 Chat Timeline 与 Codex 交互运行时分别以 R-028/R-029 为技术证据；当前生产接受 `assistant-ui` ExternalStoreRuntime 与 `codex exec --ephemeral`，拒绝 App Server thread/SDK thread 作为产品会话路径。MVP 不引入 Pi Agent、agent registry、多 Provider 或自动 fallback，采访 modelId/reasoning 不能自动继承批次知识加工参数。
+- Provider 只负责来源能力、页面状态识别和围绕证据请求交付来源观察/待选证据，不负责形成最终知识，也不得把站点 DOM 规则冒充跨品类知识模型。
 - 数据搜集板块表达 Provider、已确认范围和更新策略的组合，不能与 Provider 混为一个对象。
-- 原始资料必须不可变、可重放、可定位证据；新采集不得覆盖历史快照。
+- 永久资料必须是围绕已确认知识需求保存的最小不可变证据，并能定位、审核和重跑其所支持的候选加工；不要求也不得默认保存整页 HTML、全页截图或完整无关文件。新证据不得覆盖历史证据。
 - 知识加工必须区分确定性转换、模型候选、人工决定、冲突和不确定状态；模型输出不能直接成为已发布事实。
-- Workbench 控制库、原始资料区和知识包必须物理分离；Runtime 不能依赖生产数据库、浏览器、模型或加工 Worker。
+- Workbench 控制库、最小证据区和知识包必须物理分离；Runtime 不能依赖生产数据库、浏览器、模型或加工 Worker。
 - Runtime 通用 interface 不得出现京东、冰箱、商品、SKU、价格等领域固定假设；领域能力由知识包声明。
 - 同一事实必须有单一权威来源；UI、HTTP adapter、Worker 和 Runtime 只能读取、投影或适配，不得各自重新推导状态。
 - 跨模块状态和事件必须使用已校验的 typed contract；`unknown`、metadata、字符串协议只能停留在外部 seam 并立即校验收窄。
@@ -172,8 +176,8 @@
 - 不得把旧 Reddit/X 的 DTO、表、报告或文案直接改名冒充新领域模型。
 - 不得把预留字段、placeholder、测试 fake 或未接线代码描述为已完成能力。
 - 不得使用 UI 文案、错误字符串或轮询结果反推领域状态。
-- 不得把来源选择器、登录逻辑写进知识加工模块。
-- 不得让 Runtime 直接读取 Workbench 数据库或原始资料目录。
+- 不得把来源选择器、登录逻辑写进知识加工模块；不得为未知官网预建逐站 DOM projector。
+- 不得让 Runtime 直接读取 Workbench 数据库或证据目录。
 - 不得在真实纵向验证前建设万能 Provider 插件系统、通用工作流平台或大规模 UI。
 
 ---
@@ -297,7 +301,7 @@ Patch Disposition:
 - 进度项只有在提供测试、构建、真实页面、离线包或人工确认等对应证据后才能标记完成。
 - 聊天上下文、模型记忆、本机未跟踪文件和历史 handoff 都不是跨电脑事实源；跨电脑事实只能来自 Git 中已跟踪并推送的权威文档、代码、测试和可公开 POC。
 - 每次需要切换电脑、正式交付或声明“可在其他设备继续”前，必须确认权威文档与对应实现已经提交、推送，并验证本地与远程 SHA 一致；若当前请求未授权提交或推送，必须明确标记“仅本机，尚未形成跨电脑接续点”并请求授权。
-- 浏览器 Profile、Cookie、认证 Header、Codex 登录材料、未脱敏原始资料和其他本机秘密永远不得为了跨电脑接续而提交。
+- 浏览器 Profile、Cookie、认证 Header、Codex 登录材料、未脱敏临时来源内容、受限证据和其他本机秘密永远不得为了跨电脑接续而提交。
 - `docs/development/AGENT-SCORECARD.md` 是用户积分反馈的单一账本；新上下文开始时必须读取其中当前积分和最近记录。
 - 只有用户明确说“扣分”时才扣 1 分；必须记录被扣原因、错误根因、立即纠正和防复发措施。
 - 只有用户明确说“加分”时才加 0.5 分；必须记录做对的事情和对应证据。

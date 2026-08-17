@@ -6,6 +6,7 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "scripts": {
+    "ensure:local": "node --env-file=../../.env.example --import=tsx scripts/ensure-local-database.ts",
     "build": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "generate": "drizzle-kit generate",
@@ -14,6 +15,10 @@
   "dependencies": {
     "@domain-analysis/shared": "0.1.0",
     "@libsql/client": "0.17.4",
-    "drizzle-orm": "0.45.2"
+    "drizzle-orm": "0.45.2",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "8.21.0"
   }
 }

@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import { DBOS, type WorkflowStatus } from "@dbos-inc/dbos-sdk";
 import {
   pipelineCommandSchema,
@@ -12,8 +10,15 @@ import {
   type PipelineRunView,
   type StartPipelineInput,
 } from "@domain-analysis/shared";
-import canonicalize from "canonicalize";
 import { z } from "zod";
+
+import {
+  commandId,
+  hashCanonical,
+  interventionTopic,
+  pipelineIdentity,
+  stageId,
+} from "./dbosPipelineIdentity";
 
 type PipelineStage = (typeof pipelineStages)[number];
 type InterventionKind = PipelineRunView["interventions"][number]["kind"];
@@ -36,6 +41,7 @@ const stageOutcomeSchema = z.object({
 export interface PipelineStageContext {
   runId: string;
   stageExecutionId: string;
+  stageInvocation: number;
   input: FrozenPipelineInput;
   requestedBy: string;
   abortSignal?: AbortSignal;
@@ -175,7 +181,7 @@ async function commandPipeline(
     throw new DbosPipelineError("invalid_state", "只有失败阶段可以重试");
   }
   const steps = await DBOS.listWorkflowSteps(runId);
-  const failedStep = steps?.find((item) => item.name === `pipeline:${stage.stage}`);
+  const failedStep = steps?.filter((item) => item.name?.startsWith(`pipeline:${stage.stage}`)).at(-1);
   if (!failedStep) throw new DbosPipelineError("invalid_state", "DBOS 中不存在对应失败步骤");
   const forkId = `${runId}:retry:${hashCanonical({
     stageExecutionId: stage.id,
@@ -217,11 +223,21 @@ async function executePipeline(
     view = await waitIfPaused(view);
     view = transitionStage(view, stage, "running", await workflowTimestamp());
     await publishView(view);
+    let stageInvocation = 0;
     try {
-      const execution = await runStage(options, stage, view, input);
-      view = setAttemptCount(view, stage, execution.attemptCount);
-      if (execution.outcome.intervention) {
-        view = await waitForIntervention(view, stage, execution.outcome.intervention);
+      while (true) {
+        const execution = await runStage(options, stage, view, input, stageInvocation);
+        view = addAttemptCount(view, stage, execution.attemptCount);
+        if (!execution.outcome.intervention) break;
+        view = await waitForIntervention(
+          view,
+          stage,
+          execution.outcome.intervention,
+          stageInvocation,
+        );
+        if (!requiresStageResume(execution.outcome.intervention.kind)) break;
+        // WHY：登录/验证只恢复外部访问条件，不能把未完成采集直接标为成功；新 durable step 重跑阶段。
+        stageInvocation += 1;
       }
       view = transitionStage(view, stage, "succeeded", await workflowTimestamp());
       await publishView(view);
@@ -243,11 +259,13 @@ async function runStage(
   stage: PipelineStage,
   view: PipelineRunView,
   input: StartPipelineInput,
+  stageInvocation: number,
 ) {
   return DBOS.runStep(async () => {
     const outcome = await options.stageHandlers[stage]({
       runId: view.id,
       stageExecutionId: stageId(view.id, stage),
+      stageInvocation,
       input: input.input,
       requestedBy: input.requestedBy,
       abortSignal: DBOS.stepStatus?.timeoutSignal,
@@ -257,7 +275,9 @@ async function runStage(
       attemptCount: DBOS.stepStatus?.currentAttempt ?? 1,
     };
   }, {
-    name: `pipeline:${stage}`,
+    name: stageInvocation === 0
+      ? `pipeline:${stage}`
+      : `pipeline:${stage}:after-intervention:${stageInvocation}`,
     retriesAllowed: true,
     maxAttempts: options.maxStepAttempts ?? 3,
     intervalSeconds: options.retryIntervalSeconds ?? 1,
@@ -294,9 +314,10 @@ async function waitForIntervention(
   view: PipelineRunView,
   stage: PipelineStage,
   intervention: { kind: InterventionKind; prompt: string },
+  sequence: number,
 ) {
   const now = await workflowTimestamp();
-  const id = `${stageId(view.id, stage)}:intervention`;
+  const id = `${stageId(view.id, stage)}:intervention:${sequence + 1}`;
   const waiting = pipelineRunViewSchema.parse({
     ...view,
     lifecycleStatus: "waiting_user",
@@ -374,11 +395,17 @@ function transitionStage(
   });
 }
 
-function setAttemptCount(view: PipelineRunView, stage: PipelineStage, attemptCount: number) {
+function addAttemptCount(view: PipelineRunView, stage: PipelineStage, attemptCount: number) {
   return {
     ...view,
-    stages: view.stages.map((item) => item.stage === stage ? { ...item, attemptCount } : item),
+    stages: view.stages.map((item) => item.stage === stage
+      ? { ...item, attemptCount: item.attemptCount + attemptCount }
+      : item),
   };
+}
+
+function requiresStageResume(kind: InterventionKind) {
+  return kind === "login" || kind === "verification";
 }
 
 function failStage(
@@ -466,28 +493,6 @@ function requireLifecycle(view: PipelineRunView, allowed: string[], command: str
   if (!allowed.includes(view.lifecycleStatus)) {
     throw new DbosPipelineError("invalid_state", `${view.lifecycleStatus} 状态不能执行 ${command}`);
   }
-}
-
-function pipelineIdentity(input: FrozenPipelineInput) {
-  return `pipeline-${hashCanonical(input)}`;
-}
-
-function commandId(runId: string, command: PipelineCommand) {
-  return `command-${hashCanonical({ runId, command })}`;
-}
-
-function hashCanonical(value: unknown) {
-  const serialized = canonicalize(value);
-  if (serialized === undefined) throw new Error("RFC 8785 无法序列化流水线身份");
-  return createHash("sha256").update(serialized).digest("hex");
-}
-
-function stageId(runId: string, stage: PipelineStage) {
-  return `${runId}:${stage}`;
-}
-
-function interventionTopic(interventionId: string) {
-  return `pipeline-intervention:${interventionId}`;
 }
 
 async function workflowTimestamp() {

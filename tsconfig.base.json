@@ -19,6 +19,7 @@
       "@domain-analysis/shared": ["packages/shared/src/index.ts"],
       "@domain-analysis/db": ["packages/db/src/index.ts"],
       "@domain-analysis/worker": ["packages/worker/src/index.ts"]
+      ,"@domain-analysis/knowledge-runtime": ["packages/runtime/src/index.ts"]
     }
   }
 }

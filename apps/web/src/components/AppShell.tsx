@@ -1,78 +1,20 @@
-import { BookOpenText, Database, FileText, LayoutDashboard, Settings } from "lucide-react";
+import { BookOpenText, FolderKanban } from "lucide-react";
 import type { ReactNode } from "react";
 
-// WHY: 导航只保留业务实体入口，移除 Topics/Queries/Sources/Tasks/Content 工程配置页面。
-const navItems = [
-  { key: "workspace", label: "Workspace", icon: LayoutDashboard },
-  { key: "library", label: "Library", icon: Database },
-  { key: "reports", label: "Reports", icon: FileText },
-  { key: "settings", label: "Settings", icon: Settings }
-];
-
-interface AppShellProps {
-  activePage: string;
-  onPageChange: (page: string) => void;
-  children: ReactNode;
-}
-
-export function AppShell({ activePage, onPageChange, children }: AppShellProps) {
+export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen bg-surface text-ink">
-      <header className="sticky top-0 z-20 border-b border-line bg-surface/95 px-4 py-3 backdrop-blur md:hidden">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <BookOpenText className="h-5 w-5 shrink-0" aria-hidden="true" />
-            <span className="truncate text-sm font-semibold">Social Intelligence</span>
+    <div className="min-h-dvh bg-surface text-ink">
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded focus:bg-ink focus:px-4 focus:py-2 focus:text-surface">跳到主要内容</a>
+      <header className="border-b border-line bg-panel">
+        <div className="mx-auto flex min-h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-ink text-surface"><BookOpenText className="h-5 w-5" aria-hidden="true" /></span>
+            <div className="min-w-0"><div className="truncate text-sm font-semibold">Agent Knowledge Workbench</div><div className="text-xs text-muted">商品知识生产</div></div>
           </div>
-          <select
-            className="max-w-[160px] rounded border border-line bg-panel px-2 py-1 text-sm"
-            value={activePage}
-            onChange={(event) => onPageChange(event.target.value)}
-            aria-label="Navigate"
-          >
-            {navItems.map((item) => (
-              <option key={item.key} value={item.key}>
-                {item.label}
-              </option>
-            ))}
-          </select>
+          <div className="hidden min-h-11 items-center gap-2 rounded-lg bg-surface px-3 text-sm font-medium sm:flex"><FolderKanban className="h-4 w-4" aria-hidden="true" />知识项目</div>
         </div>
       </header>
-
-      <div className="mx-auto flex max-w-[1440px]">
-        <aside className="sticky top-0 hidden h-screen w-56 shrink-0 border-r border-line bg-panel px-3 py-4 md:block">
-          <div className="mb-6 flex items-center gap-2 px-2">
-            <BookOpenText className="h-5 w-5" aria-hidden="true" />
-            <div>
-              <div className="text-sm font-semibold">Social Intelligence</div>
-              <div className="text-xs text-muted">Analysis Platform</div>
-            </div>
-          </div>
-          <nav className="space-y-1">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = activePage === item.key;
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => onPageChange(item.key)}
-                  className={[
-                    "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition",
-                    isActive
-                      ? "bg-ink text-surface"
-                      : "text-muted hover:bg-surface hover:text-ink"
-                  ].join(" ")}
-                >
-                  <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </nav>
-        </aside>
-        <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 lg:px-8">{children}</main>
-      </div>
+      <main id="main-content" className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</main>
     </div>
   );
 }

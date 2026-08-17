@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import type {
   CategoryDefinitionVersion,
@@ -7,6 +7,7 @@ import type {
   ConfirmedScopeVersion,
   ProductKnowledgeProject,
   ProductProjectDraftInput,
+  ProductProjectView,
 } from "@domain-analysis/shared";
 import {
   categoryDefinitionVersionSchema,
@@ -23,17 +24,12 @@ import {
   confirmedScopeVersions,
   productKnowledgeProjects,
 } from "@domain-analysis/db";
-import canonicalize from "canonicalize";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
-export interface ProductProjectView {
-  project: ProductKnowledgeProject;
-  categoryDefinition: CategoryDefinitionVersion;
-  confirmedScope: ConfirmedScopeVersion;
-  collectionBoard: CollectionBoardVersion;
-}
+import { contentHash } from "./contentHash";
 
 export interface ProductProjectModule {
+  list(): Promise<ProductKnowledgeProject[]>;
   saveDraft(input: ProductProjectDraftInput): Promise<ProductProjectView>;
   confirm(projectId: string, expectedRevision: number): Promise<ConfirmedProjectSnapshot>;
   get(projectId: string): Promise<ProductProjectView | null>;
@@ -61,10 +57,17 @@ export function createProductProjectModule(
   const createId = options.createId ?? ((kind) => `${kind}-${randomUUID()}`);
 
   return {
+    list: () => listProjects(db),
     saveDraft: (input) => saveDraft(db, input, now, createId),
     confirm: (projectId, revision) => confirm(db, projectId, revision, now),
     get: (projectId) => loadView(db, projectId),
   };
+}
+
+async function listProjects(db: ProductKnowledgeDb) {
+  const projects = await db.select().from(productKnowledgeProjects)
+    .orderBy(desc(productKnowledgeProjects.updatedAt));
+  return projects.map(normalizeProject);
 }
 
 async function saveDraft(
@@ -191,10 +194,12 @@ async function loadView(db: ProductKnowledgeDb, projectId: string): Promise<Prod
   };
 }
 
-function normalizeVersionMetadata<T extends { confirmedAt: string | null }>(metadata: T) {
-  const { confirmedAt, ...rest } = metadata;
-  // WHY：数据库以 null 表示空值，业务契约以可选字段表示，差异只在持久化边界消化。
-  return confirmedAt ? { ...rest, confirmedAt } : rest;
+function normalizeVersionMetadata<T extends { createdAt: string; confirmedAt: string | null }>(metadata: T) {
+  const { createdAt, confirmedAt, ...rest } = metadata;
+  // WHY：PostgreSQL 保留时区语义，但返回格式受会话时区影响；领域 contract 统一输出 UTC ISO。
+  return confirmedAt
+    ? { ...rest, createdAt: normalizeTimestamp(createdAt), confirmedAt: normalizeTimestamp(confirmedAt) }
+    : { ...rest, createdAt: normalizeTimestamp(createdAt) };
 }
 
 function buildDraftView(
@@ -217,16 +222,16 @@ function buildDraftView(
     categoryDefinition: {
       id: definitionId, projectId, categoryCode: input.categoryDefinition.categoryCode,
       label: input.categoryDefinition.label, market: input.market, version: revision, status: "draft",
-      ...categoryContent, contentHash: hashContent({ ...categoryContent, market: input.market }), createdAt: timestamp,
+      ...categoryContent, contentHash: contentHash({ ...categoryContent, market: input.market }), createdAt: timestamp,
     },
     confirmedScope: {
       id: scopeId, projectId, categoryDefinitionVersionId: definitionId, market: input.market,
       version: revision, status: "draft", ...input.confirmedScope,
-      contentHash: hashContent(input.confirmedScope), createdAt: timestamp,
+      contentHash: contentHash(input.confirmedScope), createdAt: timestamp,
     },
     collectionBoard: {
       id: boardId, projectId, confirmedScopeVersionId: scopeId, version: revision, status: "draft",
-      ...input.collectionBoard, contentHash: hashContent(input.collectionBoard), createdAt: timestamp,
+      ...input.collectionBoard, contentHash: contentHash(input.collectionBoard), createdAt: timestamp,
     },
   };
 }
@@ -238,13 +243,6 @@ function validateExistingProject(
   if (input.projectId && !existing) throw new ProductProjectError("not_found", `项目不存在：${input.projectId}`);
   if (existing?.status === "archived") throw new ProductProjectError("archived", "归档项目不能保存草稿");
   if (existing && existing.revision !== input.expectedRevision) throw revisionConflict(existing.id);
-}
-
-function hashContent(value: unknown) {
-  // WHY：RFC 8785 规范化后再哈希，字段顺序不同但语义相同的输入会得到同一内容指纹。
-  const serialized = canonicalize(value);
-  if (serialized === undefined) throw new Error("RFC 8785 不能序列化该草稿");
-  return createHash("sha256").update(serialized).digest("hex");
 }
 
 function pickCategoryContent(input: ProductProjectDraftInput["categoryDefinition"]) {
@@ -268,9 +266,22 @@ function toBoardRow(board: CollectionBoardVersion) {
 }
 
 async function findProject(db: ProductKnowledgeDb, projectId: string) {
-  return db.query.productKnowledgeProjects.findFirst({
+  const project = await db.query.productKnowledgeProjects.findFirst({
     where: eq(productKnowledgeProjects.id, projectId),
   });
+  return project ? normalizeProject(project) : undefined;
+}
+
+function normalizeProject(project: typeof productKnowledgeProjects.$inferSelect) {
+  return productKnowledgeProjectSchema.parse({
+    ...project,
+    createdAt: normalizeTimestamp(project.createdAt),
+    updatedAt: normalizeTimestamp(project.updatedAt),
+  });
+}
+
+function normalizeTimestamp(value: string) {
+  return new Date(value).toISOString();
 }
 
 async function supersedeDraftVersions(transaction: Parameters<Parameters<ProductKnowledgeDb["transaction"]>[0]>[0], projectId: string) {

@@ -1,4 +1,4 @@
-import { HttpCrawler } from "crawlee";
+import { HttpCrawler } from "@crawlee/http";
 import {
   buildKeywordQuery,
   conservativeHttpCrawlerOptions,

@@ -1,0 +1,1 @@
+ALTER TABLE "workbench"."category_interview_sessions" DROP COLUMN "codex_thread_id";

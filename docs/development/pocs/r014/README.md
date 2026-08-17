@@ -1,8 +1,10 @@
 # R-014 混乱资料加工与证据化候选知识 POC
 
-状态：隔离 POC 已通过，阶段 1B contract 可接受
+状态：历史隔离 POC；局部候选/审核不变量可复用，阶段 1B 已重新打开
 目标阶段：1B
 调查日期：2026-08-14
+
+> 2026-08-15：旧输入中的整页 HTML、`sanitized` projector、不可变快照 contract 和图片模型用法不再是目标架构。保留本文件仅用于证明 PDF/XLSX 解码、确定性单位、候选/冲突/unknown、evidence ID 校验和人工发布门曾被隔离验证；它不能证明新 EvidenceItem contract 或阶段 1B 通过。
 
 ## 1. 简单说明
 
