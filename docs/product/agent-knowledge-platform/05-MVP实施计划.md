@@ -33,7 +33,7 @@ MVP 不是先搭一个“万能平台”，也不是给冰箱定制一套系统�
 - 完整线上部署不属于本轮 MVP。
 - 用户只在批次级确认知识范围、证据政策、例外和发布；不逐字段排网页。人工频次由真实样本中 `unknown/conflict/insufficient` 比例实测，未测前不得承诺固定次数。
 - 品类启动从 Workbench Chat Timeline 开始；专用品类采访 Skill 一次一问，现有完整表单只负责回顾和修改结果。
-- 交互式采访已接受 `assistant-ui` ExternalStoreRuntime＋官方稳定 `codex exec --ephemeral`；Workbench 拥有全部继续上下文。批次候选加工同样通过窄用途 ephemeral CLI adapter 执行，不使用 App Server/SDK thread。首版不引入 Pi Agent，技术接受状态以 R-028/R-029 为准。
+- 交互式采访已接受 `assistant-ui` ExternalStoreRuntime＋锁定版本的 App Server `stdio`，每轮使用 `thread/start(ephemeral:true)`；Workbench 拥有全部继续上下文，不使用 resume 或持久 Codex thread。批次候选加工的历史边界仍由 ADR-0001 单独约束，当前阶段不恢复该代码。首版不引入 Pi Agent，技术接受状态以 R-028/R-029 为准。
 
 ## 3. 预计工作量
 
@@ -59,7 +59,7 @@ MVP 不是先搭一个“万能平台”，也不是给冰箱定制一套系统�
 ### 主要工作
 
 - 在当前 React/Vite/Tailwind Web 中验证 `assistant-ui` primitives 和 ExternalStoreRuntime，不接 Assistant Cloud；
-- 在本地后端以 `codex exec --ephemeral --json --output-schema` 验证无状态单轮、typed 事件、取消、错误、显式 Skill、搜索完成门和全局 Session 零新增；
+- 在本地后端以锁定版本的 App Server `stdio` 验证 `thread/start(ephemeral:true)`、官方 commentary delta、服务端 final JSON 校验、typed 事件、取消、错误、显式 Skill、搜索完成门和全局 Session 零新增；
 - 创建仓库专用 `interview-product-category` Skill，规定一次一问、主动调查、推荐理由、完成判断和任务书输出；
 - 建立采访会话、标准化消息、Interview Decision、未决事项和 Category Research Brief 的 typed contract 与单一事实源；
 - 将任务书确认结果投影为 Product Project 草稿；现有大表单只负责检查和修改；
@@ -71,8 +71,8 @@ MVP 不是先搭一个“万能平台”，也不是给冰箱定制一套系统�
 - 模型建议不能直接成为决定，只有用户确认生成追加式 Interview Decision 和 confirmed brief；
 - Browser、Workbench、Codex 执行、Skill 和表单没有重复事实源；
 - 不引入 Pi、模型 registry、跨 Provider fallback、自写 JSONL/进程管理或 Assistant Cloud；
-- UI 或 ephemeral CLI adapter 若不能满足本地、React 18、恢复、typed stream、取消、Session 隔离和退出成本，必须重新打开 R-028/R-029 调研，不在失败原型上叠 wrapper。
-- 旧 App Server/SDK thread 路径已因全局 Session 污染和成熟度边界拒绝；除非官方能力或产品约束变化，不得重启该路径。
+- UI 或 ephemeral App Server adapter 若不能满足本地、React 18、恢复、typed stream、取消、Session 隔离和退出成本，必须重新打开 R-028/R-029 调研，不在失败原型上叠 wrapper。
+- 持久 App Server/SDK thread 与 resume 路径已因全局 Session 污染和双事实源边界拒绝；生产只允许 R-029 已验收的 `thread/start(ephemeral:true)` 单轮路径。
 
 ### 阶段产物
 

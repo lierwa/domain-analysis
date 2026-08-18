@@ -1,6 +1,7 @@
 ---
 status: accepted
 date: 2026-08-15
+amended: 2026-08-18
 ---
 
 # 新品类先经聊天采访形成已确认调研任务书
@@ -23,7 +24,7 @@ date: 2026-08-15
 ## 技术候选边界
 
 - Chat Timeline 使用已通过 R-028 并接入生产的 `assistant-ui` primitives＋ExternalStoreRuntime，不使用 Assistant Cloud；消息和业务状态仍完全归 Workbench。
-- Codex 执行使用官方稳定 `codex exec --ephemeral --json --output-schema`；浏览器只连接项目 typed streaming HTTP。adapter 每轮无状态运行、显式加载 Skill，并在成功、失败和取消时清理临时 schema/输出。
+- Codex 执行使用锁定版本的官方 App Server `stdio`；每轮只启动 `thread/start(ephemeral:true)`，不 resume、不持久化产品 thread。浏览器只连接项目 typed streaming HTTP；adapter 将官方 commentary delta 投影为 `assistant.delta`，final answer 在服务端通过领域 Zod contract 后才持久化。
 - MVP 不引入 Pi Agent、agent registry、多 Provider 或自动 fallback。`opencode-dev` 的 Host 事实源/私有 Agent adapter 边界作为架构参照，但其多 Provider、工具循环和 compaction 需求不属于本项目当前职责，因此不复制整套 Pi runtime。
 - 采访 modelId 和 reasoning effort 必须用真实采访样本评测；不能继承 ADR-0001 的批次 `gpt-5.3-codex-spark + low`。
 
@@ -31,6 +32,6 @@ date: 2026-08-15
 
 - ROADMAP 在来源访问前新增阶段 0I；阶段 1A 只接受 confirmed Category Research Brief 生成的冻结输入。
 - UI、HTTP adapter 和 Codex adapter 只能读取、投影或适配 Workbench 事实，不得从消息文案重新推导采访状态。
-- 当前接受产品流程、事实归属、`assistant-ui` Chat 投影和无 Session 的 ephemeral exec adapter；采访 Skill 行为与真实 Workbench 端到端仍须分别通过后续停止门。
+- 当前接受产品流程、事实归属、`assistant-ui` Chat 投影和无持久 Session 的 ephemeral App Server adapter；采访 Skill 行为与真实 Workbench 端到端仍须分别通过后续停止门。
 - 第一条真实纵切片必须从“开启冰箱品类”开始，覆盖一次一问、主动调查、中断恢复、决定确认后自动推进、任务书确认、项目草稿和 PC 浏览器验收。
-- `codex exec --json` 的 `web_search` item 只证明 Agent 本轮实际使用了搜索能力；最终任务书仍须由 strict contract 校验六类调查事实与真实来源引用，二者缺一不可。
+- App Server 的 `webSearch` item 只证明 Agent 本轮实际使用了搜索能力；最终任务书仍须由领域 contract 校验调查事实与真实来源引用，二者缺一不可。

@@ -11,16 +11,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@domain-analysis/db": "0.1.0",
     "@domain-analysis/shared": "0.1.0",
     "@domain-analysis/workbench": "0.1.0",
-    "@domain-analysis/worker": "0.1.0",
     "@fastify/cors": "^9.0.1",
-    "ajv": "^8.17.1",
     "fastify": "^4.28.1",
     "fastify-sse-v2": "4.2.2",
-    "mnemonist": "^0.40.4",
-    "process-warning": "^3.0.0",
     "zod": "^3.23.8"
   }
 }

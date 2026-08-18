@@ -1,5 +1,6 @@
 import {
   AssistantRuntimeProvider,
+  AuiIf,
   ComposerPrimitive,
   ErrorPrimitive,
   MessagePrimitive,
@@ -9,45 +10,133 @@ import {
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
 import type {
+  CaptureTask,
   CategoryInterviewView,
   InterviewTimelineEvent,
+  InterviewTurnActivity,
   InterviewTurnRequest,
   NormalizedInterviewMessage,
-  ProductProjectView,
 } from "@domain-analysis/shared";
-import { Check } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, Square } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
-  confirmCategoryResearchBrief,
+  confirmCaptureTaskDraft,
   confirmInterviewDecision,
   fetchCategoryInterview,
-  fetchCategoryInterviews,
   startCategoryInterview,
   streamCategoryInterviewTurn,
 } from "../lib/api";
+import {
+  CaptureTaskDraftCard,
+  InterviewActivityPanel,
+  InterviewDecisionCard,
+} from "./CategoryInterviewTurnPanels";
+import {
+  completeInterviewActivities,
+  failInterviewActivities,
+  mergeInterviewActivity,
+} from "./interviewActivityModel";
 
 type UiMessage = NormalizedInterviewMessage;
 type InterviewTurnIntent =
   | Omit<Extract<InterviewTurnRequest, { trigger: "user_message" }>, "expectedRevision">
   | Omit<Extract<InterviewTurnRequest, { trigger: "decision_confirmed" }>, "expectedRevision">;
-const ACTIVE_SESSION_KEY = "domain-analysis.active-category-interview";
+export const ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY = "domain-analysis.active-category-interview";
 
 export function CategoryInterviewTimeline({
-  onProjectCreated,
+  onTaskCreated,
+  initialSessionId,
 }: {
-  onProjectCreated: (project: ProductProjectView) => void;
+  onTaskCreated: (task: CaptureTask) => void;
+  initialSessionId?: string;
 }) {
-  const store = useInterviewStore();
+  const store = useInterviewStore(initialSessionId);
   const turns = useInterviewTurnRunner(store);
   const { view, messages, setView, setMessages } = store;
-  const { isRunning, actionError, retryTurn, setActionError, run, onNew, onCancel } = turns;
+  const {
+    activities,
+    elapsedSeconds,
+    isRunning,
+    actionError,
+    retryTurn,
+    setActionError,
+    run,
+    onNew,
+    onCancel,
+  } = turns;
+  const confirmations = useInterviewConfirmations({
+    view, setView, setMessages, setActionError, run, onTaskCreated,
+  });
 
-  async function confirmDecision(decisionId: string) {
+  const proposed = view?.decisions.filter((decision) => decision.status === "proposed"
+    && !view.decisions.some((candidate) => candidate.supersedesDecisionId === decision.id)) ?? [];
+  const draftTask = [...(view?.taskDrafts ?? [])].reverse().find((draft) => draft.status === "draft");
+
+  return (
+    <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-line bg-panel p-3 sm:p-5" aria-label="抓取任务对话">
+      <InterviewThread
+        key={view?.session.id ?? "new-interview"}
+        messages={messages}
+        isRunning={isRunning}
+        onNew={onNew}
+        onCancel={onCancel}
+      >
+        <InterviewActivityPanel
+          activities={activities}
+          elapsedSeconds={elapsedSeconds}
+          isRunning={isRunning}
+        />
+        {actionError && (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger" role="alert">
+            <span>{actionError}</span>
+            {retryTurn && <button type="button" className="button-secondary" onClick={() => void run(retryTurn)}>重试本轮</button>}
+          </div>
+        )}
+        {proposed.map((decision) => (
+          <InterviewDecisionCard
+            key={decision.id}
+            decision={decision}
+            disabled={isRunning || confirmations.confirmingDecisionId === decision.id}
+            onConfirm={(selection) => void confirmations.confirmDecision(decision.id, selection)}
+          />
+        ))}
+        {draftTask && (
+          <CaptureTaskDraftCard
+            draft={draftTask}
+            onContinue={focusComposer}
+            onConfirm={() => void confirmations.confirmTaskDraft(draftTask.id)}
+          />
+        )}
+      </InterviewThread>
+    </section>
+  );
+}
+
+function useInterviewConfirmations({
+  view,
+  setView,
+  setMessages,
+  setActionError,
+  run,
+  onTaskCreated,
+}: {
+  view: CategoryInterviewView | undefined;
+  setView: React.Dispatch<React.SetStateAction<CategoryInterviewView | undefined>>;
+  setMessages: React.Dispatch<React.SetStateAction<UiMessage[]>>;
+  setActionError: React.Dispatch<React.SetStateAction<string | undefined>>;
+  run: (intent: InterviewTurnIntent, confirmedView?: CategoryInterviewView) => Promise<void>;
+  onTaskCreated: (task: CaptureTask) => void;
+}) {
+  const [confirmingDecisionId, setConfirmingDecisionId] = useState<string>();
+  async function confirmDecision(decisionId: string, selection: string) {
     if (!view) return;
     setActionError(undefined);
+    setConfirmingDecisionId(decisionId);
     try {
-      const next = await confirmInterviewDecision(view.session.id, decisionId, view.session.revision);
+      const next = await confirmInterviewDecision(
+        view.session.id, decisionId, selection, view.session.revision,
+      );
       setView(next);
       setMessages(next.messages);
       const confirmed = next.decisions.find((decision) => decision.status === "confirmed"
@@ -57,80 +146,43 @@ export function CategoryInterviewTimeline({
       await run({ trigger: "decision_confirmed", decisionId: confirmed.id }, next);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "决定确认失败");
+    } finally {
+      setConfirmingDecisionId(undefined);
     }
   }
-
-  async function confirmBrief(briefId: string) {
+  async function confirmTaskDraft(draftId: string) {
     if (!view) return;
     setActionError(undefined);
     try {
-      const result = await confirmCategoryResearchBrief(view.session.id, briefId, view.session.revision);
-      setView(result.item.interview);
-      setMessages(result.item.interview.messages);
-      onProjectCreated(result.item.project);
+      const result = await confirmCaptureTaskDraft(view.session.id, draftId, view.session.revision);
+      setView(result.interview);
+      setMessages(result.interview.messages);
+      onTaskCreated(result.task);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "任务书确认失败");
+      setActionError(error instanceof Error ? error.message : "抓取任务确认失败");
     }
   }
-
-  const proposed = view?.decisions.filter((decision) => decision.status === "proposed"
-    && !view.decisions.some((candidate) => candidate.supersedesDecisionId === decision.id)) ?? [];
-  const draftBrief = [...(view?.briefs ?? [])].reverse().find((brief) => brief.status === "draft");
-
-  return (
-    <section className="rounded-xl border border-line bg-panel p-3 sm:p-5" aria-label="品类采访对话">
-      <InterviewThread
-        key={view?.session.id ?? "new-interview"}
-        messages={messages}
-        isRunning={isRunning}
-        onNew={onNew}
-        onCancel={onCancel}
-      />
-
-      {actionError && (
-        <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger" role="alert">
-          <span>{actionError}</span>
-          {retryTurn && <button type="button" className="button-secondary" onClick={() => void run(retryTurn)}>重试本轮</button>}
-        </div>
-      )}
-      {proposed.map((decision) => (
-        <div key={decision.id} className="mt-3 rounded-lg border border-line bg-surface p-4">
-          <p className="text-xs font-medium text-muted">待确认取舍</p><p className="mt-1 text-sm font-medium">{decision.selection}</p><p className="mt-2 text-xs leading-5 text-muted">{decision.rationale}</p>
-          <button type="button" className="button-primary mt-3" onClick={() => void confirmDecision(decision.id)}><Check className="h-4 w-4" aria-hidden="true" />显式确认</button>
-        </div>
-      ))}
-      {draftBrief && (
-        <div className="mt-3 rounded-lg border border-line bg-surface p-4">
-          <p className="text-xs font-medium text-muted">调研任务书 v{draftBrief.version}</p><p className="mt-1 text-sm font-medium">{draftBrief.content.objective}</p><p className="mt-2 text-xs leading-5 text-muted">{draftBrief.content.acceptanceCriteria.join("；")}</p>
-          <button type="button" className="button-primary mt-3" onClick={() => void confirmBrief(draftBrief.id)}><Check className="h-4 w-4" aria-hidden="true" />确认任务书并生成项目草稿</button>
-        </div>
-      )}
-    </section>
-  );
+  return { confirmingDecisionId, confirmDecision, confirmTaskDraft };
 }
 
-function useInterviewStore() {
+function useInterviewStore(initialSessionId?: string) {
   const [view, setView] = useState<CategoryInterviewView>();
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const viewRef = useRef(view);
   viewRef.current = view;
   useEffect(() => {
-    const sessionId = window.localStorage.getItem(ACTIVE_SESSION_KEY);
-    const load = sessionId
-      ? fetchCategoryInterview(sessionId)
-      : fetchCategoryInterviews().then((sessions) => {
-        const latest = sessions[0];
-        if (!latest) return undefined;
-        window.localStorage.setItem(ACTIVE_SESSION_KEY, latest.id);
-        return fetchCategoryInterview(latest.id);
-      });
-    // WHY：localStorage 只保存可丢弃的导航指针；找不到时仍从 Workbench 恢复最新会话。
+    const sessionId = initialSessionId
+      ?? window.localStorage.getItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY);
+    if (!sessionId) return;
+    const load = fetchCategoryInterview(sessionId);
+    // WHY：localStorage 只保存可丢弃的导航指针；任务修订仍从 Workbench 的 session 恢复全部事实。
     void load.then((next) => {
       if (!next) return;
+      window.localStorage.setItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY, next.session.id);
       setView(next);
       setMessages(next.messages);
-    }).catch(() => window.localStorage.removeItem(ACTIVE_SESSION_KEY));
-  }, []);
+    }).catch(() => window.localStorage.removeItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY));
+  }, [initialSessionId]);
   const refresh = useCallback(async (sessionId: string) => {
     const next = await fetchCategoryInterview(sessionId);
     setView(next);
@@ -143,6 +195,8 @@ function useInterviewStore() {
 function useInterviewTurnRunner(store: ReturnType<typeof useInterviewStore>) {
   const { setView, setMessages, viewRef, refresh } = store;
   const [isRunning, setIsRunning] = useState(false);
+  const [activities, setActivities] = useState<InterviewTurnActivity[]>([]);
+  const [startedAt, setStartedAt] = useState<number>();
   const [actionError, setActionError] = useState<string>();
   const [retryTurn, setRetryTurn] = useState<InterviewTurnIntent>();
   const abortRef = useRef<AbortController>();
@@ -150,11 +204,18 @@ function useInterviewTurnRunner(store: ReturnType<typeof useInterviewStore>) {
   const run = useCallback(async (intent: InterviewTurnIntent, confirmedView?: CategoryInterviewView) => {
     setActionError(undefined);
     setRetryTurn(undefined);
+    setActivities([{
+      id: "client-connecting",
+      kind: "agent",
+      label: "连接本机 Codex",
+      status: "running",
+    }]);
+    setStartedAt(Date.now());
     let current = confirmedView ?? viewRef.current;
     if (!current) {
       if (intent.trigger !== "user_message") throw new Error("采访尚未创建，不能执行确认后继续");
       current = await startCategoryInterview(intent.text);
-      window.localStorage.setItem(ACTIVE_SESSION_KEY, current.session.id);
+      window.localStorage.setItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY, current.session.id);
       setView(current);
     }
     const assistantId = appendPendingMessages(intent, current, setMessages);
@@ -169,7 +230,7 @@ function useInterviewTurnRunner(store: ReturnType<typeof useInterviewStore>) {
         { ...intent, expectedRevision: current.session.revision } as InterviewTurnRequest,
         (event) => {
           if (event.type === "turn.failed" || event.type === "stream.failed") turnError = event.error;
-          applyTimelineEvent(event, assistantId, setMessages, setView);
+          applyTimelineEvent(event, assistantId, setMessages, setView, setActivities);
         },
         abortController.signal,
       );
@@ -183,9 +244,7 @@ function useInterviewTurnRunner(store: ReturnType<typeof useInterviewStore>) {
         const message = error instanceof Error ? error.message : "采访失败，请重试。";
         setActionError(message);
         setRetryTurn(intent);
-        setMessages((items) => items.map((item) => item.id === assistantId
-          ? { ...item, text: item.text || message, deliveryStatus: "failed" }
-          : item));
+        setActivities((items) => failInterviewActivities(items));
       }
     } finally {
       setIsRunning(false);
@@ -203,9 +262,37 @@ function useInterviewTurnRunner(store: ReturnType<typeof useInterviewStore>) {
       setActionError("本轮已停止，可以从同一动作重试。");
     }
     abortRef.current?.abort();
+    setActivities((items) => failInterviewActivities(items));
     setIsRunning(false);
   }, []);
-  return { isRunning, actionError, retryTurn, setActionError, run, onNew, onCancel };
+  const elapsedSeconds = useElapsedSeconds(startedAt, isRunning);
+  return {
+    activities,
+    elapsedSeconds,
+    isRunning,
+    actionError,
+    retryTurn,
+    setActionError,
+    run,
+    onNew,
+    onCancel,
+  };
+}
+
+function useElapsedSeconds(startedAt: number | undefined, isRunning: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!startedAt) return;
+    setNow(Date.now());
+    if (!isRunning) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isRunning, startedAt]);
+  return startedAt ? Math.max(0, Math.floor((now - startedAt) / 1000)) : 0;
+}
+
+function focusComposer() {
+  document.getElementById("category-interview-input")?.focus();
 }
 
 function appendPendingMessages(
@@ -220,12 +307,7 @@ function appendPendingMessages(
       role: "user", text: intent.text, deliveryStatus: "completed", createdAt,
     }]);
   }
-  const assistantId = `pending-assistant-${Date.now()}`;
-  setMessages((items) => [...items, {
-    id: assistantId, sessionId: view.session.id, sequence: items.length + 1,
-    role: "assistant", text: "", deliveryStatus: "completed", createdAt,
-  }]);
-  return assistantId;
+  return `pending-assistant-${Date.now()}`;
 }
 
 function InterviewThread({
@@ -233,11 +315,13 @@ function InterviewThread({
   isRunning,
   onNew,
   onCancel,
+  children,
 }: {
   messages: UiMessage[];
   isRunning: boolean;
   onNew: (message: AppendMessage) => Promise<void>;
   onCancel: () => Promise<void>;
+  children: ReactNode;
 }) {
   const runtime = useExternalStoreRuntime({
     messages,
@@ -249,17 +333,27 @@ function InterviewThread({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <ThreadPrimitive.Root className="overflow-hidden rounded-lg border border-line bg-surface">
-        <ThreadPrimitive.Viewport className="flex max-h-[620px] min-h-[360px] flex-col overflow-y-auto p-3 sm:p-5">
-          {messages.length === 0 && <div className="m-auto max-w-md text-center text-sm leading-6 text-muted">采访消息、决定和任务书都由 Workbench 保存；Codex 每轮无持久 Session 执行。</div>}
+      <ThreadPrimitive.Root className="flex min-h-0 flex-1 overflow-hidden rounded-lg border border-line bg-surface">
+        <ThreadPrimitive.Viewport className="relative flex min-h-0 flex-1 flex-col overflow-y-auto p-3 sm:p-5">
+          {messages.length === 0 && <div className="m-auto max-w-md text-center text-sm leading-6 text-muted">直接输入你要抓的商品，例如“抓冰箱”。系统会调查内容范围和候选来源，只向你询问必须决定的取舍。</div>}
           <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
-          <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mt-auto bg-surface pt-4">
-            <ThreadPrimitive.ScrollToBottom className="button-secondary mb-2 w-full sm:w-auto">滚动到底部</ThreadPrimitive.ScrollToBottom>
-            <ComposerPrimitive.Root className="flex flex-col gap-2 rounded-lg border border-line bg-panel p-2 sm:flex-row">
-              <label htmlFor="category-interview-input" className="sr-only">输入品类目标或采访回答</label>
-              <ComposerPrimitive.Input id="category-interview-input" className="min-h-12 min-w-0 flex-1 resize-none bg-transparent px-2 py-3 text-base outline-none sm:text-sm" placeholder="例如：开启冰箱品类" aria-label="输入品类目标或采访回答" />
-              <ComposerPrimitive.Send className="button-primary">发送</ComposerPrimitive.Send>
-              <ComposerPrimitive.Cancel className="button-secondary">停止</ComposerPrimitive.Cancel>
+          {children}
+          <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mt-auto bg-surface/95 pt-4 backdrop-blur">
+            <ThreadPrimitive.ScrollToBottom className="icon-button absolute bottom-[84px] right-3 border border-line bg-surface shadow-sm" aria-label="滚动到底部">
+              <ArrowDown className="h-4 w-4" aria-hidden="true" />
+            </ThreadPrimitive.ScrollToBottom>
+            <ComposerPrimitive.Root className="flex items-end gap-2 rounded-xl border border-line bg-panel p-2 shadow-sm focus-within:border-ink">
+              <label htmlFor="category-interview-input" className="sr-only">输入抓取需求或回答</label>
+              <ComposerPrimitive.Input id="category-interview-input" className="max-h-36 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-2 py-3 text-base outline-none sm:text-sm" placeholder="例如：抓冰箱" aria-label="输入抓取需求或回答" />
+              {isRunning ? (
+                <ComposerPrimitive.Cancel className="icon-button shrink-0 bg-ink text-surface hover:bg-ink/85" aria-label="停止生成">
+                  <Square className="h-4 w-4 fill-current" aria-hidden="true" />
+                </ComposerPrimitive.Cancel>
+              ) : (
+                <ComposerPrimitive.Send className="icon-button shrink-0 bg-ink text-surface hover:bg-ink/85" aria-label="发送消息">
+                  <ArrowUp className="h-5 w-5" aria-hidden="true" />
+                </ComposerPrimitive.Send>
+              )}
             </ComposerPrimitive.Root>
           </ThreadPrimitive.ViewportFooter>
         </ThreadPrimitive.Viewport>
@@ -289,10 +383,13 @@ function UserMessage() {
 
 function AssistantMessage() {
   return (
-    <MessagePrimitive.Root className="my-2 max-w-[92%] rounded-2xl rounded-bl-sm bg-panel px-4 py-3 text-sm leading-6">
-      <p className="mb-1 text-xs font-medium text-muted">采访 Agent</p><MessagePrimitive.Parts />
-      <ErrorPrimitive.Root className="mt-2 text-xs text-danger"><ErrorPrimitive.Message /></ErrorPrimitive.Root>
-    </MessagePrimitive.Root>
+    <AuiIf condition={(state) => (state.message?.content.length ?? 0) > 0}>
+      <MessagePrimitive.Root className="my-2 max-w-[92%] rounded-2xl rounded-bl-sm bg-panel px-4 py-3 text-sm leading-6">
+        <p className="mb-1 text-xs font-medium text-muted">抓取规划 Agent</p>
+        <span aria-live="polite"><MessagePrimitive.Parts /></span>
+        <ErrorPrimitive.Root className="mt-2 text-xs text-danger empty:hidden"><ErrorPrimitive.Message /></ErrorPrimitive.Root>
+      </MessagePrimitive.Root>
+    </AuiIf>
   );
 }
 
@@ -308,12 +405,16 @@ function applyTimelineEvent(
   assistantId: string,
   setMessages: React.Dispatch<React.SetStateAction<UiMessage[]>>,
   setView: React.Dispatch<React.SetStateAction<CategoryInterviewView | undefined>>,
+  setActivities: React.Dispatch<React.SetStateAction<InterviewTurnActivity[]>>,
 ) {
   if (event.type === "assistant.delta") {
-    setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, text: item.text + event.delta } : item));
+    setMessages((items) => appendAssistantDelta(items, assistantId, event));
+  }
+  if (event.type === "turn.activity") {
+    setActivities((items) => mergeInterviewActivity(items, event.activity));
   }
   if (event.type === "assistant.message.completed") {
-    setMessages((items) => items.map((item) => item.id === assistantId ? event.message : item));
+    setMessages((items) => replaceOrAppendAssistant(items, assistantId, event.message));
   }
   if (event.type === "interview.state.changed") {
     setView((current) => current ? {
@@ -322,11 +423,42 @@ function applyTimelineEvent(
     } : current);
   }
   if (event.type === "turn.interrupted") {
-    setMessages((items) => items.map((item) => item.id === assistantId ? { ...item, deliveryStatus: "interrupted" } : item));
+    setActivities((items) => failInterviewActivities(items));
   }
   if (event.type === "turn.failed" || event.type === "stream.failed") {
-    setMessages((items) => items.map((item) => item.id === assistantId
-      ? { ...item, text: item.text || event.error, deliveryStatus: "failed" }
-      : item));
+    setActivities((items) => failInterviewActivities(items));
   }
+  if (event.type === "turn.completed") {
+    setActivities((items) => completeInterviewActivities(items));
+  }
+}
+
+function appendAssistantDelta(
+  items: UiMessage[],
+  assistantId: string,
+  event: Extract<InterviewTimelineEvent, { type: "assistant.delta" }>,
+): UiMessage[] {
+  const existing = items.find((item) => item.id === assistantId);
+  if (existing) return items.map((item) => item.id === assistantId
+    ? { ...item, text: item.text + event.delta }
+    : item);
+  return [...items, {
+    id: assistantId,
+    sessionId: event.sessionId,
+    sequence: items.length + 1,
+    role: "assistant" as const,
+    text: event.delta,
+    deliveryStatus: "completed" as const,
+    createdAt: new Date().toISOString(),
+  }];
+}
+
+function replaceOrAppendAssistant(
+  items: UiMessage[],
+  assistantId: string,
+  message: NormalizedInterviewMessage,
+) {
+  return items.some((item) => item.id === assistantId)
+    ? items.map((item) => item.id === assistantId ? message : item)
+    : [...items, message];
 }

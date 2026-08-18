@@ -1,7 +1,7 @@
 interface:
-  display_name: "品类调研采访"
-  short_description: "像 grill-with-docs 一样逐项追问并形成可确认任务书"
-  default_prompt: "使用 $interview-product-category 开启冰箱品类采访，先调查可查事实，再一次只问一个负责人取舍。"
+  display_name: "商品抓取任务"
+  short_description: "主动调查范围和来源，形成可确认的抓取任务草稿"
+  default_prompt: "使用 $interview-product-category 新建一个冰箱数据抓取任务。"
 
 policy:
   allow_implicit_invocation: false

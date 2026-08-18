@@ -1,4 +1,0 @@
-claim_id,model_id,knowledge_layer,claim_status,evidence_ref,captured_at,conflict_visible
-claim:haier-bcd-500:volume,model:haier:bcd-500,specification,source_fact,evidence:haier:bcd-500:manual:p12,2026-08-14T01:00:00Z,false
-claim:haier-bcd-500:installation-clearance,model:haier:bcd-500,applicability,deterministic_transform,evidence:haier:bcd-500:manual:p18,2026-08-14T01:00:00Z,false
-claim:haier-bcd-500:noise-tradeoff,model:haier:bcd-500,tradeoff,human_confirmed,evidence:haier:bcd-500:manual:p22,2026-08-14T01:00:00Z,true

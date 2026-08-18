@@ -1,50 +1,28 @@
 import {
+  captureTaskSchema,
   categoryInterviewViewSchema,
-  evidenceItemSchema,
-  interviewTurnRequestSchema,
   interviewTimelineEventSchema,
-  knowledgeFactoryBatchViewSchema,
-  knowledgePackageDescriptorSchema,
-  knowledgeReviewDecisionSchema,
-  marketUniverseVersionSchema,
-  projectEvidenceRequestViewSchema,
-  regulatoryReconciliationRunSchema,
+  interviewTurnRequestSchema,
   sourceCollectionRunSchema,
-  sourceCollectionRunViewSchema,
+  sourceDatasetRunViewSchema,
+  type CaptureTask,
   type CategoryInterviewView,
   type InterviewSession,
-  ConfirmedProjectSnapshot,
   type InterviewTimelineEvent,
   type InterviewTurnRequest,
-  type KnowledgeFactoryBatchView,
-  type KnowledgePackageDescriptor,
-  type KnowledgeReviewDecision,
-  type KnowledgeReviewDecisionDraft,
-  type ReviewedKnowledgeEntry,
-  type MarketUniverseVersion,
-  ProductKnowledgeProject,
-  ProductProjectDraftInput,
-  ProductProjectView,
-  type ProjectEvidenceRequestView,
-  type RegulatoryReconciliationRun,
   type SourceCollectionRun,
-  type SourceCollectionRunView,
-  type SourceEvidenceSelection,
+  type SourceDatasetRunView,
 } from "@domain-analysis/shared";
 import { createParser } from "eventsource-parser";
+
 import { apiErrorFromResponse, request } from "./apiClient";
 
-export * from "./analysisApi";
-export { ApiError, buildQueryString } from "./apiClient";
+export { ApiError } from "./apiClient";
 
-// WHY: API client 只暴露业务接口，避免 UI 依赖服务端内部模块。
-
-// ─── Product Knowledge Projects ──────────────────────────────────────────────
-
-export async function startCategoryInterview(categoryHint: string): Promise<CategoryInterviewView> {
-  const data = await request<{ item: CategoryInterviewView }>("/api/category-interviews", {
+export async function startCategoryInterview(initialRequest: string): Promise<CategoryInterviewView> {
+  const data = await request<{ item: unknown }>("/api/category-interviews", {
     method: "POST",
-    body: JSON.stringify({ categoryHint }),
+    body: JSON.stringify({ initialRequest }),
   });
   return categoryInterviewViewSchema.parse(data.item);
 }
@@ -55,33 +33,43 @@ export async function fetchCategoryInterviews(): Promise<InterviewSession[]> {
 }
 
 export async function fetchCategoryInterview(sessionId: string): Promise<CategoryInterviewView> {
-  const data = await request<{ item: CategoryInterviewView }>(`/api/category-interviews/${sessionId}`);
+  const data = await request<{ item: unknown }>(`/api/category-interviews/${sessionId}`);
   return categoryInterviewViewSchema.parse(data.item);
 }
 
 export async function confirmInterviewDecision(
   sessionId: string,
   decisionId: string,
+  selection: string,
   expectedRevision: number,
-): Promise<CategoryInterviewView> {
-  const data = await request<{ item: CategoryInterviewView }>(
+) {
+  const data = await request<{ item: unknown }>(
     `/api/category-interviews/${sessionId}/decisions/${decisionId}/confirm`,
-    { method: "POST", body: JSON.stringify({ expectedRevision }) },
+    { method: "POST", body: JSON.stringify({ expectedRevision, selection }) },
   );
   return categoryInterviewViewSchema.parse(data.item);
 }
 
-export async function confirmCategoryResearchBrief(
+export async function fetchCaptureTaskInterview(taskId: string): Promise<CategoryInterviewView> {
+  const data = await request<{ item: unknown }>(
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/interview`,
+  );
+  return categoryInterviewViewSchema.parse(data.item);
+}
+
+export async function confirmCaptureTaskDraft(
   sessionId: string,
-  briefId: string,
+  draftId: string,
   expectedRevision: number,
 ) {
-  return request<{
-    item: { interview: CategoryInterviewView; brief: { id: string }; project: ProductProjectView };
-  }>(`/api/category-interviews/${sessionId}/briefs/${briefId}/confirm`, {
-    method: "POST",
-    body: JSON.stringify({ expectedRevision }),
-  });
+  const data = await request<{ item: { interview: unknown; task: unknown } }>(
+    `/api/category-interviews/${sessionId}/task-drafts/${draftId}/confirm`,
+    { method: "POST", body: JSON.stringify({ expectedRevision }) },
+  );
+  return {
+    interview: categoryInterviewViewSchema.parse(data.item.interview),
+    task: captureTaskSchema.parse(data.item.task),
+  };
 }
 
 export async function streamCategoryInterviewTurn(
@@ -110,247 +98,30 @@ export async function streamCategoryInterviewTurn(
   parser.feed(decoder.decode());
 }
 
-export async function fetchProductProjects(): Promise<ProductKnowledgeProject[]> {
-  const data = await request<{ items: ProductKnowledgeProject[] }>("/api/product-projects");
-  return data.items;
+export async function fetchCaptureTasks(): Promise<CaptureTask[]> {
+  const data = await request<{ items: unknown[] }>("/api/capture-tasks");
+  return captureTaskSchema.array().parse(data.items);
 }
 
-export async function fetchProductProject(projectId: string): Promise<ProductProjectView> {
-  const data = await request<{ item: ProductProjectView }>(`/api/product-projects/${projectId}`);
-  return data.item;
+export async function fetchCaptureTask(taskId: string): Promise<CaptureTask> {
+  const data = await request<{ item: unknown }>(`/api/capture-tasks/${encodeURIComponent(taskId)}`);
+  return captureTaskSchema.parse(data.item);
 }
 
-export async function saveProductProjectDraft(
-  input: ProductProjectDraftInput
-): Promise<ProductProjectView> {
-  const data = await request<{ item: ProductProjectView }>("/api/product-projects/draft", {
-    method: "PUT",
-    body: JSON.stringify(input)
-  });
-  return data.item;
-}
-
-export async function confirmProductProject(
-  projectId: string,
-  expectedRevision: number
-): Promise<ConfirmedProjectSnapshot> {
-  const data = await request<{ item: ConfirmedProjectSnapshot }>(
-    `/api/product-projects/${projectId}/confirm`,
-    { method: "POST", body: JSON.stringify({ expectedRevision }) }
-  );
-  return data.item;
-}
-
-export async function fetchProjectEvidence(
-  projectId: string,
-): Promise<ProjectEvidenceRequestView[]> {
-  const data = await request<{ items: unknown[] }>(`/api/product-projects/${projectId}/evidence`);
-  return projectEvidenceRequestViewSchema.array().parse(data.items);
-}
-
-export async function fetchSourceCollectionRuns(
-  projectId: string,
-): Promise<SourceCollectionRun[]> {
+export async function fetchSourceCollectionRuns(taskId: string): Promise<SourceCollectionRun[]> {
   const data = await request<{ items: unknown[] }>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/source-runs`,
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs`,
   );
   return sourceCollectionRunSchema.array().parse(data.items);
 }
 
-export async function startSourceCollection(projectId: string): Promise<void> {
-  // WHY：客户端只提交项目身份；来源、许可和知识目的必须由已确认任务书及服务端 Planner 决定。
-  await request<unknown>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/source-collection-runs`,
-    { method: "POST", body: JSON.stringify({}) },
-  );
-}
-
-export async function fetchSourceCollectionRun(
-  projectId: string,
-  runId: string,
-): Promise<SourceCollectionRunView> {
+export async function fetchSourceCollectionRun(taskId: string, runId: string): Promise<SourceDatasetRunView> {
   const data = await request<{ item: unknown }>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/source-runs/${encodeURIComponent(runId)}`,
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs/${encodeURIComponent(runId)}`,
   );
-  return sourceCollectionRunViewSchema.parse(data.item);
+  return sourceDatasetRunViewSchema.parse(data.item);
 }
 
-export function sourceRunExportUrl(
-  projectId: string,
-  runId: string,
-  format: "jsonl" | "csv",
-) {
-  const project = encodeURIComponent(projectId);
-  const run = encodeURIComponent(runId);
-  return `/api/product-projects/${project}/source-runs/${run}/export?format=${format}`;
-}
-
-export async function materializeSourceEvidence(
-  projectId: string,
-  snapshotId: string,
-  requestId: string,
-  selection: SourceEvidenceSelection,
-) {
-  const data = await request<{ item: unknown }>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/source-snapshots/${encodeURIComponent(snapshotId)}/evidence`,
-    { method: "POST", body: JSON.stringify({ requestId, selection }) },
-  );
-  return evidenceItemSchema.parse(data.item);
-}
-
-export async function fetchKnowledgeBatches(projectId: string): Promise<KnowledgeFactoryBatchView[]> {
-  const data = await request<{ items: unknown[] }>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/knowledge-batches`,
-  );
-  return knowledgeFactoryBatchViewSchema.array().parse(data.items);
-}
-
-export async function runKnowledgeFactory(input: {
-  projectId: string;
-  categoryDefinitionVersionId: string;
-  recipeVersion: string;
-  evidenceRequestIds: string[];
-}): Promise<KnowledgeFactoryBatchView> {
-  const { projectId, ...body } = input;
-  const data = await request<{ item: unknown }>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/knowledge-batches`,
-    { method: "POST", body: JSON.stringify(body) },
-  );
-  return knowledgeFactoryBatchViewSchema.parse(data.item);
-}
-
-export async function fetchKnowledgeBatch(projectId: string, batchId: string): Promise<{
-  item: KnowledgeFactoryBatchView;
-  decisions: KnowledgeReviewDecision[];
-}> {
-  const data = await request<{ item: unknown; decisions: unknown[] }>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/knowledge-batches/${encodeURIComponent(batchId)}`,
-  );
-  return {
-    item: knowledgeFactoryBatchViewSchema.parse(data.item),
-    decisions: knowledgeReviewDecisionSchema.array().parse(data.decisions),
-  };
-}
-
-export async function submitKnowledgeReview(
-  batchId: string,
-  input: Omit<KnowledgeReviewDecisionDraft, "batchId">,
-): Promise<KnowledgeReviewDecision> {
-  const data = await request<{ item: unknown }>(
-    `/api/knowledge-batches/${encodeURIComponent(batchId)}/reviews`,
-    { method: "POST", body: JSON.stringify(input) },
-  );
-  return knowledgeReviewDecisionSchema.parse(data.item);
-}
-
-export async function fetchReviewedKnowledge(projectId: string): Promise<ReviewedKnowledgeEntry[]> {
-  const data = await request<{ items: ReviewedKnowledgeEntry[] }>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/reviewed-knowledge`,
-  );
-  return data.items;
-}
-
-export async function fetchKnowledgePackages(projectId: string): Promise<{
-  items: KnowledgePackageDescriptor[];
-  active: KnowledgePackageDescriptor | null;
-}> {
-  const data = await request<{ items: unknown[]; active: unknown }>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/knowledge-packages`,
-  );
-  return {
-    items: knowledgePackageDescriptorSchema.array().parse(data.items),
-    active: data.active ? knowledgePackageDescriptorSchema.parse(data.active) : null,
-  };
-}
-
-export async function buildKnowledgePackage(projectId: string) {
-  const data = await request<{ item: unknown }>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/knowledge-packages`,
-    { method: "POST" },
-  );
-  return knowledgePackageDescriptorSchema.parse(data.item);
-}
-
-export async function activateKnowledgePackage(projectId: string, versionHash: string) {
-  const data = await request<{ item: unknown }>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/knowledge-packages/${encodeURIComponent(versionHash)}/activate`,
-    { method: "POST" },
-  );
-  return knowledgePackageDescriptorSchema.parse(data.item);
-}
-
-export async function rollbackKnowledgePackage(projectId: string) {
-  const data = await request<{ item: unknown }>(
-    `/api/product-projects/${encodeURIComponent(projectId)}/knowledge-packages/rollback`,
-    { method: "POST" },
-  );
-  return knowledgePackageDescriptorSchema.parse(data.item);
-}
-
-export async function fetchMarketUniverse(projectId: string): Promise<MarketUniverseVersion | null> {
-  const data = await request<{ item: unknown }>(`/api/product-projects/${projectId}/market-universe`);
-  return data.item ? marketUniverseVersionSchema.parse(data.item) : null;
-}
-
-export async function refreshMarketUniverse(projectId: string): Promise<MarketUniverseVersion> {
-  const data = await request<{ item: unknown }>(
-    `/api/product-projects/${projectId}/market-universe/refresh`,
-    { method: "POST" },
-  );
-  return marketUniverseVersionSchema.parse(data.item);
-}
-
-export async function confirmMarketUniverse(
-  projectId: string,
-  expectedVersion: number,
-  expectedContentHash: string,
-): Promise<MarketUniverseVersion> {
-  const data = await request<{ item: unknown }>(
-    `/api/product-projects/${projectId}/market-universe/confirm`,
-    {
-      method: "POST",
-      body: JSON.stringify({ expectedVersion, expectedContentHash }),
-    },
-  );
-  return marketUniverseVersionSchema.parse(data.item);
-}
-
-export async function startRegulatoryReconciliation(
-  projectId: string,
-): Promise<RegulatoryReconciliationRun> {
-  const data = await request<{ item: unknown }>(
-    `/api/product-projects/${projectId}/market-universe/regulatory-reconciliations`,
-    { method: "POST" },
-  );
-  return regulatoryReconciliationRunSchema.parse(data.item);
-}
-
-export async function fetchLatestRegulatoryReconciliation(
-  projectId: string,
-): Promise<RegulatoryReconciliationRun | null> {
-  const data = await request<{ item: unknown }>(
-    `/api/product-projects/${projectId}/market-universe/regulatory-reconciliations`,
-  );
-  return data.item ? regulatoryReconciliationRunSchema.parse(data.item) : null;
-}
-
-export async function fetchRegulatoryReconciliation(
-  projectId: string,
-  runId: string,
-): Promise<RegulatoryReconciliationRun> {
-  const data = await request<{ item: unknown }>(
-    `/api/product-projects/${projectId}/market-universe/regulatory-reconciliations/${runId}`,
-  );
-  return regulatoryReconciliationRunSchema.parse(data.item);
-}
-
-export async function cancelRegulatoryReconciliation(
-  projectId: string,
-  runId: string,
-): Promise<RegulatoryReconciliationRun> {
-  const data = await request<{ item: unknown }>(
-    `/api/product-projects/${projectId}/market-universe/regulatory-reconciliations/${runId}/cancel`,
-    { method: "POST" },
-  );
-  return regulatoryReconciliationRunSchema.parse(data.item);
+export function sourceRunExportUrl(taskId: string, runId: string, format: "jsonl" | "csv") {
+  return `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs/${encodeURIComponent(runId)}/export?format=${format}`;
 }

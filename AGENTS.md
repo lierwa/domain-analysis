@@ -160,7 +160,7 @@
 - 新品类必须先通过 Workbench Chat Timeline 采访形成经用户确认的版本化 Category Research Brief，再进入来源访问；现有 ProductProjectForm 只作为任务书/项目草稿的检查修改面，不得保留第二套从零创建事实源。
 - 品类采访只向用户询问必须由负责人决定的取舍；品牌、型号、参数、部件、原理和来源等可调查事实由系统主动调查，不得要求用户先行枚举。
 - 专用品类采访 Skill 只定义采访行为；Workbench 拥有消息、Interview Decision、未决项、confirmed brief 和全部继续上下文，Codex 只做无状态 ephemeral 单轮执行，不拥有产品 thread 或事实源。
-- 阶段 0I 的 Chat Timeline 与 Codex 交互运行时分别以 R-028/R-029 为技术证据；当前生产接受 `assistant-ui` ExternalStoreRuntime 与 `codex exec --ephemeral`，拒绝 App Server thread/SDK thread 作为产品会话路径。MVP 不引入 Pi Agent、agent registry、多 Provider 或自动 fallback，采访 modelId/reasoning 不能自动继承批次知识加工参数。
+- 阶段 0I 的 Chat Timeline 与 Codex 交互运行时分别以 R-028/R-029 为技术证据；当前生产接受 `assistant-ui` ExternalStoreRuntime 与锁定版本的 App Server `stdio`，每轮只使用 `thread/start(ephemeral:true)`，拒绝持久 App Server/SDK thread、resume 和第二套产品会话事实源。commentary 使用官方 `item/agentMessage/delta`，最终 JSON 由本地 Zod 校验。MVP 不引入 Pi Agent、agent registry、多 Provider 或自动 fallback，采访 modelId/reasoning 不能自动继承批次知识加工参数。
 - Provider 只负责来源能力、页面状态识别和围绕证据请求交付来源观察/待选证据，不负责形成最终知识，也不得把站点 DOM 规则冒充跨品类知识模型。
 - 数据搜集板块表达 Provider、已确认范围和更新策略的组合，不能与 Provider 混为一个对象。
 - 永久资料必须是围绕已确认知识需求保存的最小不可变证据，并能定位、审核和重跑其所支持的候选加工；不要求也不得默认保存整页 HTML、全页截图或完整无关文件。新证据不得覆盖历史证据。

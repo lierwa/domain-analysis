@@ -56,7 +56,7 @@
 
 确认结果：项目围绕可复用的商品知识资产创建，不围绕单一“目标 Agent”创建。正式入口必须是本地 Workbench 的 Chat Timeline，不是要求用户从零填写完整表单。专用品类采访 Skill 规定一次一问、推荐理由、主动调查、完成判断和任务书输出；Workbench 保存标准化消息、负责人决定、状态和任务书版本。结构化表单只负责回顾与修订采访结果。任务书确认后才进入品类范围调查、批量资料收集和后续加工。
 
-用户进一步确认的实现方向：Chat Timeline 优先复用成熟开源 UI；本地后端接入 Codex CLI 的交互能力；首版不再叠加 Pi Agent。历史推荐候选曾是 `assistant-ui + Codex App Server`；R-028/R-029 后最终接受 `assistant-ui` ExternalStoreRuntime＋`codex exec --ephemeral`，App Server/SDK thread 因成熟度和全局 Session 污染被拒绝。当前事实以生产实现、RESEARCH 与 PROGRESS 为准。
+用户进一步确认的实现方向：Chat Timeline 优先复用成熟开源 UI；本地后端接入 Codex CLI 的交互能力；首版不再叠加 Pi Agent。R-028/R-029 当前接受 `assistant-ui` ExternalStoreRuntime＋锁定版本的 App Server `stdio`，每轮使用 `thread/start(ephemeral:true)` 获取官方文字 delta；拒绝持久 App Server/SDK thread、resume 和第二套产品会话事实源。当前事实以生产实现、RESEARCH 与 PROGRESS 为准。
 
 ### Q004 跨品类知识模型
 

@@ -71,6 +71,13 @@
       "when": 1786964391176,
       "tag": "0009_large_namorita",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787039034443,
+      "tag": "0010_oval_bushwacker",
+      "breakpoints": true
     }
   ]
 }

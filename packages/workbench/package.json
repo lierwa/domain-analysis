@@ -8,27 +8,21 @@
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run src tests",
-    "test:regulatory-pipeline": "vitest run tests/marketUniverseRegulatoryPipelineModule.integration.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@dbos-inc/dbos-sdk": "4.25.14",
     "@domain-analysis/db": "0.1.0",
-    "@domain-analysis/knowledge-runtime": "0.1.0",
     "@domain-analysis/shared": "0.1.0",
     "@openai/codex": "0.147.0",
-    "cacache": "19.0.1",
     "canonicalize": "3.0.0",
     "csv-stringify": "^6.8.1",
     "drizzle-orm": "0.45.2",
     "execa": "10.0.1",
     "ndjson": "2.0.0",
-    "sharp": "0.35.3",
     "zod": "3.25.76",
     "zod-to-json-schema": "3.25.2"
   },
   "devDependencies": {
-    "@types/cacache": "20.0.1",
     "@types/ndjson": "2.0.4"
   }
 }

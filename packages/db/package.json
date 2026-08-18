@@ -9,17 +9,14 @@
     "ensure:local": "node --env-file=../../.env.example --import=tsx scripts/ensure-local-database.ts",
     "build": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "generate": "drizzle-kit generate",
-    "generate:product": "drizzle-kit generate --config drizzle.product.config.ts"
+    "generate:workbench": "drizzle-kit generate --config drizzle.workbench.config.ts"
   },
   "dependencies": {
     "@domain-analysis/shared": "0.1.0",
-    "better-sqlite3": "12.11.1",
     "drizzle-orm": "0.45.2",
     "pg": "8.23.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "9.6.0",
     "@types/pg": "8.21.0"
   }
 }

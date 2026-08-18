@@ -1,4 +1,8 @@
-import { interviewTimelineEventSchema, interviewTurnRequestSchema } from "@domain-analysis/shared";
+import {
+  interviewDecisionConfirmationSchema,
+  interviewTimelineEventSchema,
+  interviewTurnRequestSchema,
+} from "@domain-analysis/shared";
 import {
   type CategoryInterviewModule,
   CategoryInterviewError,
@@ -8,9 +12,10 @@ import { z } from "zod";
 
 const sessionParamsSchema = z.object({ sessionId: z.string().min(1) }).strict();
 const decisionParamsSchema = sessionParamsSchema.extend({ decisionId: z.string().min(1) }).strict();
-const briefParamsSchema = sessionParamsSchema.extend({ briefId: z.string().min(1) }).strict();
+const draftParamsSchema = sessionParamsSchema.extend({ draftId: z.string().min(1) }).strict();
+const taskParamsSchema = z.object({ taskId: z.string().min(1) }).strict();
 const revisionSchema = z.object({ expectedRevision: z.number().int().positive() }).strict();
-const startSchema = z.object({ categoryHint: z.string().min(1).max(120) }).strict();
+const startSchema = z.object({ initialRequest: z.string().min(1).max(20_000) }).strict();
 
 export async function registerCategoryInterviewRoutes(
   app: FastifyInstance,
@@ -30,6 +35,13 @@ export async function registerCategoryInterviewRoutes(
     return { item };
   });
 
+  app.get("/api/capture-tasks/:taskId/interview", async (request) => {
+    const { taskId } = taskParamsSchema.parse(request.params);
+    const item = await interviews.getByTaskId(taskId);
+    if (!item) throw new CategoryInterviewError("not_found", `抓取任务没有可修订的对话：${taskId}`);
+    return { item };
+  });
+
   app.post("/api/category-interviews/:sessionId/turns", async (request, reply) => {
     const { sessionId } = sessionParamsSchema.parse(request.params);
     const input = interviewTurnRequestSchema.parse(request.body);
@@ -41,19 +53,20 @@ export async function registerCategoryInterviewRoutes(
       sessionId,
       events,
       () => request.socket.off("close", abort),
+      (error) => app.log.error({ err: error }, "category interview stream failed"),
     ));
   });
 
   app.post("/api/category-interviews/:sessionId/decisions/:decisionId/confirm", async (request) => {
     const { sessionId, decisionId } = decisionParamsSchema.parse(request.params);
-    const { expectedRevision } = revisionSchema.parse(request.body);
-    return { item: await interviews.confirmDecision({ sessionId, decisionId, expectedRevision }) };
+    const { expectedRevision, selection } = interviewDecisionConfirmationSchema.parse(request.body);
+    return { item: await interviews.confirmDecision({ sessionId, decisionId, expectedRevision, selection }) };
   });
 
-  app.post("/api/category-interviews/:sessionId/briefs/:briefId/confirm", async (request) => {
-    const { sessionId, briefId } = briefParamsSchema.parse(request.params);
+  app.post("/api/category-interviews/:sessionId/task-drafts/:draftId/confirm", async (request) => {
+    const { sessionId, draftId } = draftParamsSchema.parse(request.params);
     const { expectedRevision } = revisionSchema.parse(request.body);
-    return { item: await interviews.confirmBrief({ sessionId, briefId, expectedRevision }) };
+    return { item: await interviews.confirmTaskDraft({ sessionId, draftId, expectedRevision }) };
   });
 }
 
@@ -61,6 +74,7 @@ async function* toServerEvents(
   sessionId: string,
   events: ReturnType<CategoryInterviewModule["runTurn"]>,
   cleanup: () => void,
+  logFailure: (error: unknown) => void,
 ) {
   try {
     try {
@@ -70,8 +84,12 @@ async function* toServerEvents(
       }
     } catch (error) {
       // WHY：SSE plugin 不应接收到 rejected iterable；adapter 将传输失败收窄为公共 typed event。
-      const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000) || "采访流失败";
-      const event = interviewTimelineEventSchema.parse({ type: "stream.failed", sessionId, error: message });
+      logFailure(error);
+      const event = interviewTimelineEventSchema.parse({
+        type: "stream.failed",
+        sessionId,
+        error: "抓取规划连接意外中断，请重试本轮。",
+      });
       yield { event: event.type, data: JSON.stringify(event) };
     }
   } finally {

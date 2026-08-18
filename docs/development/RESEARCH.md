@@ -1,5 +1,7 @@
 # 技术调研登记
 
+> 2026-08-18 当前边界：项目只实施阶段 1 数据抓取。本文保留历史候选和淘汰依据，但其中 Evidence、Knowledge Factory、知识包、Runtime、Market Universe 及具体来源 Provider 均已退出当前生产组合根，不得按历史“接受”状态继续实现。当前继续复用的成熟组件只有 PostgreSQL/Drizzle、Fastify、assistant-ui、Codex CLI、Crawlee、p-queue 与 cockatiel；后续新增 Crawl Plan 或 Provider 必须在用户验收 1A 后重新进入调研和真实原型门。
+
 状态：持续维护
 更新日期：2026-08-18
 
@@ -26,8 +28,8 @@
 | R-022 | Product/Pipeline 应用接线 | 原则接受，等待新 contract 换接 |
 | R-026 | 目的驱动采集/最小证据/媒体 | 静态 HTML/JSON、PDF 页、XLSX 行和整图字节门已 POC；动态/图片正式投影/异常矩阵继续 |
 | R-027 | 死代码清算 | 使用 CodeGraph＋真实 entry；不新增 Knip |
-| R-028 | 本地 Chat Timeline | 接受 `assistant-ui` ExternalStoreRuntime；生产接线与 PC 验收已通过 |
-| R-029 | Codex 交互运行时与 Pi 边界 | 接受：官方稳定 `codex exec --ephemeral` 真实验收证明全局 Session 零新增；Workbench 持有全部继续上下文；MVP 不引入 Pi |
+| R-028 | 本地 Chat Timeline | 接受 `assistant-ui` ExternalStoreRuntime；2026-08-18 PC Chat、真实活动列表、单击决定和任务修订入口通过，采访内容待用户验收 |
+| R-029 | Codex 交互运行时与 Pi 边界 | 接受：锁定官方 `codex app-server` `stdio`，每轮 `thread/start(ephemeral:true)`；commentary 用官方 delta，最终 JSON 由本地 Zod 校验；MVP 不引入 Pi |
 | R-030 | 商品底层知识来源与质量门 | 代表性来源证明范围与许可门已形成；生产白名单和真实纵切片未冻结 |
 | R-031 | 跨品类来源数据集 contract 与导出 | 已接受并通过冰箱＋电视 PostgreSQL/API/PC 纵切片；真实来源矩阵待补 |
 | R-032 | 来源访问限速、取消与熔断 | 真实 60 秒、DBOS 强杀恢复与生产组合已接受；京东 reader/探针未通过 |
@@ -44,7 +46,7 @@
 
 结论：使用 DBOS Transact `4.25.14`；业务状态使用 typed `start / command / get` seam，DBOS 类型不穿透领域。`workflowID` 来自冻结输入；失败 step 显式重试使用官方 `forkWorkflow(startStep)`，旧运行不可变。DBOS 建立在 PostgreSQL 上，服务启动前注册/启动，Fastify `onClose` 关闭。
 
-验证：隔离 POC 覆盖三次自动重试、强杀 worker 后接续、人工消息、取消和失败 fork；见 `pocs/r017/README.md`、ADR-0007。
+验证：历史隔离验证覆盖三次自动重试、强杀 worker 后接续、人工消息、取消和失败 fork；当前接受决定见 ADR-0007。历史实验执行树已删除，不作为当前生产完成证明。
 
 官方依据：https://docs.dbos.dev/typescript/programming-guide 、https://docs.dbos.dev/typescript/tutorials/workflow-tutorial 、https://docs.dbos.dev/typescript/reference/dbos-class
 
@@ -66,7 +68,7 @@
 
 结论：SQLite＋FTS5 满足 MVP；构建后 SHA-256 校验、只读打开并启用 `query_only`，新包校验成功后原子切换 stable 指针。生产本地 SQLite 和知识包读写统一使用 `better-sqlite3@12.11.1`：该 MIT 版本声明支持 Node 24，提供 Windows 预编译包，且 Drizzle 有官方 adapter。DuckDB/Orama 不进入当前依赖；它们不是查询能力的必要条件。
 
-验证：历史 POC 验证跨目录复制、无网络查询、损坏拒绝、版本切换/回滚和第二品类同结构；R-034 又使用当前最小 EvidenceItem 验证公开证据携带内容、受限证据只携带 locator、相同输入重建复用版本、电视型号/全文/关系/证据查询和复制离线查询。2026-08-18 Windows/Node 24.14 复现 `@libsql/client@0.17.4` 在 `close()` 后仍令初始化库删除和知识包 rename 返回 `EBUSY`；上游也记录 native statement/transaction 句柄可能延迟到 GC。改用 `better-sqlite3` 显式 close 后，legacy SQLite、知识包原子 rename、长路径打开和清理均通过。超过传统 Windows 路径上限时只在 native 驱动边界调用 Node 稳定的 `path.toNamespacedPath`，公开描述符仍保存普通绝对路径。见 `pocs/r015/README.md`、`pocs/r034/README.md`、ADR-0006。
+验证：历史隔离验证覆盖跨目录复制、无网络查询、损坏拒绝、版本切换/回滚和第二品类同结构；这些结果只证明技术候选，不代表正式产品数据。2026-08-18 Windows/Node 24.14 复现 `@libsql/client@0.17.4` 在 `close()` 后仍令初始化库删除和知识包 rename 返回 `EBUSY`；改用 `better-sqlite3` 显式 close 后，legacy SQLite、知识包原子 rename、长路径打开和清理通过。超过传统 Windows 路径上限时只在 native 驱动边界调用 Node 稳定的 `path.toNamespacedPath`，公开描述符仍保存普通绝对路径。当前接受决定见 ADR-0006；历史实验执行树已删除。
 
 官方依据：https://sqlite.org/fts5.html 、https://sqlite.org/pragma.html#pragma_query_only 、https://github.com/WiseLibs/better-sqlite3/releases/tag/v12.11.1 、https://orm.drizzle.team/docs/sqlite/get-started-sqlite 、https://github.com/tursodatabase/libsql-client-ts/issues/350 、https://nodejs.org/api/path.html#pathtonamespacedpathpath
 
@@ -116,7 +118,7 @@
 
 已接受用途：一个候选批次最多一次，将未映射最小事实视图 `evidenceId / subjectKey / rawName / rawValue` 转成永远 `review_required` 的结构化候选。完整证据、主体和值由服务端按 evidence ID 恢复与校验；模型不能改写事实或发布。
 
-实现边界：R-029 已证明官方 SDK 的 thread API 不满足“每批 ephemeral、全局 Session 零新增”，因此正式 adapter 使用项目直接依赖并锁定的官方 `@openai/codex@0.147.0`，通过 `npm --prefix <repo> exec -- codex` 运行稳定 `codex exec --ephemeral`。`execa` 只管理进程/超时/取消，`ndjson` 只解码官方事件，Zod/JSON Schema 校验输出；不读取认证文件、不接通用模型 Provider。Factory 在空临时目录、只读 sandbox、禁 Web search、never approval 下运行并清理全部临时内容。
+历史实现边界：批次候选加工曾使用锁定的 `@openai/codex@0.147.0` 与 `codex exec --ephemeral`；该知识加工用途已退出当前阶段，不得借此恢复第二阶段代码。当前抓取采访的运行边界由 R-029 的 2026-08-18 真流式结论单独定义：官方 App Server `stdio`、`thread/start.ephemeral=true`、只读 sandbox、never approval，最终输出仍由领域 Zod contract 校验。
 
 验证：正确 `gpt-5.3-codex-spark + low` 已对最小夹具和 R-034 电视真实证据返回严格候选；R-034 最终得到 22 条候选，其中 21 条来自模型、1 条确定性型号转换，并通过 foundational owner＋subject_ref 关系门。错误简称 `codex-5.3-spark` 的失败补丁已完全删除，不保留 alias/fallback。该事实不能证明模型适合网页语义寻找、图片关系、OCR 后推理或其他新用途。
 
@@ -307,7 +309,7 @@
 
 候选比较：用户选择的教育研究网页路线、并发 1、遇验证码/风控失败关闭、不自研反检测/验证码/账号切换仍有效。2026-08-16 的同 SKU 差分已证明登录不是公开规格的业务前置，同时推翻“Patchright＋持久 Profile＋人工登录即可形成生产 Provider”的实现假设；当前候选矩阵和处置以 6.4 小节为准，不得再引用历史 R-001 成功样本宣布生产可达。
 
-验证：历史真实样本只证明 Patchright 曾接入本机 Chrome、Crawlee 可恢复队列、系统可区分 loaded/login/challenge/discontinued；当前样本证明所有本机程序化启动/连接候选未通过，而 Codex 内置 Browser 的成功只证明公开页面可达。旧 POC 永久保存过 HTML/文本/截图/资源清单，但该范围已由 ADR-0011 撤销，只保留访问与状态证据。见 `pocs/r001/README.md`、ADR-0004。
+验证：历史真实样本只证明 Patchright 曾接入本机 Chrome、Crawlee 可恢复队列、系统可区分 loaded/login/challenge/discontinued；当前样本证明所有本机程序化启动/连接候选未通过，而 Codex 内置 Browser 的成功只证明公开页面可达。旧实验曾保存 HTML/文本/截图/资源清单，但该范围已由 ADR-0011 撤销；实验执行树已删除，当前边界见 ADR-0004。
 
 官方依据：https://crawlee.dev/js/ 、https://github.com/apify/crawlee 、https://github.com/Kaliiiiiiiiii-Vinyzu/patchright 、https://playwright.dev/docs/auth 、https://github.com/ChromeDevTools/chrome-devtools-mcp 、https://developer.chrome.com/docs/devtools/agents/use-cases/auto-connect 、https://learn.chatgpt.com/docs/browser?surface=app
 
@@ -329,7 +331,7 @@
 - Zod 为候选唯一作者态 Schema，模型/规则结果必须引用 evidence ID；
 - 近似型号、冲突、图片解释和缺证据不得自动合并/发布。
 
-旧 Cheerio 官网/JD projector、整页输入、`sanitized projection` 和图片模型 POC 不再是目标 contract。格式 adapter 只能从 EvidenceItem/临时来源内容产生最小片段，不能定义商品字段。见 `pocs/r014/README.md`。
+旧 Cheerio 官网/JD projector、整页输入、`sanitized projection` 和图片模型实验不再是目标 contract。对应执行树已删除；格式 adapter 不能自行定义商品字段。
 
 官方依据：https://github.com/unjs/unpdf 、https://github.com/catamphetamine/read-excel-file 、https://mathjs.org/docs/datatypes/units.html
 
@@ -379,7 +381,7 @@ HTTP validator 只属于 SourceObservation：`304` 说明服务端表示未变�
 - 真实备案列表对 `BCD-501WSPM(Q)` 返回唯一结果：备案号 `20241017-471100-92391729144470006`、生产者“合肥美的电冰箱有限公司”、能效等级 1。Crawlee `HttpCrawler` POST 详情 POC 保留 1,079-byte 原始 JSON，SHA-256 `9d7b01b670d89bdc0d40f83ff90c4832b1b6caca8722afc3016d0ce049494cc3`，包含 `GB 12021.2-2015`、标准/综合耗电量与间室容积。
 - 监管 POC 的首次实现错误假设 `PlainResponse.rawBody`，失败后删除该假设；按 Crawlee 官方 `HttpCrawlingContext.body: string | Buffer` 取得原始内容后通过。因两步列表/详情是官方特有协议，只接受隔离它的薄 Source Access adapter；不冻结到通用 Evidence interface，不自写 HTTP、重试或 JSON parser。Crawlee body contract：https://crawlee.dev/js/api/3.14/http-crawler/interface/HttpCrawlingContext
 - 缺失型号样本由 Crawlee 完成既定重试后返回 typed `evidence_not_found`，没有把 URL/HTTP 200/空内容视为成功。Crawlee 磁盘持久化关闭，完整响应只在本次内存访问中存在。
-- 正式组合根通过冻结冰箱项目生成 EvidenceRequest，保存 SourceObservation、最小 EvidenceItem 与 CAS manifest；API 重读、桌面和 390px Workbench 显示来源、SRI、字节数和原始内容。完整命令、ID、结果和退出成本见 `pocs/r026/README.md`。
+- 历史组合验证曾生成 EvidenceRequest、SourceObservation、最小 EvidenceItem 与 CAS manifest，并在 API/Workbench 重读。该结果不证明当前抓取产品闭环；对应实验执行树已删除。
 - PDF 候选复核：`unpdf@1.8.1` 为 MIT、Node >=22 的 TypeScript/JavaScript PDF.js 封装，可用 `mergePages:false` 返回逐页文本；Crawlee `HttpCrawler@3.18.1` 可用已验证的自定义 `Configuration` 下载二进制响应并沿用成熟重试/超时。拒绝生产使用 `FileDownload`：其 3.18.1 公开 TypeScript 构造签名不接受自定义 Configuration，不能满足本轮“不落盘”证明门。
 - 真实美的官方 16 页说明书为 1,154,097 bytes，源文件 SHA-256 `bd173c352c759dea6a4128dcc4dda079b1a8102dec7a01f40f96846036ca2478`。型号 `MR-457WUSPZE` 出现在 5 页，不能以“型号唯一页”定位；使用本次知识问题的“型号＋年综合耗电量＋外形尺寸”线索唯一定位第 14 页，保留 3,768-byte 原始页文本，SHA-256 `97c17f2d1bbea79422a82854bb5153503d157f1b9a5f467cbc38cc6fec6dbc96`。完整 PDF 只在内存中，成功和缺失路径后均无永久完整文件。
 - `DocumentExcerptSource.capture` 生产薄 adapter、typed API 与自动化已转绿，但真实项目冻结的 Collection Board 尚无 `official_manual` 路线，因此本轮不把 POC 冒充正式 EvidenceItem，也不把说明书错误归类为普通官网页面。
@@ -428,7 +430,7 @@ Knip（ISC、活跃）能从 entry 图报告未使用文件/export/dependency，
 
 新品类必须从可恢复的聊天采访开始，而不是要求用户先填一张完整大表。界面需在现有 React 18、Vite、Tailwind 和本地 Workbench 内工作，支持流式消息、取消、重试、中文输入法、自动滚动、桌面与 390px 宽度，并从项目自己的持久化状态恢复；不得把 Assistant Cloud、第三方远程消息存储或模型后端变成运行依赖。
 
-Workbench 拥有 Interview Session、规范化 Message、append-only Interview Decision、未决项和 confirmed Category Research Brief。Chat Timeline 只投影这些事实，不从模型文案推导业务状态，也不保存第二份权威任务书。
+Workbench 拥有 Interview Session、规范化 Message、append-only Interview Decision、未决项和版本化 Capture Task Draft。Chat Timeline 只投影这些事实，不从模型文案推导业务状态，也不保存第二份权威抓取任务。
 
 #### 成熟候选与官方资料（核查 2026-08-15）
 
@@ -445,7 +447,7 @@ Workbench 拥有 Interview Session、规范化 Message、append-only Interview D
 
 #### 2026-08-16 隔离 POC 结果
 
-- `@assistant-ui/react@0.15.14`＋ExternalStoreRuntime 在 React 18.3.1/Vite 5.3.1/Tailwind 3.4.4 下完成真实 POC。项目自有 `StoredMessage[]`/localStorage 是唯一消息状态；桌面与 390px Playwright/Chrome `2/2` 通过，覆盖恢复、流式、立即取消、错误、重试、刷新恢复、中文 IME composition、自动滚动、axe 和无外部网络请求；in-app Browser 复核同样通过。完整命令、样本和失败处置见 `docs/development/pocs/r028/README.md`。
+- `@assistant-ui/react@0.15.14`＋ExternalStoreRuntime 的历史验证覆盖恢复、流式、取消、错误、重试、刷新、中文输入、自动滚动和无外部消息后端。实验执行树已删除；当前是否满足“爬虫专家制定抓取计划”的产品目标，必须由生产面板重新验收。
 - 构建通过但成本不达门：673 modules，主 JS 424.28 kB / gzip 127.82 kB；`@assistant-ui/react` 发布包 unpacked 2,305,255 bytes，并直接依赖 `assistant-cloud@^0.1.40` 和整包 `radix-ui`。POC 没有云网络请求，但安装图仍携带未使用的云包。
 - 当前 Node 21.7.3 下每次安装均警告 `nanoid@6.0.1` 要求 `^22 || ^24 || >=26`；该依赖来自 `@assistant-ui/core`/`assistant-stream`，属于 production graph。不能把“npm 允许警告后构建”写成兼容通过。
 - Vercel 当前 `@ai-sdk/react@4.0.69`/`ai@7.0.66` 都要求 Node `>=22`；Node 18 兼容的是上一主版本 3.x，而且还需项目自行组装消息、composer、滚动和 a11y，因此不是当前基线下更低风险的替代。
@@ -459,7 +461,15 @@ Workbench 拥有 Interview Session、规范化 Message、append-only Interview D
 - 当前根版本范围为 Node `>=24 <25`、npm `>=11 <12`，`.nvmrc=24.12.0`。反向门证明 Node 21.7.3/npm 10.5.0 下安装以 `EBADENGINE` 失败，typecheck 在 `tsc` 前被版本检查器拒绝；正向 Node 24.12.0 arm64/npm 11.6.2 下 106 tests 通过、30 条件跳过，六 workspace typecheck、production build 与 `git diff --check` 通过。硬编码 darwin-x64 Rollup direct dependency 已删除，lockfile 由 arm64 Node 24 原生重装生成。
 - 选型接受 `@assistant-ui/react@0.15.14`＋ExternalStoreRuntime，条件是生产消息/决定/brief 仍归 Workbench、依赖锁版本、Chat UI adapter 保持薄且可整体移除、不使用 Assistant Cloud，并在后续实现中把 gzip 增量作为已知预算持续复核。Vercel AI SDK UI 不承担 UI primitives，当前没有更低的总实现/退出成本。
 
-结论：R-028 通过选型门；生产 `CategoryInterviewTimeline` 已直接使用 ExternalStoreRuntime，消息/Decision/Brief 仍归 Workbench。2026-08-17 删除不会被根 workspace、测试或构建调用的隔离应用、构建配置和独立 lockfile，只保留压缩选型记录；以后升级在当前生产页面上重新验证，不复活平行应用。
+结论：R-028 通过选型门；生产 `CategoryInterviewTimeline` 已直接使用 ExternalStoreRuntime，消息、Decision 和 Capture Task Draft 仍归 Workbench。2026-08-17 删除不会被根 workspace、测试或构建调用的隔离应用、构建配置和独立 lockfile，只保留压缩选型记录；以后升级在当前生产页面上重新验证，不复活平行应用。
+
+#### 2026-08-18 生产 Chat 回归与修复
+
+- 用户真实页面证明此前“生产接线已验收”结论不成立：提交后出现空白 Agent 块，固定 `min/max-height` 令 Chat 无法占满剩余高度，ScrollToBottom 使用文字按钮，Send/Cancel 同时出现，长消息又会把 composer 顶出视口。
+- 没有更换或自写 Chat 框架。继续使用已接受的 `assistant-ui` ExternalStoreRuntime/Thread/Composer primitives，按其 `isRunning` 状态只渲染 Send 或 Cancel；ScrollToBottom 改为可访问的图标按钮；桌面页限定剩余视口高度，消息 Viewport 独立滚动，composer 留在底部，移动端仍保留页面自然滚动。
+- `assistant-ui` 会为运行中但尚无文本的 assistant message 合成 Empty part；生产页面已使用其 `AuiIf` state seam 隐藏该空消息块，把等待反馈统一交给真实活动面板，避免再次出现只有 Agent 标题和圆点的假气泡：https://www.assistant-ui.com/docs/api-reference/primitives/assistant-if 、https://www.assistant-ui.com/docs/api-reference/runtimes/message-part-runtime
+- 负责人问题直接渲染 2–3 个结构化选项，点击某一项即确认该项并继续；草稿提供“继续补充或修改”，已确认任务提供“继续对话修改范围”。两条入口都回到 Workbench 持有的原 Interview，后续确认推进同一 Capture Task revision，不复制第二份任务事实。
+- 真实浏览器 RED/绿色证据：修复前 720px 视口中聊天区仅 404px、composer 距视口底部 157px，且空闲 Stop 可见；最终长消息状态下 document scrollHeight=720、聊天区高 487px、composer bottom=646px，空闲只见 Send、运行只见 Stop。该证据只验 UI/运行状态，不代表用户已认可采访问题内容。
 
 #### 2026-08-16 PC Workbench 信息架构复核
 
@@ -471,7 +481,7 @@ Workbench 拥有 Interview Session、规范化 Message、append-only Interview D
 
 ### R-029 Codex 交互运行时与 Pi 边界
 
-状态：接受 `codex exec --ephemeral` 薄 adapter；App Server `thread/start/resume` 正式路径拒绝保留；MVP 不引入 Pi
+状态：接受版本锁定的 `codex app-server` `stdio` 薄 adapter与 `thread/start(ephemeral:true)`；不使用 resume、持久 Codex thread、Pi 或自动 fallback
 目标阶段：0I
 
 #### 问题与不可取消约束
@@ -536,7 +546,7 @@ Browser
 - 官方 `@openai/codex@0.147.0` 通过 `stdio` 完成 initialize、thread start/resume、turn、66 个 `item/agentMessage/delta`、typed Skill input、`turn/interrupt`、初始化错误、正常进程退出和 SIGKILL 异常表面；中断后的长命令无残留，新进程可恢复原 thread。
 - 只在隔离 POC 使用 `execa@10.0.1`、`ndjson@2.0.0`、`json-rpc-2.0@1.7.1` 和 Zod，分别承担进程生命周期、JSONL、请求关联/timeout 和边界校验；没有自写这些通用能力，也没有生产依赖变更。
 - 版本化 TypeScript/JSON Schema 生成器只写入临时目录：642 文件/6,923 行和 285 文件/117,312 行；统计后全部清理，零生成物入库。
-- 当前 0.147.0 实际 `thread/start.sandbox` 使用 kebab-case，官方页面示例仍展示 camelCase，证明实验协议存在真实漂移风险。完整命令、样本、失败和清理见 `docs/development/pocs/r029/README.md`。
+- 当前 0.147.0 历史样本显示 `thread/start.sandbox` 使用 kebab-case，官方页面示例仍展示 camelCase，证明实验协议存在漂移风险。对应实验执行树已删除；该记录不构成生产接受。
 
 历史结论（现已作废）：曾接受本机 Workbench 专用、版本锁定的 App Server `stdio` 薄 adapter 例外；当时漏验全局 Session 持久化，故该接受结论撤销。POC 只保留为能力与失败审计证据。
 
@@ -579,7 +589,30 @@ Browser
 
 主动调查验收补充（2026-08-16）：官方 non-interactive 文档说明 `codex exec --json` 会输出包含 `item.*` 的 JSONL，item 类型明确包括 `web_search`；`--output-schema` 只约束最终结构化消息，不能单独证明搜索实际发生：https://developers.openai.com/codex/noninteractive 。因此 adapter 继续用已选 `ndjson` 解码官方事件，不新增 parser；只有生成 brief 的同一轮观察到 `web_search` item 才允许进入结构化 brief 校验。最终事实真实性仍由非空来源、六类 `investigatedFacts`、引用闭包和真实用户表面复核共同保护，不能把事件名当作事实证据。
 
-当前结论：R-029 Session 隔离方案通过，接受“Workbench 持有全部业务上下文＋官方稳定 `codex exec --ephemeral` 无状态单轮执行”。拒绝 `serviceName` 伪隔离、App Server/SDK thread、Pi/第二 Provider 和自动 fallback；既有全局 Session 仍不擅自删除。JSONL 的 `web_search` item 现同时承担 brief 主动调查的最小运行时完成门，但不改变 Workbench 的事实源归属。2026-08-17 已删除旧 SDK/App Server 探针、POC Skill、独立 package/lockfile 和配置，只保留压缩的候选淘汰记录；当前验证由生产 adapter 的 fake 回归和显式真实 Session 零新增 acceptance 承担。
+2026-08-16 阶段结论（已由 2026-08-18 真流式重验推翻）：当时接受“Workbench 持有全部业务上下文＋`codex exec --ephemeral` 无状态单轮执行”，它解决了 Session 隔离，却没有提供 assistant 文字 token delta。当前生产结论以下方“真流式纠错与 App Server ephemeral 重验”为准；仍拒绝 `serviceName` 伪隔离、持久 App Server/SDK thread、Pi/第二 Provider和自动 fallback。
+
+#### 2026-08-18 生产事件、错误与 strict schema 回归
+
+- 用户真实页面证明 adapter 虽用 `ndjson` 读到了 `thread.started`、`turn.started`、`item.*`，却只把事件名累计进 Set，直到进程退出才返回；这不是实时 Agent。当前改为直接迭代成熟 parser 的 JSONL stream，并在 Workbench seam 映射为带稳定 id、`kind/label/detail/status` 的追加式产品活动；同一个 item 只更新状态，已经发生的搜索不会被后续 reasoning 覆盖成泛化“分析中”。
+- 官方 non-interactive 文档明确说明普通 `codex exec` 把进度写到 stderr、最终消息写到 stdout，而 `--json` 才提供 JSONL 事件；item 类型包含 command execution、MCP tool call 和 web search。生产 adapter 因而只投影经过脱敏和长度限制的搜索 query、工具名与只读命令摘要，不传原始结果、完整参数、凭证或 stderr：https://developers.openai.com/codex/noninteractive
+- 当时确认 `codex exec --json --output-schema` 不提供最终结构化消息的 token delta，于是临时只流式展示活动、最终消息一次性落库；该处置已被下方 2026-08-18 App Server 真流式实现替换，生产代码不得恢复这一旧行为。
+- 原实现把完整 stderr、ANSI 和重复的 `rmcp::transport::worker HTTP 502` 拼入 `Error.message`。当前 `codex exec --ignore-user-config` 保留 ChatGPT auth 但不加载用户 `config.toml`，从产品采访链隔离无关 MCP；失败只向 UI 返回受控的服务不可用、登录失效或执行失败文案，原始诊断留在本地 adapter 错误对象。
+- 隔离用户 MCP 后真实请求暴露第二根因：模型 schema 的 `taskCandidate.sourceCandidates[].entryUrl` 仍含 `format: uri`，Codex 返回 `invalid_json_schema` 400。虽然 2026-08-16 调研已记录这一限制，生产回归未保护它。当前使用 `zod-to-json-schema` 已有 `postProcess` seam 去除全部模型侧 `format`；模型最终输出仍由原始 Zod URL/日期规则校验。新增 fake Codex 回归会读取实际临时 schema，发现任何 `format` 即失败。
+- 真实浏览器又证明 output schema 允许仅返回 `question`，而旧持久化只消费 `proposedDecision`，导致“文案在问、界面没有选项”。Workbench 现在在唯一事实边界把合法 `question` 归一化为 proposed Decision，推荐项只作为 proposal 默认值；用户实际点击的 option label 才成为 confirmed selection。该兼容不改变 Skill，本轮采访颗粒度仍待单独讨论。
+- `zod-to-json-schema@3.25.2` 官方仓库已于 2026-06-30 归档并建议迁移 Zod v4 原生 JSON Schema；当前 bugfix 不擅自升级全仓 Zod 或增加 OpenAI SDK helper，继续锁定已存在版本并保持 adapter 可替换。后续若扩展采访 schema，必须先比较 Zod v4 原生转换与 OpenAI 官方 `zodTextFormat`，完成严格 schema 原型后才能选型：https://github.com/StefanTerdell/zod-to-json-schema 、https://github.com/openai/openai-node/blob/main/docs/structured-outputs.md
+- 真实 `gpt-5.6-terra + medium` 手工同链和 Workbench 页面均完成“抓冰箱”首轮，观察到启动、分析和多次 `web_search`，最终返回三项京东范围选项；没有自动 fallback。该结果恢复 R-029 生产运行门，但采访内容仍由用户验收。
+- 开发端口清理不新增自研脚本：根 `dev:stop` 复用 `kill-port-process@4.0.2` 的跨平台 CLI，一次释放 API 4000 与 Web 6173；npm 官方包页显示该版本为 ISC、内置 TypeScript 声明、明确支持多端口和跨平台，Windows 上使用系统任务终止能力：https://www.npmjs.com/package/kill-port-process 。本机宿主权限实测可释放两个端口。另用当前 Node `--watch` 做“启动→触碰入口文件→新 PID 重新监听→Ctrl-C”复验均成功，未复现 watcher 自身占用端口；此前一次 `EADDRINUSE` 是沙箱内终止命令无法影响宿主进程，不据此替换 watcher 或增加第二个进程管理依赖。
+- 默认测试命令不能把 PostgreSQL 修订链静默跳过。项目已锁定 Node 24，因此先复用现有 `db:ensure-local`，再由同一个 Node 进程用官方稳定 `--env-file=.env.example` 直接启动 lockfile 声明的 Vitest CLI；不引入 `cross-env` 或自研环境加载器。原先尝试的 `node --env-file --run test:vitest` 已由真实回归证明没有把变量传给当前 Vitest 子进程，故已删除而不是继续叠 fallback。Node 官方文档确认 `--env-file` 会在进程启动时加载键值文件：https://nodejs.org/download/release/v24.15.0/docs/api/cli.html#--env-filefile
+
+#### 2026-08-18 真流式纠错与 App Server ephemeral 重验
+
+- 用户指出“Codex 不可能不支持流式”是正确的。旧结论把三个事实混在了一起：`codex exec --json` 提供的是 JSONL 生命周期事件；`--output-schema` 约束最终助手消息；旧 adapter 又主动丢弃 `agent_message` 并等待 `--output-last-message` 文件。因此页面只能看到活动，不能看到文字 token delta。
+- 重新核对官方 App Server 文档与本机锁定的 `@openai/codex@0.147.0` 生成协议：稳定 schema 同时包含 `ThreadStartParams.ephemeral`、`item/agentMessage/delta`、`MessagePhase = commentary | final_answer`。此前“只有 thread/fork 支持 ephemeral”的结论来自不完整文档阅读，现已推翻。协议只生成到两个 `/tmp` 目录，核对后删除，没有把生成物写回仓库：https://developers.openai.com/codex/app-server
+- 真实协议探针证明：设置 `turn/start.outputSchema` 时，commentary 也会被模型约束成 JSON token；去掉该参数后，commentary 是正常中文 delta，final_answer 仍可按提示只返回 JSON。正式 adapter 因而不再设置 `outputSchema`，而是在 prompt 中附最终 JSON Schema，并对完整 final_answer 执行既有 Zod 校验。失败即公开报错，不做宽松 parser、修复模型或自动重试。
+- 当前接受边界为：每轮启动官方 App Server `stdio`，`thread/start` 强制 `ephemeral:true`、`path:null`、只读 sandbox、never approval；只把 `phase=commentary` 的 delta 投影为 `assistant.delta`，把 `phase=final_answer` 留在服务端解析。Workbench/PostgreSQL 仍拥有全部消息、决定、未决项和任务草稿，进程退出后没有可 resume 的产品 thread。
+- 为避免本机通用插件、hooks 和 memories 介入产品采访，启动参数显式关闭这三项稳定 feature；项目仓库内专用品类 Skill 仍从工作目录加载。用户 MCP 启动失败可能写入本机 stderr，但不会再使已完成 turn 失败，也不会进入浏览器；工具详情仍只投影实际 item 且经过脱敏。
+- 真实 `gpt-5.6-terra + medium` 运行同时观察到中文逐 token commentary、多次 `web_search` item 和最终通过 `categoryInterviewRuntimeOutputSchema` 的京东负责人问题。真实 Workbench 页面在运行中先出现中文增量，再追加搜索活动，结束后用已持久化的最终 assistant message 替换临时气泡，浏览器 console 无 error。
+- App Server 命令在 0.147.0 CLI 帮助中仍标记 experimental，因此 adapter 必须继续锁版本、保持单文件薄边界并由 fake 协议回归保护；不引入动态 tools、SDK thread、Pi、第二 Provider 或自动 fallback。若未来版本移除 `thread/start.ephemeral` 或 message phase，直接失败并重新进入调研门，不退回假流式。
 
 ### R-030 商品底层知识来源与质量门
 
