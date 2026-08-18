@@ -2,20 +2,20 @@
 
 这是当前阶段、已验证事实、阻塞项和下一步的单一权威来源。阶段计划只看 `ROADMAP.md`，技术候选只看 `RESEARCH.md`。
 
-更新日期：2026-08-17
-当前阶段：M0～M7 恢复路线的最小真实纵切片已通过；`ROADMAP.md` 阶段 1A 的完整市场/媒体矩阵仍在实施，真实京东 reader/探针因缺少书面许可保持停止
-总体状态：系统已用电视第二品类贯通 confirmed brief→服务端 Planner→DBOS→真实 DOE/EPA 来源→Source Dataset→最小 Evidence→Factory/Review→SQLite Package→复制后离线 Runtime，并在 PC Workbench 显示底层概念、型号、来源、证据、候选和激活包。R-034 保存 4 条真实来源记录、4 条最小证据，生成 22 条已审核候选和 3 条关系；同内容重建哈希一致。该结果证明跨品类最小链路，不等于京东真实数据、三品类、多站点、动态页、图片、目标 Linux/Windows 或完整市场总体已经通过。历史 737 identity 仍不是当前来源数据或商品知识。
+更新日期：2026-08-18
+当前阶段：M0～M7 恢复路线的最小真实纵切片已通过；`ROADMAP.md` 阶段 1A 冰箱纵向第 6 步已通过 Windows 技术/监管隔离小批次，但获许可的品牌详情/说明书和完整市场/媒体矩阵仍未完成；京东继续零访问
+总体状态：系统既有 R-034 电视第二品类全链证据；本轮 R-033 又在 Windows 用 confirmed brief→服务端 Planner→DBOS→NIST/USDA/能效标识 Provider→Source Dataset→最小 Evidence 形成 3 条隔离真实证据，美的说明书因许可不足零请求。开发库只完成 NIST 与能效标识，USDA 当前两次 HTTP 403 已作为 typed failure 保留，所以开发库 Evidence 为 0，不冒充隔离验收。Windows SQLite 文件生命周期、长路径知识包和全仓回归已通过；目标 Linux、获许可品牌资料、三品类、多站点、动态页、图片和完整市场总体仍未通过。历史 737 identity 仍不是当前来源数据或商品知识。
 当前积分：85.5（以 `AGENT-SCORECARD.md` 为准）
 
 ## 1. 当前 Git、环境和接续边界
 
-- 仓库：`/Users/guojunxi/Desktop/work/domain-analysis`
+- 仓库：`D:\work\domain-analysis`
 - 分支：`master`
-- 本轮开始 HEAD：`47ffb78b4baa32c5a392747fa9370716cfe2eec8`
+- 本轮开始 HEAD：`058438a`
 - 本轮开始上游：`origin/master` 同 SHA，ahead/behind `0 0`
-- 交付范围：用户已授权把本轮 M0～M7 实现、必要文档、测试、迁移和跨电脑启动交接一并提交并推送；本地数据库、Evidence、知识包、浏览器状态和认证材料仍排除。动态 Git 状态以 `git status`、`git rev-parse` 和远程 ahead/behind 为准。
-- Node 基线：根 `package.json#engines` 固定 Node `>=24 <25`、npm `>=11 <12`，`.nvmrc` 选择 `24.12.0`，`.npmrc` 启用 `engine-strict`，`devEngines` 为 npm 11 官方门，根脚本再用 `check-node-version@4.2.1` 兼容拦截旧 npm；新上下文必须先 `nvm use`，不能沿用系统默认版本。
-- CodeGraph：已初始化；本轮开始为 151 files、1611 nodes、2082 edges。清算后状态读数为 153 files、1660 nodes、2207 edges，但删除查询仍返回已不存在文件的旧节点，说明 watcher 对删除的索引状态不可信；最终结构死代码结论同时以真实文件/导出、TypeScript 和测试为证，未擅自重建索引。
+- 交付范围：用户已授权继续开发和本地验证，尚未授权本轮 commit/push；本地数据库、Evidence、知识包、浏览器状态和认证材料仍排除。动态 Git 状态以 `git status`、`git rev-parse` 和远程 ahead/behind 为准。
+- Node 基线：根 `package.json#engines` 固定 Node `>=24 <25`、npm `>=11 <12`，`.nvmrc` 提供 24.12.0 推荐版本；本轮 Windows 实际使用 Node 24.14.1/npm 11.11.0 并通过运行时门，Node 24 内的小版本不再被文档误写成唯一可运行值。
+- CodeGraph：Windows 已初始化且状态健康；2026-08-18 读数为 284 files、3547 nodes、7042 edges，backend 为 Node 内置 SQLite/WAL/FTS5。
 - 跨电脑启动入口为 `docs/development/HANDOFF.md`。接续点只有在包含该文件的 `master` 已推送且本地/远程 SHA 经动态核对一致时成立；本文不固定自身提交 SHA，避免自引用失真。
 
 ## 2. 2026-08-15 架构纠偏决定
@@ -64,12 +64,12 @@ ADR-0012 已接受产品流程、Workbench 事实归属、“不引入 Pi”和�
 | --- | --- | --- | --- |
 | 0R 文档与清算 | 通过 | 权威文档一致性/链接/diff 门通过；错误 contract/module/route/UI/test/dependency 已删除；跨电脑交接入口已加入提交范围 | CodeGraph 删除索引仍陈旧；索引重建需单独授权 |
 | 0I 品类采访与任务书 | 已通过 | R-028 Chat Timeline、R-029 ephemeral exec/Session 隔离、采访 Skill、真实 Workbench 决策树/调查/任务书/确认/项目草稿、取消/失败/重试/重启与 PC 主流程均通过；确认后自动推进且不合成用户消息 | 无；后续只能消费 confirmed brief，不得恢复第二套创建事实源 |
-| 1A 来源与证据 | 最小真实纵切片通过；完整矩阵未通过 | confirmed brief 驱动 Planner；DOE/EPA/监管资料经 DBOS 形成 Source Dataset 和最小 Evidence；许可禁止或未知时失败关闭 | 京东真实许可与 1＋3 探针、完整市场总体、动态页、图片、更多官网/监管对象和第三品类 |
+| 1A 来源与证据 | 最小真实纵切片通过；完整矩阵未通过 | confirmed brief 驱动 Planner；电视 DOE/EPA 与冰箱 NIST/USDA/能效标识经 DBOS 形成 Source Dataset 和最小 Evidence；许可禁止、外部 403 或未知时失败关闭 | 获许可的品牌详情/说明书、京东真实许可与 1＋3 探针、完整市场总体、动态页、图片和第三品类 |
 | 1B 证据到候选 | 最小 Factory/Review 纵切片通过；完整质量门未通过 | 确定性转换与固定 `gpt-5.3-codex-spark + low` 分开；模型只产待审候选；底层概念 owner、关系、许可和人工决定均有 typed contract | 完整共享属性字典、冲突/unknown 统计、图文机制、多型号比较与人工频次门 |
-| 1C 包与离线查询 | 当前 Evidence contract 复核通过；跨平台门未通过 | 内容寻址 SQLite＋FTS5 包、激活/回滚、精确/筛选/全文/关系/证据查询；复制单文件后离线查询通过 | 目标 Linux/Windows 安装与离线验收、完整验收集和安全升级处置 |
+| 1C 包与离线查询 | 当前 Evidence contract 与 Windows 门通过；完整跨平台门未通过 | 内容寻址 SQLite＋FTS5 包、激活/回滚、精确/筛选/全文/关系/证据查询；Windows 原子发布、长路径和复制单文件离线查询通过 | 目标 Linux 安装与离线验收、完整验收集和安全升级处置 |
 | 1D 第二品类迁移 | 电视最小真实迁移门通过；完整迁移门未通过 | R-034 未修改公共 Schema/Factory/Review/Package/Runtime interface 即贯通电视底层概念、型号与真实 DOE/EPA 来源 | 第三品类、动态/图片/多站点矩阵以及更大规模质量门 |
 | 2 Product/Pipeline | 最小生产组合可达 | confirmed brief、Planner、两个 DBOS Queue、typed lifecycle/取消/强杀恢复和 API 组合根已接通 | 完整阶段处理器、总验收与发布权限闭环 |
-| 3 数据搜集板块 | 通用最小链路通过；京东真实采集未通过 | Source Dataset、Provider Router、持久工作项、显式频控/熔断/取消/恢复、PC 查看和导出已通过；电视真实来源通过 | 已许可的 JD reader/探针、动态/图片、多品牌和多站点完整门 |
+| 3 数据搜集板块 | 通用最小链路通过；京东真实采集未通过 | Source Dataset、Provider Router、持久工作项、显式频控/熔断/取消/恢复、PC 查看和导出已通过；电视与冰箱技术/监管真实来源通过 | 获许可的品牌详情/说明书、JD reader/探针、动态/图片、多品牌和多站点完整门 |
 | 4 Knowledge Factory | 通用最小链路通过；完整知识质量门未通过 | Evidence→确定性/模型候选→Review 已在电视真实证据上通过；无品类分支、无模型 fallback | 完整知识需求矩阵、冲突/unknown、图文原理和比较质量门 |
 | 5～6 | 最小包/Runtime/PC 联调通过；正式交付未通过 | SQLite 包、离线查询、内容重建稳定、PC Workbench 真实表面通过 | 跨平台、完整故障矩阵、第三品类和发布总验收 |
 
@@ -262,30 +262,32 @@ R-026 当前结论：
 - Session 隔离已通过，不再是阻塞项：本轮基线时间后全局 `~/.codex/sessions` 新增文件为 0，且没有残留 `codex exec` 进程；既有全局 Session 仍不擅自删除。
 - 6.2 已完成：`variantCount` 已删除；品牌 identity/监管生产者、型号身份状态、三类覆盖维度、来源完整性和 scoped blocking unknown 已进入同一版本事实。6.3 已完成来源角色 contract、专用 DBOS 生产 seam、九个生产来源的 737 型号同窗候选和 737/737 监管对账；不再继续改 Market Universe 核心 contract。容声 TLS、米家/小米厂家型号、志高/奥克斯目录等缺口作为 typed unknown 保留，下一门由 6.4 京东官方渠道补充分母。
 - 京东商品规格停止门：监督式 Codex Browser 已完成 5 页目录并真实读取前 16 个详情观察，第 17 个请求进入京东安全验证；用户人工扫码后仍转入 403 频控，单次正常重试未恢复。现有本机自动化启动/连接候选仍未通过，Codex Browser 也没有 Workbench 可调用的稳定 Provider contract。当前没有从标题猜型号、没有复刻签名、没有绕过验证、没有输出 Cookie/Profile；完整 299 个详情、验证恢复和生产 Provider 门通过之前，6.4 保持未通过。
-- 1A 最小真实纵切片已通过但完整矩阵未完成：R-034 已贯通电视真实 DOE/EPA 来源、最小 Evidence、Factory/Review、SQLite Runtime 和 PC；官网市场总体、动态页、图片、三品类/多站点与目标 Linux 门仍未通过。
+- 1A 最小真实纵切片已通过但完整矩阵未完成：R-034 已贯通电视真实 DOE/EPA→Package/Runtime；R-033 又在 Windows 隔离库贯通冰箱 NIST/USDA/能效标识→3 条最小 Evidence。开发库 USDA 当前 403、品牌官网缺明确机器采集/派生发布许可，官网完整详情/说明书、动态页、图片、三品类/多站点与目标 Linux 门仍未通过。
 - 京东真实访问仍被权限和现实探针门阻塞：DBOS 逐对象持久工作项/强杀恢复、真实 60 秒窗口和本地熔断门已经通过；尚缺书面许可、已验证 JD reader、连续三个冷却窗口和受控 1＋3 探针。完成前不得访问京东，也不得把本地工程门称为京东现实频控已解决。
 - 整图 hash/格式/尺寸/单帧验证已通过；裁片原图一致性仍失败关闭。图片字节暂不能通过现有 `contentText` 公共读取 contract 诚实投影，确认判别联合前不接正式图片入口。
 - Stagehand/OCR/图片语义仍待原型；在用户确认新的模型用途前，不能冻结模型辅助证据寻找或图片判断方案。
-- 本机当前使用的是本轮新建的 `domain_analysis` 开发库，0000～0004 migration 已追加执行；实际项目仍为 draft，`market_universe_versions` 为 0。昨晚旧 WIP 数据不在该 Homebrew 实例，位置仍未确认。没有 drop/reset 其他数据库；若后续找到旧数据，保留、迁移或删除必须先只读盘点并取得单独授权。
-- CodeGraph 删除索引仍返回已删除节点；未获授权时不执行重建。当前以真实文件、导出、类型和测试证明代码清算，结构索引的删除一致性仍需后续处理。
-- Node 24 LTS 已正式落地为 `package.json#engines/devEngines`＋`.nvmrc`＋`engine-strict`＋`check-node-version` 根脚本门；根目录硬编码的 darwin-x64 Rollup 包已删除，Node 24.12.0 arm64 重新安装和全仓门通过。反向门已证明系统 Node 21.7.3/npm 10.5.0 下 `npm install` 以 `EBADENGINE` 失败，`npm run typecheck:shared` 在 TypeScript 启动前失败；正确 Node 24.12.0/npm 11.6.2 下全门通过。生产依赖 audit 当前报告 1 low/6 moderate/10 high/3 critical；未执行 `audit fix`，处置需单独调研和回归。
-- 用户已授权本轮提交/推送。交付完成必须同时满足：工作区无遗漏、`master` 与 `origin/master` ahead/behind 为 `0 0`、本地 HEAD 与远程 SHA 一致；否则仍不能声明跨电脑可继续。
+- 本机 PostgreSQL 14 仅按项目需要以用户态监听 `127.0.0.1:5432`，不配置系统自启动。开发库 `domain_analysis` 当前有一个 ready 冰箱项目；NIST/能效标识运行完成，USDA 两个运行失败，Evidence 为 0。完整三证据验收只存在于已精确删除的隔离测试库，不能回填或伪装成开发库成功。
+- CodeGraph 当前索引健康并覆盖本轮新增文件；结构判断继续以 CodeGraph＋类型/测试共同验证，不从 AST 索引推断运行时验收。
+- Node 24 主版本门已落地；Windows 当前 Node 24.14.1/npm 11.11.0 全门可运行。依赖审计本轮被配置的 `npmmirror` 以 `/-/npm/v1/security/* not implemented` 阻塞，不能沿用旧机器的漏洞数量冒充当前结果，也未执行 `audit fix`。
+- 本轮尚未授权 commit/push；完成本地实现不等于远程已交付。只有用户明确要求交付后，才核对工作区范围、远程 SHA 和 ahead/behind。
 
 ### 1.1 其他来源实际采集审计（2026-08-17）
 
 - 九个品牌官网来源历史隔离运行分别得到：海尔 271、统帅 49、美的系 222、TCL 44、海信/容声 16、美菱 85、康佳/新飞 6、西门子 43、荣事达 1，共 737 个唯一“品牌＋厂家型号”。监管对 737 个型号的结果为 381 matched、338 not_found、18 producer_conflict。
 - 这些数字只证明当时读取过目录并完成 identity 投影。生产 `OfficialCatalogEntry` 每项只允许 `brand / manufacturerModel / sourceItemId / sourceUrl`，另有可选 identity 状态、监管生产者和分类；没有商品详情参数、功能文案、图片、价格、库存、说明书或评价。
 - 各 Crawlee 来源使用 `MemoryStorage({ persistStorage:false })`；原始目录 JSON、详情 HTML 和请求队列没有持久化。历史监管批次所在隔离 PostgreSQL、临时证据目录和一次性脚本已经删除。
-- 当前开发库 `market_universe_versions=0`，所以 737 个 identity 也没有保存在当前 Workbench。当前 5 个 SourceObservation 和 3 个 EvidenceItem 全部来自 `official-site:example.com` 测试夹具，不是海尔、美的、监管或其他真实来源。
+- 当前开发库 `market_universe_versions=0`，所以 737 个 identity 仍没有保存在当前 Workbench。2026-08-18 已新增一个真实冰箱项目及 NIST/USDA/能效标识来源运行，但该批次因 USDA 403 未形成 Evidence；此前“5 个 observation/3 个 fixture Evidence”只属于 2026-08-17 审计时点，不能继续当作当前库状态。
 - 因此准确结论是：“九源目录 identity 纵切片和监管对账曾在隔离环境跑通，但没有形成当前可查看的品牌官网原始资料库。”不得再说“其他官网数据已抓完”。
 - 本轮仅只读审计，没有删除12个项目行、测试 observation/evidence 或任何文件。后续是否清理必须先识别每行归属并取得单独授权。
 
-下一步第一条可执行动作：新电脑先按 `HANDOFF.md` 完成 Git/Node/PostgreSQL/API/Web 启动门，再继续 `ROADMAP.md` 阶段 1A 冰箱纵向第 6 步，用现有跨品类 `Planner → DBOS → Provider → Source Dataset → Evidence` 链完成可许可的官网、监管和底层知识小批次。不得重写已通过的来源 typed contract、逐条持久化、PC 查看、导出和 DBOS 恢复；京东仍须等待书面许可、合格 reader 和三个冷却窗口的 1＋3 现实探针。
+下一步第一条可执行动作：继续停留在 `ROADMAP.md` 阶段 1A 冰箱纵向第 6 步，先取得或选择一条明确允许本地读取、最小证据保存、模型输入和派生发布的品牌型号详情/说明书来源，再把它作为 confirmed brief 的新 source assignment 走既有 `Planner → DBOS → Provider → Source Dataset → Evidence`。在许可或外部状态变化前不重试当前 USDA 403，不访问京东，不重写已通过的 typed contract、逐条持久化、PC 查看、导出和 DBOS 恢复。
 
 ## 11. 本轮当前验证证据
 
 以下条目是历史组件、POC 或人工定点样本证据，只用于保留审计链；任一条都不能单独证明阶段 0I、1A、真实系统内采访 Agent 或批量数据收集已经完成。
 
+- 2026-08-18 / R-033 Windows 冰箱小批次：隔离 PostgreSQL 中 NIST、USDA、中国能效标识三个 lane 均 `succeeded`，分别形成 1 条可访问快照和 1 条最小 Evidence；美的说明书 `waiting` 且零请求。Planner 同 Provider/政策的跨 lane 幂等碰撞已由失败回归定位并修复为绑定 lane＋完整 work items。开发库项目 `project-225f3d6a-ab31-4ce6-b136-b6f1cf74a010` 只显示 NIST/能效成功与 USDA 两次 typed 403 失败，Evidence 为 0；PC Workbench 已核对该部分状态，没有第三次重试、没有访问京东。
+- 2026-08-18 / Windows 工程门：`@libsql/client` 的不确定文件句柄已由 Drizzle 官方支持的 `better-sqlite3@12.11.1` 替换；知识包 native 边界支持 Windows 命名空间长路径，legacy SQLite/API 显式关闭连接。定向受影响测试 `22/22`；全新隔离 PostgreSQL 全仓 `63 files passed / 2 skipped`、`225 passed / 2 skipped`，测试库已整库删除。七个 workspace typecheck 与 production build 通过；Web 2,316 modules、主 JS 688.24 kB / gzip 202.24 kB，保留既有 >500 kB warning。
 - 6.3 监管生产与真实批次：隔离业务库经真实生产 API 从海尔 271、美的系 222、TCL 44 得到 537 个唯一型号；运行 `market-universe-regulatory:29d4883c158a05ce33db5c682b2b81aef8db8b11a395ca8a2ed3ba2192cb426d` 完成 537/537，结果为 matched 274、not_found 251、producer_conflict 12、failed 0，并生成 v2 candidate。v2 仍为 537 型号、537 identity confirmed、286 个型号带监管生产者；监管全局 unknown 被移除，251 个未找到与 12 个冲突转为逐型号 blocking unknown，另保留京东与其余品牌来源阻塞。隔离 PostgreSQL 和 131,072-byte 临时 SQLite 已精确删除，未写开发库。
 - 6.3 恢复/取消回归：旧 Web 只把 run ID 放在 React state，刷新后看不到正在运行；旧父 workflow 又预先入队全部子任务，取消父级仍可能继续访问。旧补丁处置为：保留 DBOS Queue/稳定 ID/最终一次写入，重写逐项入队、在途子任务取消和服务端 latest-run；删除输出 candidate ID 的二次 hash。真实 PostgreSQL 集成 `2/2` 证明成功运行可刷新恢复，取消后最多访问一个已在途型号且不写候选；API/Web 定向 `29/29`。全新隔离 PostgreSQL 全仓 `37` 个测试文件 / `140` 项通过，`1` 个真实模型 acceptance 按设计跳过；测试库已精确删除。
 - 6.3 海信集团真实目录：标准 TLS/Crawlee concurrency=1 读取官方类目声明 21、发现详情链接 21、详情成功 21；title/meta/主标题可明确确认 20 行，按品牌＋厂商型号得到 16 个唯一 identity，品牌为海信和容声。产品 1340“海信222冰箱”只在图片 alt/文件名出现 `BCD-222WTDGS`，按失败关闭规则不纳入。生产 Source 标为 `multi_brand_official_catalog/partial`；fixture 回归与 API 四源组合 `9/9`、worker/API typecheck 通过。没有保存完整页面、Cookie、Profile 或认证信息。

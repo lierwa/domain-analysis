@@ -14,6 +14,7 @@ const configSchema = z.object({
   // WHY：批次候选用途已单独验收固定模型；拒绝从采访或本机默认设置隐式继承。
   knowledgeFactoryModelId: z.literal("gpt-5.3-codex-spark").default("gpt-5.3-codex-spark"),
   knowledgeFactoryReasoningEffort: z.literal("low").default("low"),
+  jdCdpEndpoint: z.string().url().default("http://127.0.0.1:9223"),
   // WHY：这些 origin 已被当前确认来源策略和 R-010 实测限定；环境变量仍可收窄或替换。
   collectionAllowedOrigins: z.array(z.string().url()).default([
     "https://www.haier.com",
@@ -51,6 +52,7 @@ export function loadConfig(env = process.env): AppConfig {
     interviewReasoningEffort: env.INTERVIEW_REASONING_EFFORT,
     knowledgeFactoryModelId: env.KNOWLEDGE_FACTORY_MODEL_ID,
     knowledgeFactoryReasoningEffort: env.KNOWLEDGE_FACTORY_REASONING_EFFORT,
+    jdCdpEndpoint: env.JD_CDP_ENDPOINT,
     collectionAllowedOrigins: env.COLLECTION_ALLOWED_ORIGINS
       ? env.COLLECTION_ALLOWED_ORIGINS.split(",").map((value) => value.trim()).filter(Boolean)
       : undefined,

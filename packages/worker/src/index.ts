@@ -14,6 +14,7 @@ export * from "./siemensOfficialCatalogSource";
 export * from "./royalstarOfficialChannelSource";
 export * from "./jdOfficialRetailSource";
 export * from "./jdSourceCollectionProvider";
+export * from "./playwrightCdpJdPageReader";
 export * from "./sourceAccessError";
 export * from "./pacedAccessGate";
 export * from "./readableTechnicalSourceCollectionProvider";

@@ -157,6 +157,14 @@ export async function fetchSourceCollectionRuns(
   return sourceCollectionRunSchema.array().parse(data.items);
 }
 
+export async function startSourceCollection(projectId: string): Promise<void> {
+  // WHY：客户端只提交项目身份；来源、许可和知识目的必须由已确认任务书及服务端 Planner 决定。
+  await request<unknown>(
+    `/api/product-projects/${encodeURIComponent(projectId)}/source-collection-runs`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
 export async function fetchSourceCollectionRun(
   projectId: string,
   runId: string,

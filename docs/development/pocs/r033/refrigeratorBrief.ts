@@ -1,0 +1,215 @@
+import type { CategoryResearchBriefContent } from "@domain-analysis/shared";
+
+export const refrigeratorSources = {
+  cycle: "https://www.nist.gov/publications/cycled-hx-nist-vapor-compression-cycle-model-accounting-refrigerant-thermodynamic-and",
+  preservation: "https://www.fsis.usda.gov/food-safety/safe-food-handling-and-preparation/food-safety-basics/refrigeration",
+  energyLabel: "https://www.energylabel.com.cn/admin-api/gateway/productRegistration/productDetailById",
+  blockedManual: "https://dsdcp.smartmidea.net/mcsp/prod/20230803/6b0f37e5343a4abfba8c4a5274565d70.pdf",
+} as const;
+
+export function refrigeratorBrief(decisionId: string): CategoryResearchBriefContent {
+  return {
+    category: { code: "refrigerator", label: "冰箱", market: "CN" },
+    objective: "建立制冷循环、保鲜条件与监管型号记录的底层知识纵切片。",
+    audience: "中国大陆家用消费者",
+    priorityScenarios: ["解释制冷循环", "解释低温对食品保存的影响", "核对监管型号身份"],
+    excludedScope: ["未经授权的品牌官网采集", "具体型号采用关系"],
+    knowledgeNeeds: [{
+      id: "need:refrigeration-cycle",
+      question: "蒸汽压缩制冷循环如何搬运热量？",
+      knowledgeLayers: ["mechanism"],
+      priority: "must",
+    }, {
+      id: "need:food-preservation",
+      question: "低温怎样约束食品保存？",
+      knowledgeLayers: ["function", "mechanism"],
+      priority: "must",
+    }, {
+      id: "need:regulatory-model-record",
+      question: "型号 MR-457WUSPZE 的能效备案原文是什么？",
+      knowledgeLayers: ["identity", "specification"],
+      priority: "must",
+    }, {
+      id: "need:manual-installation",
+      question: "型号 MR-457WUSPZE 的安装和尺寸边界是什么？",
+      knowledgeLayers: ["specification", "decision"],
+      priority: "should",
+    }],
+    categoryFramework: {
+      attributes: [{
+        code: "cooling.mechanism",
+        label: "制冷机制",
+        description: "冰箱移除热量的工作链",
+        knowledgeLayer: "mechanism",
+        valueKind: "text",
+        externalMappings: [],
+        filterable: false,
+        comparable: false,
+      }, {
+        code: "identity.model_number",
+        label: "厂家型号",
+        description: "监管备案中的厂家型号",
+        knowledgeLayer: "identity",
+        valueKind: "text",
+        externalMappings: ["manufacturer_model"],
+        filterable: true,
+        comparable: false,
+      }],
+      decisionDimensions: [{
+        code: "preservation.conditions",
+        label: "保存条件",
+        description: "低温对食品保存的适用边界",
+        relatedAttributeCodes: ["cooling.mechanism"],
+      }],
+      competencyQuestions: [
+        "蒸汽压缩制冷循环如何搬运热量？",
+        "低温怎样约束食品保存？",
+        "低温为什么不能等同于杀灭所有微生物？",
+      ],
+    },
+    targetPopulation: {
+      populationLayers: ["regulatory_registry", "official_current_catalog"],
+      targets: [{
+        key: "category:refrigerator",
+        kind: "category",
+        label: "家用冰箱",
+        disposition: "included",
+        reason: "把底层原理连接到品类知识。",
+      }, {
+        key: "concept:vapor-compression-cycle",
+        kind: "foundational_concept",
+        label: "蒸汽压缩制冷循环",
+        parentKey: "category:refrigerator",
+        disposition: "included",
+        reason: "制冷机制必须独立于品牌和型号表达。",
+      }, {
+        key: "concept:food-preservation-conditions",
+        kind: "foundational_concept",
+        label: "低温食品保存条件",
+        parentKey: "category:refrigerator",
+        disposition: "included",
+        reason: "保存条件需要保留适用边界，不能被扩大为灭菌结论。",
+      }, {
+        key: "model:energy-label:MR-457WUSPZE",
+        kind: "model",
+        label: "中国能效标识 MR-457WUSPZE",
+        parentKey: "category:refrigerator",
+        disposition: "included",
+        reason: "公开监管备案中的真实型号记录。",
+      }],
+    },
+    sourcePolicy: {
+      authorityTypes: ["government_research", "regulatory_source", "official_manual"],
+      accessModes: ["public_web", "document"],
+      freshnessPolicy: "manual",
+      stopConditions: ["access_denied", "source_abnormal"],
+    },
+    collectionLanes: [{
+      id: "lane:refrigerator:cycle-research",
+      sourceAuthorityType: "government_research",
+      accessMode: "public_web",
+      targetKeys: ["category:refrigerator", "concept:vapor-compression-cycle"],
+      knowledgeLayers: ["mechanism"],
+      refreshPolicy: "manual",
+      stopConditions: ["access_denied", "source_abnormal"],
+    }, {
+      id: "lane:refrigerator:preservation-research",
+      sourceAuthorityType: "government_research",
+      accessMode: "public_web",
+      targetKeys: ["category:refrigerator", "concept:food-preservation-conditions"],
+      knowledgeLayers: ["function", "mechanism"],
+      refreshPolicy: "manual",
+      stopConditions: ["access_denied", "source_abnormal"],
+    }, {
+      id: "lane:refrigerator:regulatory",
+      sourceAuthorityType: "regulatory_source",
+      accessMode: "public_web",
+      targetKeys: ["model:energy-label:MR-457WUSPZE"],
+      knowledgeLayers: ["identity", "specification"],
+      refreshPolicy: "manual",
+      stopConditions: ["access_denied", "source_abnormal"],
+    }, {
+      id: "lane:refrigerator:manual",
+      sourceAuthorityType: "official_manual",
+      accessMode: "document",
+      targetKeys: ["model:energy-label:MR-457WUSPZE"],
+      knowledgeLayers: ["specification", "decision"],
+      refreshPolicy: "manual",
+      stopConditions: ["access_denied", "source_abnormal"],
+    }],
+    sourceAssignments: [{
+      collectionLaneId: "lane:refrigerator:cycle-research",
+      factReferenceId: "source:nist-cycle-d-hx",
+      knowledgeNeedIds: ["need:refrigeration-cycle"],
+    }, {
+      collectionLaneId: "lane:refrigerator:preservation-research",
+      factReferenceId: "source:usda-refrigeration",
+      knowledgeNeedIds: ["need:food-preservation"],
+    }, {
+      collectionLaneId: "lane:refrigerator:regulatory",
+      factReferenceId: "source:energy-label:mr-457",
+      knowledgeNeedIds: ["need:regulatory-model-record"],
+      request: {
+        kind: "structured_record_lookup",
+        fields: [{ code: "manufacturer_model", value: "MR-457WUSPZE" }],
+        maximumBytes: 40_000,
+      },
+    }, {
+      collectionLaneId: "lane:refrigerator:manual",
+      factReferenceId: "source:midea-manual:mr-457",
+      knowledgeNeedIds: ["need:manual-installation"],
+      request: {
+        kind: "document_excerpt",
+        requiredIdentityText: "MR-457WUSPZE",
+        requiredSectionTerms: ["年综合耗电量", "外形尺寸"],
+        section: "产品参数",
+        maximumSourceBytes: 20 * 1024 * 1024,
+        maximumExcerptBytes: 256 * 1024,
+      },
+    }],
+    acceptanceCriteria: [
+      "三个许可来源逐条持久化并只绑定各自知识需求与目标",
+      "三个许可来源形成可复核的最小 Evidence",
+      "未获许可的官方说明书保持 typed waiting 且零请求",
+    ],
+    decisionIds: [decisionId],
+    factReferences: [{
+      id: "source:nist-cycle-d-hx",
+      label: "NIST CYCLE_D-HX",
+      url: refrigeratorSources.cycle,
+      sourceAuthorityType: "government_research",
+      observedAt: "2026-08-18T00:00:00.000Z",
+    }, {
+      id: "source:usda-refrigeration",
+      label: "USDA Refrigeration and Food Safety",
+      url: refrigeratorSources.preservation,
+      sourceAuthorityType: "government_research",
+      observedAt: "2026-08-18T00:00:00.000Z",
+    }, {
+      id: "source:energy-label:mr-457",
+      label: "中国能效标识备案查询",
+      url: refrigeratorSources.energyLabel,
+      sourceAuthorityType: "regulatory_source",
+      observedAt: "2026-08-18T00:00:00.000Z",
+    }, {
+      id: "source:midea-manual:mr-457",
+      label: "美的 MR-457WUSPZE 官方说明书",
+      url: refrigeratorSources.blockedManual,
+      sourceAuthorityType: "official_manual",
+      observedAt: "2026-08-18T00:00:00.000Z",
+    }],
+    investigatedFacts: ([
+      "brand", "model", "parameter", "component", "mechanism", "source_entrypoint",
+    ] as const).map((kind) => ({
+      id: `investigated:${kind}`,
+      kind,
+      statement: `${kind} 在本轮范围、许可和未知边界已调查`,
+      factReferenceIds: [
+        "source:nist-cycle-d-hx",
+        "source:usda-refrigeration",
+        "source:energy-label:mr-457",
+        "source:midea-manual:mr-457",
+      ],
+    })),
+  };
+}

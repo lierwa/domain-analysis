@@ -21,6 +21,7 @@ import {
   createKonkaFrestecOfficialCatalogSource,
   createJdOfficialRetailSource,
   createJdSourceCollectionProvider,
+  createPlaywrightCdpJdPageReader,
   createCrawleeReadablePageReader,
   createReadableTechnicalSourceCollectionProvider,
   createSourceCollectionProviderRouter,
@@ -36,7 +37,10 @@ import {
 } from "@domain-analysis/worker";
 import { loadConfig } from "./config";
 import { buildServer } from "./server";
-import { createProductionSourceCollectionPlanningRules } from "./sourceCollectionPlanning";
+import {
+  createProductionSourceCollectionPlanningRules,
+  jdSourceAccessPolicy,
+} from "./sourceCollectionPlanning";
 
 const config = loadConfig();
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -65,8 +69,13 @@ const energyLabelRecordSource = createCrawleeEnergyLabelRecordSource({
 const documentExcerptSource = createCrawleeDocumentExcerptSource({
   allowedOrigins: config.collectionAllowedOrigins,
 });
+const jdPageReader = createPlaywrightCdpJdPageReader({
+  endpointUrl: config.jdCdpEndpoint,
+  allowedOrigins: config.collectionAllowedOrigins,
+});
 const jdSourceCollectionProvider = createJdSourceCollectionProvider({
   allowedOrigins: config.collectionAllowedOrigins,
+  pageReader: jdPageReader,
 });
 const socrataSource = createSocrataOpenDataSource({
   allowedOrigins: config.collectionAllowedOrigins,
@@ -156,6 +165,8 @@ const app = await buildServer({
   }),
   jdOfficialRetailCatalog: createJdOfficialRetailSource({
     allowedOrigins: config.collectionAllowedOrigins,
+    pageReader: jdPageReader,
+    accessPolicy: jdSourceAccessPolicy,
   }),
   marketUniverseRegulatoryPipeline: pipelines.marketUniverseRegulatory,
   closeProductKnowledgePipelines: pipelines.close,

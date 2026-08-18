@@ -12,8 +12,11 @@
   },
   "dependencies": {
     "@domain-analysis/shared": "0.1.0",
-    "@libsql/client": "0.17.4",
+    "better-sqlite3": "12.11.1",
     "canonicalize": "3.0.0",
     "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0"
   }
 }

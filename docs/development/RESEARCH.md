@@ -1,7 +1,7 @@
 # 技术调研登记
 
 状态：持续维护
-更新日期：2026-08-17
+更新日期：2026-08-18
 
 本文件只记录技术问题、成熟候选、官方依据、原型结果、接受/拒绝/替代状态和退出成本。阶段进度看 `PROGRESS.md`，模块边界看 `ARCHITECTURE.md`，详细历史样本看对应 `pocs/` 与 ADR。
 
@@ -60,15 +60,15 @@
 
 ### R-003/R-015 知识包存储与全文
 
-状态：SQLite＋FTS5 已接受；新 EvidenceItem、许可投影与第二品类已由 R-034 复核
+状态：SQLite＋FTS5 已接受；新 EvidenceItem、许可投影、第二品类和 Windows/Node 24 文件生命周期已复核，目标 Linux 门仍待补
 
 问题：知识包需单文件、只读、离线、可复制，支持精确、结构化、中文全文、关系和证据查询，不要求模型/embedding。
 
-结论：SQLite＋FTS5 满足 MVP；构建后 SHA-256 校验、只读打开并启用 `query_only`，新包校验成功后原子切换 stable 指针。DuckDB/Orama 不进入当前依赖；它们不是查询能力的必要条件。
+结论：SQLite＋FTS5 满足 MVP；构建后 SHA-256 校验、只读打开并启用 `query_only`，新包校验成功后原子切换 stable 指针。生产本地 SQLite 和知识包读写统一使用 `better-sqlite3@12.11.1`：该 MIT 版本声明支持 Node 24，提供 Windows 预编译包，且 Drizzle 有官方 adapter。DuckDB/Orama 不进入当前依赖；它们不是查询能力的必要条件。
 
-验证：历史 POC 验证跨目录复制、无网络查询、损坏拒绝、版本切换/回滚和第二品类同结构；R-034 又使用当前最小 EvidenceItem 验证公开证据携带内容、受限证据只携带 locator、相同输入重建复用版本、电视型号/全文/关系/证据查询和复制离线查询。见 `pocs/r015/README.md`、`pocs/r034/README.md`、ADR-0006。
+验证：历史 POC 验证跨目录复制、无网络查询、损坏拒绝、版本切换/回滚和第二品类同结构；R-034 又使用当前最小 EvidenceItem 验证公开证据携带内容、受限证据只携带 locator、相同输入重建复用版本、电视型号/全文/关系/证据查询和复制离线查询。2026-08-18 Windows/Node 24.14 复现 `@libsql/client@0.17.4` 在 `close()` 后仍令初始化库删除和知识包 rename 返回 `EBUSY`；上游也记录 native statement/transaction 句柄可能延迟到 GC。改用 `better-sqlite3` 显式 close 后，legacy SQLite、知识包原子 rename、长路径打开和清理均通过。超过传统 Windows 路径上限时只在 native 驱动边界调用 Node 稳定的 `path.toNamespacedPath`，公开描述符仍保存普通绝对路径。见 `pocs/r015/README.md`、`pocs/r034/README.md`、ADR-0006。
 
-官方依据：https://sqlite.org/fts5.html 、https://sqlite.org/pragma.html#pragma_query_only 、https://sqlite.org/lang_attach.html
+官方依据：https://sqlite.org/fts5.html 、https://sqlite.org/pragma.html#pragma_query_only 、https://github.com/WiseLibs/better-sqlite3/releases/tag/v12.11.1 、https://orm.drizzle.team/docs/sqlite/get-started-sqlite 、https://github.com/tursodatabase/libsql-client-ts/issues/350 、https://nodejs.org/api/path.html#pathtonamespacedpathpath
 
 ### R-004/R-021 Workbench PostgreSQL 与 migration
 
@@ -669,7 +669,7 @@ Browser
 
 ### R-033 公开技术网页正文提取
 
-状态：macOS/Node 24 正式链路原型已通过；目标 Linux 安装/运行门仍待补，暂不宣称跨机器生产接受
+状态：macOS 与 Windows/Node 24 正式链路原型已通过；目标 Linux 安装/运行门仍待补，暂不宣称全平台生产接受
 目标阶段：阶段 1A / M2 代表性底层知识来源小批次
 
 问题：已确认任务书只应提供 Knowledge Need 和来源入口，不能要求调用者为每个未知技术网页手写 CSS selector。正文定位属于通用网页能力，必须复用成熟实现；站点权威性、许可和 claim scope 仍由 Workbench 规则决定，提取器不能替代这些业务判断。
@@ -708,6 +708,14 @@ Browser
 - `SourceCollectionWorkItem.request` 只新增三个 category/source-neutral 选择方式：`full_resource / document_excerpt / structured_record_lookup`。监管 Provider 在外部 seam 将通用字段码严格收窄为 `manufacturer_model`；PDF Provider 复用 Crawlee＋unpdf 并只保存唯一页摘录。未知查询字段、错误对象类型或许可不足均失败关闭。
 - 当前美的法律声明明确：未经书面许可不得通过机器人/爬虫复制、下载或使用平台内容。因此历史 `MR-457WUSPZE` PDF 只能保留为历史 POC 证据，正式规则设置 `localRead/modelInput/evidenceStorage=denied`：https://www.midea.cn/act/help_center_new/transaction_terms?id=106&parentId=508
 - 中国能效标识按型号公开查询继续复用 R-026 已接受的真实来源与两步官方协议；本轮只查询一个已知型号，不把监管库冒充当前在售总体，也不从监管结果生成知识。
+
+#### 2026-08-18 Windows 冰箱纵切片结果
+
+- Windows 11、Node 24.14.1、npm 11.11.0 和本机 PostgreSQL 14 上，confirmed brief → 服务端 Planner → DBOS → Provider → Source Dataset → Evidence 的隔离真实验收一次通过、零自动重试。NIST 制冷循环正文、USDA 冷藏保鲜正文和中国能效标识型号记录分别形成 1 条可访问快照和 1 条最小 Evidence；三个目标/Knowledge Need 没有串线。美的说明书保持 `waiting / local_read_not_allowed`，请求数为 0。
+- 首次隔离运行暴露 Planner 的批次幂等键只含 Provider＋访问政策，同一 Provider 下两条不同 lane 会碰撞。生产键已改为同时绑定 `collectionLaneId + providerKey + accessPolicy + 完整 workItems`，并由“同 Provider/政策、不同路线必须产生不同键”的回归测试锁定；没有引入冰箱分支或第二套执行器。
+- 本机开发库用于 PC 表面展示，不冒充完整验收：NIST 与能效标识运行完成；USDA 当前页面两次返回 HTTP 403，两个失败运行均持久化 typed `source_stop_signal/source_abnormal`，没有第三次重试或绕过。因为该项目批次不完整，Evidence 数为 0；PC Workbench 能同时显示已完成与失败来源。隔离验收中的 USDA 成功事实与开发库当前 403 都保留，不互相覆盖。
+- 海尔、TCL、海信和康佳当前公开法律/使用条款没有给出本产品规则所需的明确机器采集、模型输入和派生发布许可，并包含复制、自动化或商业使用限制；因此官网/型号资料继续失败关闭，不以“公开可浏览”推定可采集。依据：https://www.haier.com/notice/legal/ 、https://www.tcl.com/cn/zh/legal/terms-of-use 、https://hiyouxin.hisense.com/zcms/ui/content/show?ID=16997 、https://www.konka.com/p-13.html
+- 本轮没有访问京东。准确阶段结论是：R-033 的 Windows 通用技术/监管小批次和最小 Evidence 已通过；`ROADMAP.md` 冰箱纵向第 6 步仍缺获许可的品牌官网完整商品详情/说明书，且开发库 USDA 来源处于外部 403，不能宣布第 6 步或阶段 1A 完成。
 
 ### R-031 跨品类来源数据集 contract 与导出
 

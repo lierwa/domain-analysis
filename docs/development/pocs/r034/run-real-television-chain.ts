@@ -8,11 +8,7 @@ import {
 } from "@domain-analysis/knowledge-runtime";
 import type {
   CategoryInterviewRuntimeOutput,
-  EvidenceRequestDraft,
-  EvidenceKind,
   ProductProjectView,
-  SourceCollectionPipelineRun,
-  SourceSnapshotRecord,
 } from "@domain-analysis/shared";
 import {
   createCodexKnowledgeCandidateModel,
@@ -33,6 +29,13 @@ import {
 } from "@domain-analysis/worker";
 
 import { createProductionSourceCollectionPlanningRules } from "../../../../apps/api/src/sourceCollectionPlanning";
+import {
+  createAcceptanceEvidenceRequest,
+  materializeDocumentEvidence,
+  materializeFieldEvidence,
+  requireRecord,
+  settlePlannedExecution,
+} from "../sourceEvidenceAcceptance";
 import { televisionBrief } from "./televisionBrief";
 
 const databaseUrl = process.env.POSTGRES_DATABASE_URL;
@@ -84,11 +87,9 @@ async function main() {
       },
     );
     const launch = await planner.start(project.project.id);
-    const pipelineRuns = await Promise.all(launch.executions.map(async ({ pipelineRun, error }) => {
-      if (!pipelineRun) throw new Error(error ?? "来源批次没有启动");
-      return waitForTerminal(pipeline!.module, pipelineRun.id);
-    }));
-    assert(pipelineRuns.every(({ lifecycleStatus }) => lifecycleStatus === "succeeded"));
+    const pipelineStatuses = await Promise.all(launch.executions.map((execution) =>
+      settlePlannedExecution(pipeline!.module, execution)));
+    assert(pipelineStatuses.every((status) => status === "succeeded" || status === "reused"));
     const records = await sourceRecords(workbench, project.project.id);
     assert.equal(records.length, 4, "R-034 必须取得两个 DOE 页面、一页 DOE 报告和一条 EPA 模型记录");
 
@@ -282,34 +283,11 @@ async function createEvidenceRequests(
   workbench: Awaited<ReturnType<typeof openProductKnowledgeWorkbench>>,
   project: ProductProjectView,
 ) {
-  const create = (input: Pick<EvidenceRequestDraft,
-    "collectionLaneIds" | "knowledgeNeed" | "question" | "knowledgeLayer" | "targetKeys"
-    | "allowedSourceAuthorityTypes"> & { acceptedEvidenceKind?: EvidenceKind }) => {
-    const { acceptedEvidenceKind = "web_text", ...requestScope } = input;
-    const evidenceContract = acceptedEvidenceKind === "document_excerpt"
-      ? {
-        acceptedEvidenceKinds: ["document_excerpt" as const],
-        evidenceByteLimits: { document_excerpt: 256 * 1024 },
-      }
-      : {
-        acceptedEvidenceKinds: ["web_text" as const],
-        evidenceByteLimits: { web_text: 32_000 },
-      };
-    return workbench.evidence.createRequest({
-      projectId: project.project.id,
-      categoryDefinitionVersionId: project.categoryDefinition.id,
-      confirmedScopeVersionId: project.confirmedScope.id,
-      collectionBoardVersionId: project.collectionBoard.id,
-      ...requestScope,
-      ...evidenceContract,
-      freshness: { maxAgeDays: 3650 },
-      minimumEvidenceItemsPerTarget: 1,
-      minimumDistinctSourcesPerTarget: 1,
+  const create = (input: Omit<Parameters<typeof createAcceptanceEvidenceRequest>[2],
+    "evidencePolicyVersion">) => createAcceptanceEvidenceRequest(workbench, project, {
+      ...input,
       evidencePolicyVersion: "r034-minimal-evidence-v1",
-      stopConditions: ["access_denied", "source_abnormal"],
-      priority: 100,
     });
-  };
   const [definition, architecture, efficiency, model] = await Promise.all([
     create({
       collectionLaneIds: ["lane:television:government-research"],
@@ -369,69 +347,6 @@ async function sourceRecords(
   return views.flatMap((view) => view?.records ?? []);
 }
 
-function requireRecord(records: SourceSnapshotRecord[], externalKey: string) {
-  const record = records.find(({ object }) => object.externalKey === externalKey);
-  if (!record) throw new Error(`缺少来源快照：${externalKey}`);
-  return record;
-}
-
-async function materializeDocumentEvidence(
-  workbench: Awaited<ReturnType<typeof openProductKnowledgeWorkbench>>,
-  requestId: string,
-  record: SourceSnapshotRecord,
-  marker: string,
-) {
-  const content = record.snapshot.content;
-  if (content?.kind !== "document") throw new Error("预期 document 来源内容");
-  const block = content.sections[0]?.blocks[0];
-  if (block?.kind !== "text") throw new Error("预期可定位文本块");
-  return workbench.sourceEvidence.materialize({
-    requestId,
-    snapshotId: record.snapshot.id,
-    selection: {
-      kind: "document_text_block",
-      sectionIndex: 0,
-      blockIndex: 0,
-      quote: quoteAround(block.text, marker),
-    },
-  });
-}
-
-async function materializeFieldEvidence(
-  workbench: Awaited<ReturnType<typeof openProductKnowledgeWorkbench>>,
-  requestId: string,
-  record: SourceSnapshotRecord,
-  fieldName: string,
-) {
-  const content = record.snapshot.content;
-  if (content?.kind !== "ordered_record") throw new Error("预期 ordered_record 来源内容");
-  const fieldIndex = content.fieldGroups[0]?.fields.findIndex(({ name }) => name === fieldName) ?? -1;
-  if (fieldIndex < 0) throw new Error(`开放数据缺少字段：${fieldName}`);
-  return workbench.sourceEvidence.materialize({
-    requestId,
-    snapshotId: record.snapshot.id,
-    selection: { kind: "ordered_field", groupIndex: 0, fieldIndex },
-  });
-}
-
-function quoteAround(text: string, marker: string): {
-  exact: string;
-  prefix?: string;
-  suffix?: string;
-} {
-  const markerIndex = text.toLowerCase().indexOf(marker.toLowerCase());
-  if (markerIndex < 0) throw new Error(`来源正文缺少验收标记：${marker}`);
-  const paragraphStart = Math.max(text.lastIndexOf("\n\n", markerIndex) + 2, markerIndex - 500);
-  const nextBreak = text.indexOf("\n\n", markerIndex);
-  const paragraphEnd = Math.min(nextBreak < 0 ? text.length : nextBreak, markerIndex + 1500);
-  const exact = text.slice(paragraphStart, paragraphEnd).trim();
-  const exactIndex = text.indexOf(exact, paragraphStart);
-  const prefix = text.slice(Math.max(0, exactIndex - 80), exactIndex);
-  const suffix = text.slice(exactIndex + exact.length, exactIndex + exact.length + 80);
-  if (!prefix && !suffix) throw new Error("TextQuote 缺少消歧上下文");
-  return { exact, ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) };
-}
-
 class QueueRuntime implements CategoryInterviewRuntime {
   private readonly outputs: CategoryInterviewRuntimeOutput[] = [];
   push(output: CategoryInterviewRuntimeOutput) { this.outputs.push(output); }
@@ -447,19 +362,6 @@ async function collect<T>(events: AsyncIterable<T>) {
   for await (const _event of events) {
     // Workbench 是唯一消息与任务书事实源。
   }
-}
-
-async function waitForTerminal(
-  module: { get(id: string): Promise<SourceCollectionPipelineRun | null> },
-  id: string,
-) {
-  const deadline = Date.now() + 90_000;
-  while (Date.now() < deadline) {
-    const current = await module.get(id);
-    if (current && ["succeeded", "failed", "cancelled"].includes(current.lifecycleStatus)) return current;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`source pipeline timeout: ${id}`);
 }
 
 await main();

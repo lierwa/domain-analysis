@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import Database from "better-sqlite3";
 
-import { createClient, type Client } from "@libsql/client";
 import {
   knowledgePackageBuildInputSchema,
   knowledgePackageDescriptorSchema,
@@ -15,6 +15,7 @@ import {
   type PublishableKnowledgeState,
 } from "@domain-analysis/shared";
 import canonicalize from "canonicalize";
+import { nativeSqlitePath } from "./nativeSqlitePath";
 
 export async function buildKnowledgePackage(
   rawInput: KnowledgePackageBuildInput,
@@ -39,16 +40,20 @@ export async function buildKnowledgePackage(
   const existing = await descriptorForExisting(filePath, versionHash);
   if (existing) return existing;
   const temporaryPath = path.join(versionsRoot, `.${versionHash}.${randomUUID()}.tmp`);
-  const db = createClient({ url: `file:${temporaryPath}` });
   try {
-    await createSchema(db);
-    await insertPackage(db, manifest, input);
-    await db.execute("PRAGMA optimize");
+    const db = new Database(nativeSqlitePath(temporaryPath));
+    try {
+      createSchema(db);
+      insertPackage(db, manifest, input);
+      db.exec("PRAGMA optimize");
+    } finally {
+      // WHY：发布前显式释放本地 SQLite 句柄，Windows 才能原子 rename；不能依赖 GC 的不确定时机。
+      db.close();
+    }
   } catch (error) {
-    await removeTemporary(temporaryPath, db);
+    await rm(temporaryPath, { force: true });
     throw error;
   }
-  db.close();
   await chmod(temporaryPath, 0o444);
   await rename(temporaryPath, filePath);
   return createDescriptor(filePath, manifest);
@@ -62,11 +67,11 @@ export async function describeKnowledgePackage(filePath: string) {
   return createDescriptor(filePath, manifest);
 }
 
-async function createSchema(db: Client) {
-  await db.execute("PRAGMA foreign_keys=ON");
-  await db.execute("PRAGMA journal_mode=DELETE");
-  await db.execute("CREATE TABLE package_meta(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)");
-  await db.execute(`CREATE TABLE knowledge_states(
+function createSchema(db: Database.Database) {
+  db.exec("PRAGMA foreign_keys=ON");
+  db.exec("PRAGMA journal_mode=DELETE");
+  db.exec("CREATE TABLE package_meta(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)");
+  db.exec(`CREATE TABLE knowledge_states(
     state_id TEXT PRIMARY KEY,
     state_kind TEXT NOT NULL,
     subject_key TEXT NOT NULL,
@@ -82,9 +87,9 @@ async function createSchema(db: Client) {
     confirmed_at TEXT NOT NULL,
     payload_json TEXT NOT NULL
   )`);
-  await db.execute("CREATE INDEX knowledge_states_subject_idx ON knowledge_states(subject_key, predicate)");
-  await db.execute("CREATE INDEX knowledge_states_filter_idx ON knowledge_states(state_kind, subject_kind, knowledge_layer, predicate)");
-  await db.execute(`CREATE TABLE evidence(
+  db.exec("CREATE INDEX knowledge_states_subject_idx ON knowledge_states(subject_key, predicate)");
+  db.exec("CREATE INDEX knowledge_states_filter_idx ON knowledge_states(state_kind, subject_kind, knowledge_layer, predicate)");
+  db.exec(`CREATE TABLE evidence(
     evidence_id TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
     source_identity TEXT NOT NULL,
@@ -94,12 +99,12 @@ async function createSchema(db: Client) {
     redistribution_allowed INTEGER NOT NULL,
     payload_json TEXT NOT NULL
   )`);
-  await db.execute(`CREATE TABLE state_evidence(
+  db.exec(`CREATE TABLE state_evidence(
     state_id TEXT NOT NULL REFERENCES knowledge_states(state_id),
     evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id),
     PRIMARY KEY(state_id, evidence_id)
   )`);
-  await db.execute(`CREATE TABLE relations(
+  db.exec(`CREATE TABLE relations(
     state_id TEXT PRIMARY KEY REFERENCES knowledge_states(state_id),
     source_subject_key TEXT NOT NULL,
     predicate TEXT NOT NULL,
@@ -107,55 +112,53 @@ async function createSchema(db: Client) {
     target_subject_kind TEXT NOT NULL,
     target_subject_label TEXT NOT NULL
   )`);
-  await db.execute("CREATE INDEX relations_source_idx ON relations(source_subject_key, predicate)");
-  await db.execute("CREATE INDEX relations_target_idx ON relations(target_subject_key, predicate)");
-  await db.execute("CREATE VIRTUAL TABLE search_documents USING fts5(state_id UNINDEXED, content, tokenize='trigram')");
+  db.exec("CREATE INDEX relations_source_idx ON relations(source_subject_key, predicate)");
+  db.exec("CREATE INDEX relations_target_idx ON relations(target_subject_key, predicate)");
+  db.exec("CREATE VIRTUAL TABLE search_documents USING fts5(state_id UNINDEXED, content, tokenize='trigram')");
 }
 
-async function insertPackage(
-  db: Client,
+function insertPackage(
+  db: Database.Database,
   manifest: KnowledgePackageManifest,
   input: ReturnType<typeof normalizeInput>,
 ) {
-  await db.execute({
-    sql: "INSERT INTO package_meta(key, value_json) VALUES (?, ?)",
-    args: ["manifest", canonical(manifest)],
-  });
+  run(db, "INSERT INTO package_meta(key, value_json) VALUES (?, ?)", [
+    "manifest", canonical(manifest),
+  ]);
   for (const evidence of input.evidence) {
-    await db.execute({
-      sql: "INSERT INTO evidence VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      args: [evidence.id, evidence.kind, evidence.sourceIdentity, evidence.sourceAuthorityType,
-        evidence.sourceUrl, evidence.contentIntegrity, evidence.redistributionAllowed ? 1 : 0,
-        canonical(evidence)],
-    });
+    run(db, "INSERT INTO evidence VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [
+      evidence.id, evidence.kind, evidence.sourceIdentity, evidence.sourceAuthorityType,
+      evidence.sourceUrl, evidence.contentIntegrity, evidence.redistributionAllowed ? 1 : 0,
+      canonical(evidence),
+    ]);
   }
   for (const state of input.states) {
     const row = stateRow(state);
-    await db.execute({
-      sql: "INSERT INTO knowledge_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      args: [row.id, state.kind, row.subject.key, row.subject.kind, row.subject.label,
-        row.knowledgeNeedId, row.knowledgeLayer, row.predicate, row.numericValue,
-        row.unitCode, row.valueText, row.reasonCode, row.confirmedAt, canonical(state)],
-    });
+    run(db, "INSERT INTO knowledge_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+      row.id, state.kind, row.subject.key, row.subject.kind, row.subject.label,
+      row.knowledgeNeedId, row.knowledgeLayer, row.predicate, row.numericValue,
+      row.unitCode, row.valueText, row.reasonCode, row.confirmedAt, canonical(state),
+    ]);
     for (const evidenceId of stateEvidenceIds(state)) {
-      await db.execute({
-        sql: "INSERT INTO state_evidence(state_id, evidence_id) VALUES (?, ?)",
-        args: [row.id, evidenceId],
-      });
+      run(db, "INSERT INTO state_evidence(state_id, evidence_id) VALUES (?, ?)", [row.id, evidenceId]);
     }
     if (state.kind === "fact" && state.entry.value.kind === "subject_ref") {
       const target = state.entry.value.subject;
-      await db.execute({
-        sql: "INSERT INTO relations VALUES (?, ?, ?, ?, ?, ?)",
-        args: [row.id, row.subject.key, row.predicate, target.key, target.kind, target.label],
-      });
+      run(db, "INSERT INTO relations VALUES (?, ?, ?, ?, ?, ?)", [
+        row.id, row.subject.key, row.predicate, target.key, target.kind, target.label,
+      ]);
     }
-    await db.execute({
-      sql: "INSERT INTO search_documents(state_id, content) VALUES (?, ?)",
-      args: [row.id, searchContent(state)],
-    });
+    run(db, "INSERT INTO search_documents(state_id, content) VALUES (?, ?)", [
+      row.id, searchContent(state),
+    ]);
   }
 }
+
+function run(db: Database.Database, sql: string, args: SqlValue[]) {
+  db.prepare(sql).run(...args);
+}
+
+type SqlValue = string | number | bigint | Buffer | null;
 
 function stateRow(state: PublishableKnowledgeState) {
   if (state.kind === "fact") {
@@ -240,11 +243,6 @@ async function createDescriptor(filePath: string, manifest: KnowledgePackageMani
     databaseSha256: sha256(bytes),
     bytes: (await stat(filePath)).size,
   });
-}
-
-async function removeTemporary(filePath: string, db: Client) {
-  db.close();
-  await rm(filePath, { force: true });
 }
 
 function canonical(value: unknown) {

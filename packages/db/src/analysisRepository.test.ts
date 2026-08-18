@@ -7,7 +7,7 @@ import {
   createAnalysisRunRepository,
   createRunReportRepository
 } from "./analysisRepositories";
-import { createDb, initializeDatabase } from "./client";
+import { closeDb, createDb, initializeDatabase, type AppDb } from "./client";
 import {
   createCrawlTaskRepository,
   createRawContentRepository,
@@ -16,14 +16,17 @@ import {
 
 let tempDir: string;
 let databaseUrl: string;
+let db: AppDb;
 
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), "domain-analysis-db-"));
   databaseUrl = `file:${join(tempDir, "test.sqlite")}`;
   await initializeDatabase(databaseUrl);
+  db = createDb(databaseUrl);
 });
 
 afterEach(async () => {
+  closeDb(db);
   await rm(tempDir, { recursive: true, force: true });
 });
 
@@ -41,7 +44,6 @@ describe("initializeDatabase", () => {
 
 describe("analysis repositories", () => {
   it("creates projects and runs", async () => {
-    const db = createDb(databaseUrl);
     const projects = createAnalysisProjectRepository(db);
     const runs = createAnalysisRunRepository(db);
 
@@ -70,7 +72,6 @@ describe("analysis repositories", () => {
   });
 
   it("updates run status and archives project", async () => {
-    const db = createDb(databaseUrl);
     const projects = createAnalysisProjectRepository(db);
     const runs = createAnalysisRunRepository(db);
 
@@ -97,7 +98,6 @@ describe("analysis repositories", () => {
 
 describe("platform sources", () => {
   it("seeds multi-platform metadata while the current flow can still choose reddit", async () => {
-    const db = createDb(databaseUrl);
     const sources = createSourceRepository(db);
 
     await sources.seedDefaults();
@@ -115,7 +115,6 @@ describe("platform sources", () => {
 
 describe("run content isolation", () => {
   it("requires run/project/task context and only returns content from the requested run", async () => {
-    const db = createDb(databaseUrl);
     const projects = createAnalysisProjectRepository(db);
     const runs = createAnalysisRunRepository(db);
     const sources = createSourceRepository(db);
@@ -184,7 +183,6 @@ describe("run content isolation", () => {
   });
 
   it("deduplicates content by platform + externalId", async () => {
-    const db = createDb(databaseUrl);
     const projects = createAnalysisProjectRepository(db);
     const runs = createAnalysisRunRepository(db);
     const sources = createSourceRepository(db);
@@ -230,7 +228,6 @@ describe("run content isolation", () => {
 
 describe("run report repository", () => {
   it("creates and retrieves a run-bound report", async () => {
-    const db = createDb(databaseUrl);
     const projects = createAnalysisProjectRepository(db);
     const runs = createAnalysisRunRepository(db);
     const reports = createRunReportRepository(db);

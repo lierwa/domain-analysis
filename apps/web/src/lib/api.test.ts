@@ -30,6 +30,7 @@ import {
   fetchRegulatoryReconciliation,
   refreshMarketUniverse,
   saveProductProjectDraft,
+  startSourceCollection,
   startRegulatoryReconciliation,
   streamCategoryInterviewTurn,
   sourceRunExportUrl,
@@ -111,6 +112,19 @@ describe("product project API client", () => {
       .resolves.toMatchObject({ run: { id: "run-1" }, records: [] });
     expect(sourceRunExportUrl("project-1", "run-1", "csv"))
       .toBe("/api/product-projects/project-1/source-runs/run-1/export?format=csv");
+  });
+
+  it("starts source collection from the confirmed project only", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ item: { plan: {}, executions: [] } }),
+    }));
+
+    await expect(startSourceCollection("project/1")).resolves.toBeUndefined();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "/api/product-projects/project%2F1/source-collection-runs",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({}) }),
+    );
   });
 
   it("reads, refreshes and confirms the typed market universe", async () => {

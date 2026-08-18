@@ -11,6 +11,17 @@ const publicResearchPolicy = {
   maximumRunMs: 15 * 60_000,
 };
 
+export const jdSourceAccessPolicy = {
+  kind: "paced_http" as const,
+  version: "jd-cdp-supervised-v1",
+  maxRequestsPerMinute: 2,
+  minimumIntervalMs: 10_000,
+  jitterMs: { min: 1_000, max: 3_000 },
+  batchSize: 20,
+  batchCooldownMs: 60_000,
+  maximumRunMs: 4 * 60 * 60_000,
+};
+
 export function createProductionSourceCollectionPlanningRules(
   allowedOrigins: readonly string[],
 ): SourceCollectionPlanningRule[] {
@@ -50,8 +61,52 @@ function researchRules(): SourceCollectionPlanningRule[] {
     doeDisplayArchitecturePdfRule(),
     epaEnergyStarModelIndexRule(),
     energyLabelRule(),
+    jdCatalogRule(),
+    jdProductRule(),
     blockedMideaManualRule(),
   ];
+}
+
+function jdCatalogRule(): SourceCollectionPlanningRule {
+  return {
+    ...jdRuleBase("jd-self-operated-refrigerator-catalog-v1"),
+    sourceIdentity: "jd-cn-self-operated-refrigerator-channel",
+    urlMatch: {
+      kind: "exact_url",
+      url: "https://www.jd.com/brand/737a81dda3769f80aa8.html",
+    },
+    objectKind: "catalog_entry",
+  };
+}
+
+function jdProductRule(): SourceCollectionPlanningRule {
+  return {
+    ...jdRuleBase("jd-self-operated-product-detail-v1"),
+    sourceIdentity: "jd-cn-self-operated-product-detail",
+    urlMatch: { kind: "origin", origin: "https://item.jd.com" },
+    objectKind: "product",
+  };
+}
+
+function jdRuleBase(id: string): Omit<SourceCollectionPlanningRule, "sourceIdentity" | "urlMatch" | "objectKind"> {
+  return {
+    id,
+    providerKey: "jd-source-collection",
+    sourceAuthorityType: "official_direct_retail",
+    accessMode: "browser_supervised",
+    requestKinds: ["full_resource"],
+    parsing: { adapterId: "playwright-cdp-jd-page", adapterVersion: "1.62.1-r035" },
+    claimScopes: ["model_fact", "market_offer"],
+    usagePermission: {
+      localRead: "allowed",
+      modelInput: "allowed",
+      evidenceStorage: "allowed",
+      derivedKnowledgePublication: "allowed",
+      sourceRedistribution: "denied",
+      basis: "项目负责人于 2026-08-18 明确授权个人、非商业、本机采集；仅保存参数化最小观察，不保存整页、Cookie 或认证材料",
+    },
+    accessPolicy: jdSourceAccessPolicy,
+  };
 }
 
 function doeDisplayArchitecturePdfRule(): SourceCollectionPlanningRule {

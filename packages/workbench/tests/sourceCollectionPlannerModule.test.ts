@@ -176,7 +176,66 @@ describe("SourceCollectionPlannerModule", () => {
       issues: [expect.objectContaining({ code: "planning_rule_missing" })],
     });
   });
+
+  it("同一 Provider 和访问策略下的不同路线仍生成不同批次幂等键", async () => {
+    const fixture = twoLaneFixture();
+    const datasets = datasetHarness(new Map([[fixture.project.project.id, fixture.project]]));
+    const planner = createSourceCollectionPlannerModule(
+      projectModule([fixture]),
+      interviewModule([fixture]),
+      datasets.module,
+      pipelineHarness().module,
+      { recipeVersion: "source-plan-v1", rules: [allowedRule()] },
+    );
+
+    const plan = await planner.plan(fixture.project.project.id);
+    const batchKeys = plan.content.lanes.flatMap(({ batches }) => batches.map(({ key }) => key));
+    expect(batchKeys).toHaveLength(2);
+    expect(new Set(batchKeys)).toHaveLength(2);
+
+    await planner.start(fixture.project.project.id);
+    expect(datasets.startRun.mock.calls.map(([input]) => input.sourceCollectionPlanBatchKey))
+      .toEqual(batchKeys);
+  });
 });
+
+function twoLaneFixture() {
+  const fixture = categoryFixture(
+    "refrigerator",
+    "冰箱",
+    "category:refrigerator",
+    "https://example.com/refrigerators/cycle",
+  );
+  const firstLane = fixture.project.collectionBoard.lanes[0]!;
+  const secondLane = { ...firstLane, id: "lane-refrigerator-preservation" };
+  const project = productProjectViewSchema.parse({
+    ...fixture.project,
+    collectionBoard: {
+      ...fixture.project.collectionBoard,
+      lanes: [firstLane, secondLane],
+    },
+  });
+  const firstAssignment = fixture.brief.content.sourceAssignments[0]!;
+  const firstReference = fixture.brief.content.factReferences[0]!;
+  const brief = categoryResearchBriefVersionSchema.parse({
+    ...fixture.brief,
+    content: {
+      ...fixture.brief.content,
+      collectionLanes: [firstLane, secondLane],
+      sourceAssignments: [firstAssignment, {
+        ...firstAssignment,
+        collectionLaneId: secondLane.id,
+        factReferenceId: "reference-refrigerator-preservation",
+      }],
+      factReferences: [firstReference, {
+        ...firstReference,
+        id: "reference-refrigerator-preservation",
+        url: "https://example.com/refrigerators/preservation",
+      }],
+    },
+  });
+  return { project, brief };
+}
 
 function categoryFixture(
   categoryCode: string,

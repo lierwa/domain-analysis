@@ -4,7 +4,7 @@ import type {
   SourceSnapshotRecord,
 } from "@domain-analysis/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, ExternalLink, Plus, RefreshCw } from "lucide-react";
+import { Download, ExternalLink, Play, Plus, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
@@ -13,6 +13,7 @@ import {
   fetchProjectEvidence,
   materializeSourceEvidence,
   sourceRunExportUrl,
+  startSourceCollection,
 } from "../lib/api";
 import {
   sourceAuthorityLabels,
@@ -25,6 +26,12 @@ export function SourceDatasetPanel({ projectId }: { projectId: string }) {
   const runs = useQuery({
     queryKey: ["source-runs", projectId],
     queryFn: () => fetchSourceCollectionRuns(projectId),
+  });
+  const start = useMutation({
+    mutationFn: () => startSourceCollection(projectId),
+    onSuccess: async () => {
+      await runs.refetch();
+    },
   });
   const detail = useQuery({
     queryKey: ["source-run", projectId, selectedRunId],
@@ -52,11 +59,17 @@ export function SourceDatasetPanel({ projectId }: { projectId: string }) {
           <h3 className="text-sm font-semibold">来源数据</h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted">逐条保存来源观察、原始结构、许可和附件；这里只展示来源事实，不把页面字段直接当成已发布知识。</p>
         </div>
-        <button type="button" className="button-secondary" onClick={() => runs.refetch()} disabled={runs.isFetching}>
-          <RefreshCw className={`h-4 w-4 ${runs.isFetching ? "animate-spin" : ""}`} aria-hidden="true" />刷新
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="button-primary" onClick={() => start.mutate()} disabled={start.isPending}>
+            <Play className="h-4 w-4" aria-hidden="true" />{start.isPending ? "启动中…" : "按任务书启动"}
+          </button>
+          <button type="button" className="button-secondary" onClick={() => runs.refetch()} disabled={runs.isFetching}>
+            <RefreshCw className={`h-4 w-4 ${runs.isFetching ? "animate-spin" : ""}`} aria-hidden="true" />刷新
+          </button>
+        </div>
       </header>
 
+      {start.error && <p className="mt-4 text-sm text-danger" role="alert">{start.error instanceof Error ? start.error.message : "来源计划启动失败"}</p>}
       {runs.isError && <p className="mt-4 text-sm text-danger" role="alert">来源运行加载失败，请检查本地服务。</p>}
       {!runs.isLoading && runs.data?.length === 0 && (
         <div className="mt-4 rounded-lg border border-dashed border-line p-5 text-sm text-muted">尚未产生来源运行。</div>

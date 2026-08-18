@@ -1,7 +1,7 @@
 import cors from "@fastify/cors";
 import { FastifySSEPlugin } from "fastify-sse-v2";
 import Fastify, { type FastifyServerOptions } from "fastify";
-import { createDb, type AppDb } from "@domain-analysis/db";
+import { closeDb, createDb, type AppDb } from "@domain-analysis/db";
 import {
   type ProductPipelineModule,
   CategoryInterviewError,
@@ -70,6 +70,10 @@ export async function buildServer(options: BuildServerOptions = {}) {
     logger: options.logger ?? true
   });
   const db = options.db ?? createDb();
+  app.addHook("onClose", async () => {
+    // WHY：Fastify 拥有注册到路由的 legacy SQLite 连接；先关闭连接才能在 Windows 安全发布或清理文件。
+    closeDb(db);
+  });
 
   // WHY：Fastify error handler 受注册顺序和封装作用域影响，必须先于业务路由设置。
   app.setErrorHandler((error, _request, reply) => {

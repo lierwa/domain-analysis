@@ -6,6 +6,9 @@ import {
 } from "../src/jdOfficialRetailSource";
 
 const catalogUrl = "https://www.jd.com/brand/737a81dda3769f80aa8.html";
+// WHY：全量套件会并发启动多个 Crawlee/DBOS worker；fixture 验证业务结果，不应把 5 秒调度争用误判为来源失败。
+// TRADE-OFF：仍保留 15 秒硬上限，真实死锁不会被无限等待掩盖。
+const crawlerFixtureTimeoutMs = 15_000;
 
 describe("JD official direct-retail source", () => {
   it("枚举全部自营分页，只以详情规格确认冰箱品牌和厂商型号", async () => {
@@ -33,7 +36,7 @@ describe("JD official direct-retail source", () => {
       ["海尔", "BCD-500WGHFD4DW9U1"],
     ]);
     expect(snapshot.entries.some((entry) => entry.manufacturerModel.includes("标题伪型号"))).toBe(false);
-  });
+  }, crawlerFixtureTimeoutMs);
 
   it("登录态失效时返回 typed failure，不把登录页当空目录", async () => {
     const reader: JdPageReader = async (url, kind) => {
@@ -47,7 +50,7 @@ describe("JD official direct-retail source", () => {
     });
 
     await expect(source.enumerate()).rejects.toMatchObject({ code: "login_required" });
-  });
+  }, crawlerFixtureTimeoutMs);
 
   it("目录混入非自营卡片时只过滤该卡片，不丢弃同页自营覆盖", async () => {
     const source = createJdOfficialRetailSource({
@@ -66,7 +69,7 @@ describe("JD official direct-retail source", () => {
       acceptedItemCount: 1,
     });
     expect(snapshot.entries.map((entry) => entry.sourceItemId)).toEqual(["1001"]);
-  });
+  }, crawlerFixtureTimeoutMs);
 
   it("详情缺少类型参数时依据官方冰箱面包屑接纳，仍排除相邻品类", async () => {
     const source = createJdOfficialRetailSource({
@@ -86,7 +89,7 @@ describe("JD official direct-retail source", () => {
     expect(snapshot.entries.map((entry) => [entry.brand, entry.manufacturerModel])).toEqual([
       ["TCL", "R116L5-B"],
     ]);
-  });
+  }, crawlerFixtureTimeoutMs);
 
   it("没有通过 R-012 的页面 reader 时失败关闭且不启动浏览器", async () => {
     const source = createJdOfficialRetailSource({

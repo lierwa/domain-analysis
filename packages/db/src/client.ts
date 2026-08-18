@@ -1,25 +1,31 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { createClient } from "@libsql/client";
-import { drizzle } from "drizzle-orm/libsql";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema";
 
 export function createDb(databaseUrl = process.env.DATABASE_URL ?? "file:data/domain-analysis.sqlite") {
-  const client = createClient({ url: databaseUrl });
+  const client = new Database(sqliteFilename(databaseUrl));
+  client.pragma("foreign_keys = ON");
   return drizzle(client, { schema });
 }
 
 export type AppDb = ReturnType<typeof createDb>;
 
+export function closeDb(db: AppDb) {
+  if (db.$client.open) db.$client.close();
+}
+
 export async function initializeDatabase(
   databaseUrl = process.env.DATABASE_URL ?? "file:data/domain-analysis.sqlite"
 ) {
   await ensureSqliteDirectory(databaseUrl);
-  const client = createClient({ url: databaseUrl });
+  const client = new Database(sqliteFilename(databaseUrl));
 
-  // WHY: 当前仍是测试阶段的大重构，不为旧 SQLite schema 写兼容迁移。
-  // TRADE-OFF: 如果已有本地旧库，需要手动清空/重建；后续稳定后再引入正式 migration。
-  await client.executeMultiple(`
+  try {
+    // WHY: 当前仍是测试阶段的大重构，不为旧 SQLite schema 写兼容迁移。
+    // TRADE-OFF: 如果已有本地旧库，需要手动清空/重建；后续稳定后再引入正式 migration。
+    client.exec(`
     PRAGMA foreign_keys = ON;
 
     CREATE TABLE IF NOT EXISTS sources (
@@ -191,14 +197,22 @@ export async function initializeDatabase(
     );
 
     CREATE INDEX IF NOT EXISTS reports_run_idx ON reports(analysis_run_id);
-  `);
+    `);
+  } finally {
+    // WHY：Windows 不允许删除仍被 SQLite client 占用的文件；初始化只拥有本次临时连接。
+    client.close();
+  }
 }
 
 async function ensureSqliteDirectory(databaseUrl: string) {
-  if (!databaseUrl.startsWith("file:")) return;
-
-  const sqlitePath = databaseUrl.slice("file:".length);
+  const sqlitePath = sqliteFilename(databaseUrl);
   if (!sqlitePath || sqlitePath === ":memory:") return;
 
   await mkdir(dirname(sqlitePath), { recursive: true });
+}
+
+function sqliteFilename(databaseUrl: string) {
+  return databaseUrl.startsWith("file:")
+    ? databaseUrl.slice("file:".length)
+    : databaseUrl;
 }

@@ -14,11 +14,12 @@
   },
   "dependencies": {
     "@domain-analysis/shared": "0.1.0",
-    "@libsql/client": "0.17.4",
+    "better-sqlite3": "12.11.1",
     "drizzle-orm": "0.45.2",
     "pg": "8.23.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
     "@types/pg": "8.21.0"
   }
 }

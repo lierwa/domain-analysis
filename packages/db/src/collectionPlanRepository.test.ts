@@ -3,25 +3,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAnalysisProjectRepository } from "./analysisRepositories";
-import { createDb, initializeDatabase } from "./client";
+import { closeDb, createDb, initializeDatabase, type AppDb } from "./client";
 import { createCollectionPlanRepository } from "./collectionPlanRepository";
 
 let tempDir: string;
 let databaseUrl: string;
+let db: AppDb;
 
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), "domain-analysis-db-"));
   databaseUrl = `file:${join(tempDir, "test.sqlite")}`;
   await initializeDatabase(databaseUrl);
+  db = createDb(databaseUrl);
 });
 
 afterEach(async () => {
+  closeDb(db);
   await rm(tempDir, { recursive: true, force: true });
 });
 
 describe("collection plan repository", () => {
   it("creates and lists due active plans", async () => {
-    const db = createDb(databaseUrl);
     const projectRepo = createAnalysisProjectRepository(db);
     const planRepo = createCollectionPlanRepository(db);
 

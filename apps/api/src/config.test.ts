@@ -12,6 +12,7 @@ describe("api config", () => {
       interviewReasoningEffort: "medium",
       knowledgeFactoryModelId: "gpt-5.3-codex-spark",
       knowledgeFactoryReasoningEffort: "low",
+      jdCdpEndpoint: "http://127.0.0.1:9223",
       collectionAllowedOrigins: [
         "https://www.haier.com",
         "https://www.leader.com.cn",
@@ -61,5 +62,10 @@ describe("api config", () => {
       "https://www.haier.com",
       "https://www.midea.cn",
     ]);
+  });
+
+  it("accepts an explicit local Chrome CDP endpoint", () => {
+    expect(loadConfig({ JD_CDP_ENDPOINT: "http://127.0.0.1:9333" }).jdCdpEndpoint)
+      .toBe("http://127.0.0.1:9333");
   });
 });

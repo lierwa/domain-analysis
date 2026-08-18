@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-import { createClient, type Client, type InValue } from "@libsql/client";
 import {
   knowledgePackageEvidenceSchema,
   knowledgePackageManifestSchema,
@@ -10,7 +9,9 @@ import {
   type KnowledgePackageManifest,
   type PublishableKnowledgeState,
 } from "@domain-analysis/shared";
+import Database from "better-sqlite3";
 import { z } from "zod";
+import { nativeSqlitePath } from "./nativeSqlitePath";
 
 const exactQuerySchema = z.object({
   subjectKey: z.string().min(1),
@@ -56,35 +57,38 @@ export async function openKnowledgeRuntime(
     const actual = sha256(await readFile(filePath));
     if (actual !== expectedDatabaseSha256) throw new Error("知识包文件哈希不匹配");
   }
-  const db = createClient({ url: `file:${filePath}` });
-  await db.execute("PRAGMA query_only=ON");
-  const meta = await db.execute({
-    sql: "SELECT value_json FROM package_meta WHERE key = ?",
-    args: ["manifest"],
-  });
-  const value = meta.rows[0]?.value_json;
-  if (typeof value !== "string") {
+  const db = new Database(nativeSqlitePath(filePath), { readonly: true, fileMustExist: true });
+  try {
+    db.pragma("query_only = ON");
+    const meta = queryOne<{ value_json: unknown }>(
+      db,
+      "SELECT value_json FROM package_meta WHERE key = ?",
+      ["manifest"],
+    );
+    if (typeof meta?.value_json !== "string") throw new Error("知识包缺少 manifest");
+    const manifest = knowledgePackageManifestSchema.parse(JSON.parse(meta.value_json));
+    return createRuntime(db, manifest);
+  } catch (error) {
+    // WHY：打开阶段尚未转移连接所有权，任何校验失败都必须在此释放句柄。
     db.close();
-    throw new Error("知识包缺少 manifest");
+    throw error;
   }
-  const manifest = knowledgePackageManifestSchema.parse(JSON.parse(value));
-  return createRuntime(db, manifest);
 }
 
-function createRuntime(db: Client, manifest: KnowledgePackageManifest): KnowledgeRuntime {
+function createRuntime(db: Database.Database, manifest: KnowledgePackageManifest): KnowledgeRuntime {
   return Object.freeze({
     manifest,
     exact: async (rawInput: z.input<typeof exactQuerySchema>) => {
       const input = exactQuerySchema.parse(rawInput);
       const conditions = ["subject_key = ?"];
-      const args: InValue[] = [input.subjectKey];
+      const args: SqlValue[] = [input.subjectKey];
       if (input.predicate) { conditions.push("predicate = ?"); args.push(input.predicate); }
       return stateRows(db, `SELECT payload_json FROM knowledge_states WHERE ${conditions.join(" AND ")} ORDER BY state_id`, args);
     },
     filter: async (rawInput: z.input<typeof filterQuerySchema>) => {
       const input = filterQuerySchema.parse(rawInput);
       const conditions: string[] = [];
-      const args: InValue[] = [];
+      const args: SqlValue[] = [];
       if (input.stateKinds) {
         conditions.push(`state_kind IN (${placeholders(input.stateKinds.length)})`);
         args.push(...input.stateKinds);
@@ -108,14 +112,12 @@ function createRuntime(db: Client, manifest: KnowledgePackageManifest): Knowledg
     },
     relations: async (subjectKey: string) => {
       const key = z.string().min(1).parse(subjectKey);
-      const result = await db.execute({
-        sql: `SELECT state_id AS stateId, source_subject_key AS sourceSubjectKey,
+      const rows = queryAll<Record<string, unknown>>(db, `SELECT state_id AS stateId, source_subject_key AS sourceSubjectKey,
           predicate, target_subject_key AS targetSubjectKey,
           target_subject_kind AS targetSubjectKind, target_subject_label AS targetSubjectLabel
           FROM relations WHERE source_subject_key = ? OR target_subject_key = ? ORDER BY state_id`,
-        args: [key, key],
-      });
-      return result.rows.map((row) => ({
+        [key, key]);
+      return rows.map((row) => ({
         stateId: String(row.stateId), sourceSubjectKey: String(row.sourceSubjectKey),
         predicate: String(row.predicate), targetSubjectKey: String(row.targetSubjectKey),
         targetSubjectKind: String(row.targetSubjectKind), targetSubjectLabel: String(row.targetSubjectLabel),
@@ -123,29 +125,27 @@ function createRuntime(db: Client, manifest: KnowledgePackageManifest): Knowledg
     },
     evidenceFor: async (stateId: string) => {
       const id = z.string().min(1).parse(stateId);
-      const result = await db.execute({
-        sql: `SELECT e.payload_json FROM evidence e JOIN state_evidence se
+      const rows = queryAll<{ payload_json: unknown }>(db, `SELECT e.payload_json FROM evidence e JOIN state_evidence se
           ON se.evidence_id = e.evidence_id WHERE se.state_id = ? ORDER BY e.evidence_id`,
-        args: [id],
-      });
-      return result.rows.map(({ payload_json }) => parseEvidence(payload_json));
+        [id]);
+      return rows.map(({ payload_json }) => parseEvidence(payload_json));
     },
     getEvidence: async (evidenceId: string) => {
       const id = z.string().min(1).parse(evidenceId);
-      const result = await db.execute({
-        sql: "SELECT payload_json FROM evidence WHERE evidence_id = ?",
-        args: [id],
-      });
-      return result.rows[0] ? parseEvidence(result.rows[0].payload_json) : null;
+      const row = queryOne<{ payload_json: unknown }>(
+        db,
+        "SELECT payload_json FROM evidence WHERE evidence_id = ?",
+        [id],
+      );
+      return row ? parseEvidence(row.payload_json) : null;
     },
-    verifyReadOnly: () => verifyReadOnly(db),
-    close: () => db.close(),
+    verifyReadOnly: async () => verifyReadOnly(db),
+    close: () => { if (db.open) db.close(); },
   });
 }
 
-async function stateRows(db: Client, sql: string, args: InValue[]) {
-  const result = await db.execute({ sql, args });
-  return result.rows.map(({ payload_json }) => {
+function stateRows(db: Database.Database, sql: string, args: SqlValue[]) {
+  return queryAll<{ payload_json: unknown }>(db, sql, args).map(({ payload_json }) => {
     if (typeof payload_json !== "string") throw new Error("知识状态 payload 不是 JSON 文本");
     return publishableKnowledgeStateSchema.parse(JSON.parse(payload_json));
   });
@@ -156,16 +156,16 @@ function parseEvidence(value: unknown) {
   return knowledgePackageEvidenceSchema.parse(JSON.parse(value));
 }
 
-async function verifyReadOnly(db: Client) {
+function verifyReadOnly(db: Database.Database) {
   try {
-    await db.execute("CREATE TABLE forbidden_write(value TEXT)");
+    db.exec("CREATE TABLE forbidden_write(value TEXT)");
     return false;
   } catch {
     return true;
   }
 }
 
-function addEquals(conditions: string[], args: InValue[], column: string, value?: string) {
+function addEquals(conditions: string[], args: SqlValue[], column: string, value?: string) {
   if (value === undefined) return;
   conditions.push(`${column} = ?`);
   args.push(value);
@@ -177,5 +177,15 @@ function ftsPhrase(value: string) {
   // WHY：型号中的连字符属于内容而不是 FTS 语法，短语查询避免把它解释为运算符。
   return `"${value.replaceAll('"', '""')}"`;
 }
+
+function queryAll<Row>(db: Database.Database, sql: string, args: SqlValue[]) {
+  return db.prepare<SqlValue[], Row>(sql).all(...args);
+}
+
+function queryOne<Row>(db: Database.Database, sql: string, args: SqlValue[]) {
+  return db.prepare<SqlValue[], Row>(sql).get(...args);
+}
+
+type SqlValue = string | number | bigint | Buffer | null;
 
 function sha256(value: Uint8Array) { return createHash("sha256").update(value).digest("hex"); }

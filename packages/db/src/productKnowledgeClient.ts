@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool, type PoolClient } from "pg";
@@ -6,6 +8,11 @@ import * as schema from "./productKnowledgeSchema";
 
 export const defaultProductKnowledgeDatabaseUrl =
   "postgresql://guojunxi@127.0.0.1:5432/domain_analysis";
+
+// WHY：Drizzle 需要操作系统文件路径；URL.pathname 在 Windows 会保留 /C:/ 前缀和 URL 编码。
+const defaultProductKnowledgeMigrationsFolder = fileURLToPath(
+  new URL("../../../drizzle/product-knowledge-postgres", import.meta.url),
+);
 
 export function createProductKnowledgeDb(
   databaseUrl = process.env.POSTGRES_DATABASE_URL ?? defaultProductKnowledgeDatabaseUrl,
@@ -17,7 +24,7 @@ export type ProductKnowledgeDb = ReturnType<typeof createProductKnowledgeDb>;
 
 export async function migrateProductKnowledgeDatabase(
   databaseUrl = process.env.POSTGRES_DATABASE_URL ?? defaultProductKnowledgeDatabaseUrl,
-  migrationsFolder = new URL("../../../drizzle/product-knowledge-postgres", import.meta.url).pathname,
+  migrationsFolder = defaultProductKnowledgeMigrationsFolder,
 ) {
   const db = createProductKnowledgeDb(databaseUrl);
   let lockClient: PoolClient | undefined;

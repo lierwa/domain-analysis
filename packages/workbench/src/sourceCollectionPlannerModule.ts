@@ -242,8 +242,15 @@ function planLane(lane: BriefLane, brief: CategoryResearchBriefVersion, rules: P
     group.workItems.push(item.item);
     batchGroups.set(groupKey, group);
   }
-  const batches = [...batchGroups.entries()].map(([key, group]) => ({
-    key: `batch-${key}`,
+  const batches = [...batchGroups.values()].map((group) => ({
+    // WHY：Source Run 以 planId + batchKey 作为幂等边界；键必须覆盖完整批次输入，
+    // 否则不同路线共用 Provider/访问策略时会错误复用运行并向 DBOS 提交不同工作项。
+    key: `batch-${contentHash({
+      collectionLaneId: lane.id,
+      providerKey: group.rule.providerKey,
+      accessPolicy: group.rule.accessPolicy,
+      workItems: group.workItems,
+    })}`,
     providerKey: group.rule.providerKey,
     accessPolicy: group.rule.accessPolicy,
     workItems: group.workItems,
