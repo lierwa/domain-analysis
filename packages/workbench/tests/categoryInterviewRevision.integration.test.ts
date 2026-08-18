@@ -38,7 +38,7 @@ describeWithPostgres("抓取任务确认与修订", () => {
     sessionId = undefined;
   });
 
-  it("将 question 归一化为选项卡，确认实际点击项，并在确认后生成同一任务的新版本", async () => {
+  it("将 question 归一化为待回答决定，确认建议项，并在确认后生成同一任务的新版本", async () => {
     await migrateWorkbenchDatabase(databaseUrl!);
     db = createWorkbenchDb(databaseUrl!);
     const runtime = new QueueRuntime();
@@ -111,6 +111,46 @@ describeWithPostgres("抓取任务确认与修订", () => {
     expect(revised.interview.taskDrafts.filter((draft) => draft.status === "confirmed")).toHaveLength(2);
     await expect(interviews.getByTaskId(first.task.id)).resolves.toMatchObject({
       session: { id: sessionId, phase: "confirmed" },
+    });
+  });
+
+  it("把 Composer 中不同于建议项的回答保存为用户消息和 confirmed Decision", async () => {
+    await migrateWorkbenchDatabase(databaseUrl!);
+    db = createWorkbenchDb(databaseUrl!);
+    const runtime = new QueueRuntime();
+    const prefix = `custom-answer-${randomUUID()}`;
+    let idSequence = 0;
+    const interviews = createCategoryInterviewModule(db, runtime, {
+      createId: (kind) => `${prefix}-${kind}-${++idSequence}`,
+    });
+    let view = await interviews.start({ initialRequest: "抓冰箱" });
+    sessionId = view.session.id;
+
+    runtime.push(decisionOutput());
+    await collect(interviews.runTurn({
+      sessionId,
+      trigger: "user_message",
+      text: "抓冰箱",
+      expectedRevision: view.session.revision,
+    }));
+    view = (await interviews.get(sessionId))!;
+    const proposed = view.decisions.find((decision) => decision.status === "proposed")!;
+    const customAnswer = "纳入京东商品详情和说明书，但不抓评价";
+    view = await interviews.confirmDecision({
+      sessionId,
+      decisionId: proposed.id,
+      selection: customAnswer,
+      expectedRevision: view.session.revision,
+    });
+
+    const userMessage = view.messages.at(-1)!;
+    const confirmed = view.decisions.find((decision) => decision.status === "confirmed")!;
+    expect(userMessage).toMatchObject({ role: "user", text: customAnswer });
+    expect(confirmed).toMatchObject({
+      selection: customAnswer,
+      rationale: customAnswer,
+      sourceMessageId: userMessage.id,
+      supersedesDecisionId: proposed.id,
     });
   });
 });

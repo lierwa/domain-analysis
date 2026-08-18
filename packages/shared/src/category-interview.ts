@@ -38,7 +38,7 @@ const decisionOptionSchema = z.object({
 
 export const interviewDecisionConfirmationSchema = z.object({
   expectedRevision: revisionSchema,
-  selection: z.string().min(1).max(200),
+  selection: z.string().trim().min(1).max(2000),
 }).strict();
 
 export const interviewDecisionSchema = z.object({

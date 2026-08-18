@@ -26,8 +26,8 @@
   "scripts": {
     "check:runtime": "check-node-version --package",
     "db:ensure-local": "npm run check:runtime --silent && npm --workspace @domain-analysis/db run ensure:local",
-    "dev": "npm run check:runtime --silent && npm run db:ensure-local && concurrently -n api,web -c black,white \"npm run dev:api\" \"npm run dev:web:ready\"",
-    "dev:stop": "kill-port 4000 6173 --graceful --silent",
+    "dev": "npm run check:runtime --silent && npm run db:ensure-local && node scripts/start-dev-servers.mjs",
+    "dev:stop": "node --env-file=.env.example scripts/stop-dev-servers.mjs",
     "dev:api": "npm run check:runtime --silent && npm --workspace @domain-analysis/api run dev",
     "dev:web": "npm run check:runtime --silent && npm --workspace @domain-analysis/web run dev",
     "dev:web:ready": "npm run check:runtime --silent && wait-on --config wait-on.api.config.cjs && npm run dev:web",

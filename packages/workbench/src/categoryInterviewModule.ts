@@ -4,6 +4,7 @@ import {
   captureTaskDraftVersionSchema,
   categoryInterviewRuntimeOutputSchema,
   categoryInterviewViewSchema,
+  interviewDecisionConfirmationSchema,
   interviewDecisionSchema,
   interviewSessionSchema,
   interviewTimelineEventSchema,
@@ -291,24 +292,35 @@ async function confirmDecision(
   createId: (kind: string) => string,
 ) {
   const view = await requireView(db, input.sessionId);
-  requireRevision(view, input.expectedRevision);
+  const confirmation = interviewDecisionConfirmationSchema.parse({
+    expectedRevision: input.expectedRevision,
+    selection: input.selection,
+  });
+  requireRevision(view, confirmation.expectedRevision);
   const proposed = view.decisions.find((item) => item.id === input.decisionId && item.status === "proposed");
   if (!proposed) throw invalidState("待确认决定不存在或已处理");
-  const selectedOption = proposed.options.find((option) => option.label === input.selection);
-  if (!selectedOption) throw invalidState("确认值必须来自当前问题提供的选项");
+  const selectedOption = proposed.options.find((option) => option.label === confirmation.selection);
   const timestamp = now().toISOString();
+  const responseMessage = normalizedInterviewMessageSchema.parse({
+    id: createId("interview-message"), sessionId: input.sessionId,
+    sequence: view.messages.length + 1, role: "user", text: confirmation.selection,
+    deliveryStatus: "completed", createdAt: timestamp,
+  });
   await db.transaction(async (transaction) => {
     await transaction.update(categoryInterviewDecisions).set({ status: "superseded" })
       .where(eq(categoryInterviewDecisions.id, proposed.id));
+    await transaction.insert(categoryInterviewMessages).values(responseMessage);
     await transaction.insert(categoryInterviewDecisions).values({
       ...proposed, id: createId("interview-decision"), status: "confirmed",
-      selection: selectedOption.label, rationale: selectedOption.description,
-      supersedesDecisionId: proposed.id, createdAt: timestamp, confirmedAt: timestamp,
+      selection: confirmation.selection,
+      rationale: selectedOption?.description ?? confirmation.selection,
+      sourceMessageId: responseMessage.id, supersedesDecisionId: proposed.id,
+      createdAt: timestamp, confirmedAt: timestamp,
     });
     const changed = await transaction.update(categoryInterviewSessions).set({
       revision: view.session.revision + 1, updatedAt: timestamp,
     }).where(and(eq(categoryInterviewSessions.id, input.sessionId),
-      eq(categoryInterviewSessions.revision, input.expectedRevision))).returning({ id: categoryInterviewSessions.id });
+      eq(categoryInterviewSessions.revision, confirmation.expectedRevision))).returning({ id: categoryInterviewSessions.id });
     if (changed.length !== 1) throw revisionConflict(input.sessionId);
   });
   return requireView(db, input.sessionId);

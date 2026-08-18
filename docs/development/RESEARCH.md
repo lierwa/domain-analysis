@@ -28,7 +28,7 @@
 | R-022 | Product/Pipeline 应用接线 | 原则接受，等待新 contract 换接 |
 | R-026 | 目的驱动采集/最小证据/媒体 | 静态 HTML/JSON、PDF 页、XLSX 行和整图字节门已 POC；动态/图片正式投影/异常矩阵继续 |
 | R-027 | 死代码清算 | 使用 CodeGraph＋真实 entry；不新增 Knip |
-| R-028 | 本地 Chat Timeline | 接受 `assistant-ui` ExternalStoreRuntime；2026-08-18 PC Chat、真实活动列表、单击决定和任务修订入口通过，采访内容待用户验收 |
+| R-028 | 本地 Chat Timeline | 接受 `assistant-ui` ExternalStoreRuntime；2026-08-19 改为单回合有序 parts、普通问题文案和 Composer 自定义回答，真实页面待用户复验 |
 | R-029 | Codex 交互运行时与 Pi 边界 | 接受：锁定官方 `codex app-server` `stdio`，每轮 `thread/start(ephemeral:true)`；commentary 用官方 delta，最终 JSON 由本地 Zod 校验；MVP 不引入 Pi |
 | R-030 | 商品底层知识来源与质量门 | 代表性来源证明范围与许可门已形成；生产白名单和真实纵切片未冻结 |
 | R-031 | 跨品类来源数据集 contract 与导出 | 已接受并通过冰箱＋电视 PostgreSQL/API/PC 纵切片；真实来源矩阵待补 |
@@ -468,8 +468,22 @@ Workbench 拥有 Interview Session、规范化 Message、append-only Interview D
 - 用户真实页面证明此前“生产接线已验收”结论不成立：提交后出现空白 Agent 块，固定 `min/max-height` 令 Chat 无法占满剩余高度，ScrollToBottom 使用文字按钮，Send/Cancel 同时出现，长消息又会把 composer 顶出视口。
 - 没有更换或自写 Chat 框架。继续使用已接受的 `assistant-ui` ExternalStoreRuntime/Thread/Composer primitives，按其 `isRunning` 状态只渲染 Send 或 Cancel；ScrollToBottom 改为可访问的图标按钮；桌面页限定剩余视口高度，消息 Viewport 独立滚动，composer 留在底部，移动端仍保留页面自然滚动。
 - `assistant-ui` 会为运行中但尚无文本的 assistant message 合成 Empty part；生产页面已使用其 `AuiIf` state seam 隐藏该空消息块，把等待反馈统一交给真实活动面板，避免再次出现只有 Agent 标题和圆点的假气泡：https://www.assistant-ui.com/docs/api-reference/primitives/assistant-if 、https://www.assistant-ui.com/docs/api-reference/runtimes/message-part-runtime
-- 负责人问题直接渲染 2–3 个结构化选项，点击某一项即确认该项并继续；草稿提供“继续补充或修改”，已确认任务提供“继续对话修改范围”。两条入口都回到 Workbench 持有的原 Interview，后续确认推进同一 Capture Task revision，不复制第二份任务事实。
+- 该轮采用的独立结构化选项卡已被 2026-08-19 的真实使用验收否定；其“点击选项确认”只作为历史实现记录，不再是当前交互契约。草稿修订仍回到 Workbench 持有的原 Interview，后续确认推进同一 Capture Task revision，不复制第二份任务事实。
 - 真实浏览器 RED/绿色证据：修复前 720px 视口中聊天区仅 404px、composer 距视口底部 157px，且空闲 Stop 可见；最终长消息状态下 document scrollHeight=720、聊天区高 487px、composer bottom=646px，空闲只见 Send、运行只见 Stop。该证据只验 UI/运行状态，不代表用户已认可采访问题内容。
+
+#### 2026-08-19 单回合顺序、普通问题与滚动语义纠错
+
+- 用户真实截图证明第二轮 UI 仍不成立：独立活动面板位于全部消息之后，导致先出现工具失败、后到 commentary 却渲染到其上方；独立 Decision Card 把建议误做成封闭单选题；固定 `bottom-[84px]` 的滚动按钮覆盖内容且没有服从 live edge 状态。
+- 继续复用锁定的 `@assistant-ui/react@0.15.14`，不自写 Chat runtime 或滚动 reducer。ExternalStoreRuntime 的 `ThreadMessageLike.content` 原生支持有序 message parts 和 `data-*` 应用 part；Message primitive 按 content 顺序渲染，Thread viewport 负责“用户停留底部时自动跟随、用户向上阅读时暂停”，ScrollToBottom 在 live edge 由 primitive 置为 disabled：https://www.assistant-ui.com/docs/runtimes/custom/external-store 、https://www.assistant-ui.com/docs/primitives/message 、https://www.assistant-ui.com/docs/primitives/thread
+- 当前投影把同一回合的 commentary 与 activity 放进同一个 assistant message：新事件只追加；同一 item ID 的 started/completed/failed 原位更新，不改变位置。完整命令和工具输出不进入浏览器。
+- 负责人问题的 typed Decision 事实仍由 Workbench 保存，但 Web 只显示普通消息；Composer 发送建议项或自定义答案时，服务端在同一事务中追加用户消息、supersede proposal、写入 confirmed Decision，再自动推进下一轮。ScrollToBottom 位于 Composer footer 正常布局中，`disabled:hidden`，不使用固定高度或覆盖卡片。
+- 自动验证已覆盖文字/活动交错顺序、同 item 原位更新、刷新后的 live parts 保留、建议外回答入库与安全命令失败摘要；真实浏览器表面仍待本轮完成后复验，不能把 typecheck/build 代替用户验收。
+
+#### 2026-08-19 工具详情、分段空白与生命周期纠错
+
+- 用户真实页面证明上一版仍有四个投影错误：工具详情被默认关闭的 `<details>` 隐藏；工具后的新 text part 原样保留 commentary 前导换行，形成不一致的大块空白；每个 ephemeral turn 的连接、thread 启动和 turn 启动被错误保留为三条历史步骤；最后 `final_answer` 生成期间没有及时出现可理解的等待状态。
+- 修复不新增 Timeline 状态机。连接、`thread.started` 与 `turn.started` 复用同一个 lifecycle ID 原位推进；工具 activity 按既有 `kind` 投影为与普通状态行不同的紧凑边框块，`webSearch.query/action` 和安全命令目的直接显示；text/tool part 交界只去除多余首尾空行，段内换行保持不变。
+- 官方 App Server 文档确认 `agentMessage.phase` 使用 `commentary | final_answer`，且所有 item 都有 `item/started`/`item/completed` 生命周期。Workbench 因而在 `final_answer` 的 `item/started` 到达时显示“整理并校验本轮结果”，同 ID 完成时原位收口；这使用现有协议字段，不通过计时器猜测模型状态：https://learn.chatgpt.com/docs/app-server
 
 #### 2026-08-16 PC Workbench 信息架构复核
 
@@ -598,10 +612,10 @@ Browser
 - 当时确认 `codex exec --json --output-schema` 不提供最终结构化消息的 token delta，于是临时只流式展示活动、最终消息一次性落库；该处置已被下方 2026-08-18 App Server 真流式实现替换，生产代码不得恢复这一旧行为。
 - 原实现把完整 stderr、ANSI 和重复的 `rmcp::transport::worker HTTP 502` 拼入 `Error.message`。当前 `codex exec --ignore-user-config` 保留 ChatGPT auth 但不加载用户 `config.toml`，从产品采访链隔离无关 MCP；失败只向 UI 返回受控的服务不可用、登录失效或执行失败文案，原始诊断留在本地 adapter 错误对象。
 - 隔离用户 MCP 后真实请求暴露第二根因：模型 schema 的 `taskCandidate.sourceCandidates[].entryUrl` 仍含 `format: uri`，Codex 返回 `invalid_json_schema` 400。虽然 2026-08-16 调研已记录这一限制，生产回归未保护它。当前使用 `zod-to-json-schema` 已有 `postProcess` seam 去除全部模型侧 `format`；模型最终输出仍由原始 Zod URL/日期规则校验。新增 fake Codex 回归会读取实际临时 schema，发现任何 `format` 即失败。
-- 真实浏览器又证明 output schema 允许仅返回 `question`，而旧持久化只消费 `proposedDecision`，导致“文案在问、界面没有选项”。Workbench 现在在唯一事实边界把合法 `question` 归一化为 proposed Decision，推荐项只作为 proposal 默认值；用户实际点击的 option label 才成为 confirmed selection。该兼容不改变 Skill，本轮采访颗粒度仍待单独讨论。
+- 真实浏览器又证明 output schema 允许仅返回 `question`，而旧持久化只消费 `proposedDecision`，导致“文案在问、界面没有建议”。Workbench 继续在唯一事实边界把合法 `question` 归一化为 proposed Decision；该轮“点击 option label 确认”的历史 UI 已由 2026-08-19 普通消息＋Composer 回答替代，推荐项只作为建议，不限制 confirmed selection。
 - `zod-to-json-schema@3.25.2` 官方仓库已于 2026-06-30 归档并建议迁移 Zod v4 原生 JSON Schema；当前 bugfix 不擅自升级全仓 Zod 或增加 OpenAI SDK helper，继续锁定已存在版本并保持 adapter 可替换。后续若扩展采访 schema，必须先比较 Zod v4 原生转换与 OpenAI 官方 `zodTextFormat`，完成严格 schema 原型后才能选型：https://github.com/StefanTerdell/zod-to-json-schema 、https://github.com/openai/openai-node/blob/main/docs/structured-outputs.md
 - 真实 `gpt-5.6-terra + medium` 手工同链和 Workbench 页面均完成“抓冰箱”首轮，观察到启动、分析和多次 `web_search`，最终返回三项京东范围选项；没有自动 fallback。该结果恢复 R-029 生产运行门，但采访内容仍由用户验收。
-- 开发端口清理不新增自研脚本：根 `dev:stop` 复用 `kill-port-process@4.0.2` 的跨平台 CLI，一次释放 API 4000 与 Web 6173；npm 官方包页显示该版本为 ISC、内置 TypeScript 声明、明确支持多端口和跨平台，Windows 上使用系统任务终止能力：https://www.npmjs.com/package/kill-port-process 。本机宿主权限实测可释放两个端口。另用当前 Node `--watch` 做“启动→触碰入口文件→新 PID 重新监听→Ctrl-C”复验均成功，未复现 watcher 自身占用端口；此前一次 `EADDRINUSE` 是沙箱内终止命令无法影响宿主进程，不据此替换 watcher 或增加第二个进程管理依赖。
+- 开发端口清理的旧结论已由 Windows 真机复现推翻：`kill-port-process@4.0.2` 能终止端口监听子进程，但根启动链中的嵌套 npm batch 与 API `node --watch` 父进程仍可能残留，下一次启动因 4000 被重新监听而报 `EADDRINUSE`；当 6173 已空闲时，该包的 `--silent` CLI 仍会把“找不到 PID”打印为错误堆栈。根 `dev` 现复用已锁定的 `concurrently@9.2.1` 程序化 API，以各 workspace `cwd` 直接启动无 watcher 的 API 与 Vite，并保留 API ready 后再启动 Web；独立 `dev:api` 继续提供热重载。根 `dev:stop` 先用已锁定的 `wait-on@9.0.5` 确认实际监听端口，只把活动端口交给 `kill-port-process`，因此空闲端口是成功状态。两轮完整“启动→API/HTML/CSS/TSX 200→停止”后 4000/6173 监听和仓库开发进程均为 0，第二轮未再出现端口冲突；停止导致的子进程非零仍保留，但不会再把含环境变量的 Command 对象作为未处理异常打印。组件依据：https://github.com/open-cli-tools/concurrently 、https://www.npmjs.com/package/kill-port-process
 - 默认测试命令不能把 PostgreSQL 修订链静默跳过。项目已锁定 Node 24，因此先复用现有 `db:ensure-local`，再由同一个 Node 进程用官方稳定 `--env-file=.env.example` 直接启动 lockfile 声明的 Vitest CLI；不引入 `cross-env` 或自研环境加载器。原先尝试的 `node --env-file --run test:vitest` 已由真实回归证明没有把变量传给当前 Vitest 子进程，故已删除而不是继续叠 fallback。Node 官方文档确认 `--env-file` 会在进程启动时加载键值文件：https://nodejs.org/download/release/v24.15.0/docs/api/cli.html#--env-filefile
 
 #### 2026-08-18 真流式纠错与 App Server ephemeral 重验
@@ -613,6 +627,8 @@ Browser
 - 为避免本机通用插件、hooks 和 memories 介入产品采访，启动参数显式关闭这三项稳定 feature；项目仓库内专用品类 Skill 仍从工作目录加载。用户 MCP 启动失败可能写入本机 stderr，但不会再使已完成 turn 失败，也不会进入浏览器；工具详情仍只投影实际 item 且经过脱敏。
 - 真实 `gpt-5.6-terra + medium` 运行同时观察到中文逐 token commentary、多次 `web_search` item 和最终通过 `categoryInterviewRuntimeOutputSchema` 的京东负责人问题。真实 Workbench 页面在运行中先出现中文增量，再追加搜索活动，结束后用已持久化的最终 assistant message 替换临时气泡，浏览器 console 无 error。
 - App Server 命令在 0.147.0 CLI 帮助中仍标记 experimental，因此 adapter 必须继续锁版本、保持单文件薄边界并由 fake 协议回归保护；不引入动态 tools、SDK thread、Pi、第二 Provider 或自动 fallback。若未来版本移除 `thread/start.ephemeral` 或 message phase，直接失败并重新进入调研门，不退回假流式。
+- 官方 App Server 协议声明 `commandExecution` 完成项可带 `status / aggregatedOutput / exitCode / durationMs`，且 `item/completed` 是该 item 的权威最终状态。旧 adapter 只投影 `status` 和完整 `command`，丢弃了退出码/输出：因此 2026-08-19 截图只能证明该 item 被标记为 failed，不能事后恢复精确 stderr。当前同一命令复跑 exit 0、四个文件和 PowerShell 路径均存在；实现已改为不显示原始命令，只在失败时投影安全退出码。未来如需精确诊断必须从当次完成 item 在服务端受控记录，不能从 UI 猜测：https://learn.chatgpt.com/docs/app-server
+- 截图中的命令内容表明该次 `commandExecution` 在读取品类采访 Skill、开发基准、进度/积分账本并核对 Git 状态；这是仓库约束要求的只读上下文加载，不是抓取商品数据。当前 adapter 只把这一已知目的归类为“读取采访规则、开发基准与 Git 状态”，不把绝对路径、完整命令或输出发送给 Web；无法识别的命令只显示通用只读检查说明。
 
 ### R-030 商品底层知识来源与质量门
 

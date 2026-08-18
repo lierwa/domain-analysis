@@ -58,10 +58,18 @@ describe("Codex 采访运行时事件边界", () => {
     ]);
     expect(events.filter((event) => event.type === "activity")).toEqual([
       { type: "activity", activity: {
-        id: "agent-starting", kind: "agent", label: "启动抓取规划 Agent", status: "running",
+        id: "turn-lifecycle", kind: "agent", label: "启动抓取规划 Agent", status: "running",
       } },
       { type: "activity", activity: {
-        id: "turn-analysis", kind: "analysis", label: "分析需求与当前抓取范围", status: "running",
+        id: "turn-lifecycle", kind: "analysis", label: "分析需求与当前抓取范围", status: "running",
+      } },
+      { type: "activity", activity: {
+        id: "command-1", kind: "tool", label: "执行本地只读命令",
+        detail: "读取采访规则、开发基准与 Git 状态", status: "running",
+      } },
+      { type: "activity", activity: {
+        id: "command-1", kind: "tool", label: "执行本地只读命令",
+        detail: "读取采访规则、开发基准与 Git 状态；未成功完成（退出码 1）", status: "failed",
       } },
       { type: "activity", activity: {
         id: "search-1", kind: "web_search", label: "搜索网页",
@@ -72,15 +80,19 @@ describe("Codex 采访运行时事件边界", () => {
         detail: "冰箱 中国市场 主流品牌 官方网站", status: "completed",
       } },
       { type: "activity", activity: {
-        id: "turn-finalizing", kind: "finalizing", label: "校验并生成本轮结果", status: "running",
+        id: "turn-finalizing", kind: "finalizing", label: "整理并校验本轮结果", status: "running",
       } },
       { type: "activity", activity: {
-        id: "turn-finalizing", kind: "finalizing", label: "校验并生成本轮结果", status: "completed",
+        id: "turn-finalizing", kind: "finalizing", label: "整理并校验本轮结果", status: "completed",
       } },
     ]);
+    expect(JSON.stringify(events)).not.toContain("C:/private/file");
+    expect(JSON.stringify(events)).not.toContain("Cannot find path");
     expect(events.at(-1)).toMatchObject({
       type: "completed",
-      output: { assistantText: "已完成第一轮调查。" },
+      output: {
+        assistantText: expect.stringContaining("1. 完整京东范围（推荐）：包含评价样本和评分指标。"),
+      },
     });
   });
 
@@ -148,6 +160,15 @@ async function fakeCodexExecutable(source: string) {
 function successSource() {
   const output = JSON.stringify({
     assistantText: "已完成第一轮调查。",
+    question: {
+      key: "jd.scope",
+      text: "本轮京东抓取到什么范围？",
+      options: [
+        { label: "完整京东范围", description: "包含评价样本和评分指标。", recommended: true },
+        { label: "仅商品资料", description: "不采集评论。", recommended: false },
+      ],
+      rationale: "需要负责人决定。",
+    },
     unresolvedItems: [],
     resolvedUnresolvedKeys: [],
   });
@@ -180,12 +201,24 @@ async function handle(message) {
     id: "message-1", type: "agentMessage", text: "正在调查候选来源。", phase: "commentary"
   } } });
   emit({ method: "item/started", params: { item: {
+    id: "command-1", type: "commandExecution",
+    command: "Get-Content .agents/skills/interview-product-category/SKILL.md; Get-Content docs/development/PROGRESS.md; git status --short; Get-Content C:/private/file"
+  } } });
+  emit({ method: "item/completed", params: { item: {
+    id: "command-1", type: "commandExecution",
+    command: "Get-Content .agents/skills/interview-product-category/SKILL.md; Get-Content docs/development/PROGRESS.md; git status --short; Get-Content C:/private/file",
+    status: "failed", aggregatedOutput: "Cannot find path C:/private/file", exitCode: 1
+  } } });
+  emit({ method: "item/started", params: { item: {
     id: "search-1", type: "webSearch", query: "冰箱 中国市场 主流品牌 官方网站"
   } } });
   emit({ method: "item/completed", params: { item: {
     id: "search-1", type: "webSearch", query: "冰箱 中国市场 主流品牌 官方网站"
   } } });
   const finalItem = { id: "message-2", type: "agentMessage", text: ${JSON.stringify(output)}, phase: "final_answer" };
+  emit({ method: "item/started", params: { item: {
+    id: "message-2", type: "agentMessage", text: "", phase: "final_answer"
+  } } });
   emit({ method: "item/completed", params: { item: finalItem } });
   emit({ method: "turn/completed", params: { turn: {
     status: "completed", error: null, items: [finalItem]

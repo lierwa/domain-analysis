@@ -29,6 +29,10 @@ const threadItemSchema = z.object({
   phase: z.enum(["commentary", "final_answer"]).nullable().optional(),
   query: z.string().optional(),
   command: z.string().optional(),
+  cwd: z.string().optional(),
+  aggregatedOutput: z.string().optional(),
+  exitCode: z.number().int().nullable().optional(),
+  durationMs: z.number().nonnegative().nullable().optional(),
   server: z.string().optional(),
   tool: z.string().optional(),
   action: z.object({
@@ -76,6 +80,7 @@ export type CodexAppServerStreamItem =
     itemType?: string;
     itemId?: string;
     itemStatus?: "running" | "completed" | "failed";
+    phase?: "commentary" | "final_answer" | null;
     detail?: string;
   }
   | { type: "text_delta"; delta: string }
@@ -377,7 +382,7 @@ function normalizedItemType(type: string) {
 }
 
 function itemStatusOf(method: string, status?: string): "running" | "completed" | "failed" {
-  if (status && /fail|error|cancel/i.test(status)) return "failed";
+  if (status && /fail|error|cancel|declin/i.test(status)) return "failed";
   if (status && /complete|success/i.test(status)) return "completed";
   return method === "item/completed" ? "completed" : "running";
 }
@@ -387,10 +392,25 @@ function displayDetailOf(item: z.infer<typeof threadItemSchema>) {
   if (item.type === "webSearch") {
     raw = item.query ?? item.action?.query ?? item.action?.queries?.join("；") ?? item.action?.url;
   }
-  if (item.type === "commandExecution") raw = item.command;
+  if (item.type === "commandExecution") {
+    const purpose = commandPurposeOf(item.command);
+    // WHY：完整命令和输出属于本机执行细节；产品表面只说明这次只读检查的目的与安全退出码。
+    raw = itemStatusOf("item/completed", item.status) === "failed"
+      ? item.exitCode === undefined || item.exitCode === null
+        ? `${purpose}；未成功完成`
+        : `${purpose}；未成功完成（退出码 ${item.exitCode}）`
+      : purpose;
+  }
   if (item.type === "mcpToolCall") raw = [item.server, item.tool].filter(Boolean).join(" / ") || undefined;
   const detail = raw ? sanitizeDisplayDetail(raw) : undefined;
   return detail ? { detail } : {};
+}
+
+function commandPurposeOf(command?: string) {
+  if (command && /(interview-product-category|AGENT-SCORECARD|docs[\\/]development|git status)/i.test(command)) {
+    return "读取采访规则、开发基准与 Git 状态";
+  }
+  return "执行 Agent 所需的本地只读检查";
 }
 
 function failedAppServerError(
