@@ -158,7 +158,7 @@
 - 产品资料是需求和验收输入，不是详细架构；工程架构必须在现有 `domain-analysis` 仓库上设计，并明确复用、重构、淘汰和新增范围。
 - 权威阅读顺序遵守 `docs/development/README.md`。
 - 当前产品只服务能够通过品牌、型号、规格、分类或标准稳定识别的标准商品；手工制品、孤品、定制品等非标准商品不在范围内。
-- 标准商品必须先通过 Workbench Chat Timeline 采访形成经用户确认的版本化 Capture Task Draft，再生成 Capture Task；确认任务不等于开始抓取。
+- 标准商品必须先通过 Workbench Chat Timeline 采访形成经用户确认的版本化 Markdown Capture Task Draft，再由独立的确认后转换生成结构化 Capture Task；采访回合不得提前输出完整任务 schema，确认任务不等于开始抓取。
 - 品类采访只向用户询问会实质改变抓取结果、必须由负责人决定的真实取舍；标准、品牌、型号、参数、部件、原理和来源等可调查事实由系统主动调查，不得要求用户先行枚举。
 - 专用品类采访 Skill 参考 `grill-with-docs` 的一次一问和推荐纪律：必须解释背景、给出有依据的专业推荐和主要代价，不得为了凑互斥选项制造问题。Workbench 拥有消息、Interview Decision、未决项、Capture Task Draft 和全部继续上下文，Codex 只做无状态 ephemeral 单轮执行。
 - 平台覆盖属于系统主动调查和规划的数据资源。对冰箱等家电，京东是必须覆盖的核心平台，淘宝是后续多平台来源；不得把“是否纳入京东”写成默认负责人问题。必须覆盖不等于已获准访问，真实执行仍受 Crawl Plan、许可、登录、验证码、风控和频控停止门约束。
@@ -332,3 +332,17 @@ Patch Disposition:
 - 已说明当前任务服务的路线阶段、架构目标和本轮架构影响。
 - 若声称可以跨电脑继续，已验证权威文件和对应实现的远程 Git 一致性。
 - 最终工作区没有混入无关文件。
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked as local Markdown under `.scratch/`; external pull requests are not a triage surface. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The repository uses the five default triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository using the root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.

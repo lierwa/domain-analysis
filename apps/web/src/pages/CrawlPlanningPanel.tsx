@@ -15,6 +15,7 @@ import {
   confirmCrawlPlan,
   fetchCrawlPlanning,
   streamCrawlPlanningRun,
+  streamSourceRun,
 } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { InterviewActivity } from "./InterviewThread";
@@ -29,6 +30,7 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
   const [runError, setRunError] = useState<string>();
   const [isRunning, setIsRunning] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
+  const [isExecuting, setIsExecuting] = useState(false);
   const abortRef = useRef<AbortController>();
 
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -82,6 +84,16 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
     } finally {
       setIsConfirming(false);
     }
+  }
+
+  async function execute(plan: CrawlPlan) {
+    setRunError(undefined); setIsExecuting(true);
+    const controller = new AbortController(); abortRef.current = controller;
+    try {
+      await streamSourceRun(task.id, plan.id, { expectedTaskRevision: task.revision, expectedPlanVersion: plan.version },
+        () => queryClient.invalidateQueries({ queryKey: ["source-runs", task.id] }), controller.signal);
+    } catch (error) { if (!controller.signal.aborted) setRunError(error instanceof Error ? error.message : "抓取运行失败"); }
+    finally { setIsExecuting(false); abortRef.current = undefined; }
   }
 
   if (planning.isLoading) return <LoadingPanel />;
@@ -140,6 +152,8 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
           currentTaskRevision={task.revision}
           isConfirming={isConfirming}
           onConfirm={() => void confirm(latestPlan)}
+          isExecuting={isExecuting}
+          onExecute={() => void execute(latestPlan)}
         />
       ) : (
         <section className="rounded-xl border border-dashed border-line bg-surface p-8 text-center">
@@ -173,11 +187,15 @@ export function CrawlPlanCard({
   currentTaskRevision,
   isConfirming,
   onConfirm,
+  isExecuting,
+  onExecute,
 }: {
   plan: CrawlPlan;
   currentTaskRevision: number;
   isConfirming: boolean;
   onConfirm: () => void;
+  isExecuting: boolean;
+  onExecute: () => void;
 }) {
   const current = plan.taskRevision === currentTaskRevision;
   return (
@@ -200,6 +218,14 @@ export function CrawlPlanCard({
               <span className="rounded-full border border-line bg-surface px-2 py-1 text-xs">{source.accessState}</span>
             </div>
             <p className="mt-3 text-sm leading-6">{source.role}</p>
+            <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+              <PlanField label="Provider" value={`${source.provider.key}@${source.provider.version}`} />
+              <PlanField label="访问限制" value={`每分钟 ${source.accessPolicy.maxRequestsPerMinute} 次 · 间隔 ${source.accessPolicy.minimumIntervalMs}ms · 最长 ${source.accessPolicy.maximumRunMs}ms`} />
+              <PlanField label="Provider 配置" value={source.provider.configuration.map((item) => `${item.key}=${item.value}`).join("；")} />
+              <PlanField label="原始输出" value={`${source.rawOutputPolicy.formats.join("、")} · ${source.rawOutputPolicy.retainAssets ? "保存附件" : "不单独下载附件"}`} />
+              <PlanField label="请求预算" value={`${source.stopPolicy.requestBudget} 次`} />
+              <PlanField label="强制停止" value={source.stopPolicy.stopOnAccessRestriction ? "登录/验证码/拒绝/风控立即停止" : "按 Provider 策略"} />
+            </dl>
             <div className="mt-3 space-y-1">
               {source.entryUrls.map((url) => <a key={url} href={url} target="_blank" rel="noreferrer"
                 className="block break-all text-xs text-muted underline underline-offset-2 hover:text-ink">{url}</a>)}
@@ -246,6 +272,12 @@ export function CrawlPlanCard({
               ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
               : <Check className="h-4 w-4" aria-hidden="true" />}
             {isConfirming ? "正在确认…" : "确认此计划"}
+          </button>
+        )}
+        {plan.status === "confirmed" && current && (
+          <button type="button" className="button-primary" disabled={isExecuting} onClick={onExecute}>
+            {isExecuting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {isExecuting ? "正在抓取…" : "开始抓取"}
           </button>
         )}
         <p className="text-xs leading-5 text-muted">

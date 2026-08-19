@@ -25,8 +25,9 @@
   ],
   "scripts": {
     "check:runtime": "check-node-version --package",
+    "db:start-local": "npm run check:runtime --silent && node --env-file=.env.example scripts/start-local-postgresql.mjs",
     "db:ensure-local": "npm run check:runtime --silent && npm --workspace @domain-analysis/db run ensure:local",
-    "dev": "npm run check:runtime --silent && npm run db:ensure-local && node scripts/start-dev-servers.mjs",
+    "dev": "npm run check:runtime --silent && npm run db:start-local && npm run db:ensure-local && node scripts/start-dev-servers.mjs",
     "dev:stop": "node --env-file=.env.example scripts/stop-dev-servers.mjs",
     "dev:api": "npm run check:runtime --silent && npm --workspace @domain-analysis/api run dev",
     "dev:web": "npm run check:runtime --silent && npm --workspace @domain-analysis/web run dev",

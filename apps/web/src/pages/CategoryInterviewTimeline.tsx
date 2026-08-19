@@ -65,9 +65,6 @@ export function CategoryInterviewTimeline({
     // WHY：侧栏是采访会话的只读投影；每次持久化状态变化后同步缓存，避免已完成回合仍显示“正在生成”。
     if (view) onSessionChanged(view.session);
   }, [onSessionChanged, view]);
-  const confirmedDecisionIds = new Set(view?.decisions
-    .filter((decision) => decision.status === "confirmed")
-    .map((decision) => decision.id));
   const hasOpenOwnerDecision = Boolean(proposed)
     || Boolean(view?.unresolvedItems.some((item) => item.owner === "user" && item.status === "open"));
   const actionErrorAlreadyVisible = turns.actionError
@@ -76,8 +73,7 @@ export function CategoryInterviewTimeline({
   // WHY：历史坏数据可能同时含未确认问题和草稿；页面必须以真实 Decision 状态为准，不能继续展示可确认草稿。
   const draftTask = turns.isRunning || view?.session.phase !== "task_ready" || hasOpenOwnerDecision
     ? undefined : [...(view?.taskDrafts ?? [])].reverse()
-    .find((draft) => draft.status === "draft"
-      && draft.content.decisionIds.every((id) => confirmedDecisionIds.has(id)));
+    .find((draft) => draft.status === "draft");
 
   async function handleNew(message: AppendMessage) {
     if (isRestoring) return;
@@ -113,6 +109,7 @@ export function CategoryInterviewTimeline({
             draft={draftTask}
             onContinue={focusComposer}
             onConfirm={() => void confirmations.confirmTaskDraft(draftTask.id)}
+            isConfirming={confirmations.isConfirming}
           />
         )}
       </InterviewThread>
@@ -133,9 +130,11 @@ function useInterviewConfirmations({
   setActionError: React.Dispatch<React.SetStateAction<string | undefined>>;
   onTaskCreated: (task: CaptureTask) => void;
 }) {
+  const [isConfirming, setIsConfirming] = useState(false);
   async function confirmTaskDraft(draftId: string) {
-    if (!view) return;
+    if (!view || isConfirming) return;
     setActionError(undefined);
+    setIsConfirming(true);
     try {
       const result = await confirmCaptureTaskDraft(view.session.id, draftId, view.session.revision);
       setView(result.interview);
@@ -143,9 +142,11 @@ function useInterviewConfirmations({
       onTaskCreated(result.task);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "抓取任务确认失败");
+    } finally {
+      setIsConfirming(false);
     }
   }
-  return { confirmTaskDraft };
+  return { confirmTaskDraft, isConfirming };
 }
 
 function useInterviewStore(initialSessionId?: string) {

@@ -9,6 +9,8 @@ import {
   interviewTurnRequestSchema,
   sourceCollectionRunSchema,
   sourceDatasetRunViewSchema,
+  sourceRunEventSchema,
+  startCrawlPlanSchema,
   type CaptureTask,
   type CategoryInterviewView,
   type CrawlPlanningEvent,
@@ -19,6 +21,7 @@ import {
   type InterviewTurnRequest,
   type SourceCollectionRun,
   type SourceDatasetRunView,
+  type SourceRunEvent,
 } from "@domain-analysis/shared";
 import { createParser } from "eventsource-parser";
 
@@ -154,6 +157,19 @@ export async function confirmCrawlPlan(
     { method: "POST", body: JSON.stringify(body) },
   );
   return crawlPlanningViewSchema.parse(data.item);
+}
+
+export async function streamSourceRun(taskId: string, planId: string, input: { expectedTaskRevision: number; expectedPlanVersion: number }, onEvent: (event: SourceRunEvent) => void, signal?: AbortSignal) {
+  const response = await fetch(`/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-plans/${encodeURIComponent(planId)}/start`, {
+    method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(startCrawlPlanSchema.parse(input)), signal,
+  });
+  if (!response.ok || !response.body) throw await apiErrorFromResponse(response);
+  const parser = createParser({ onEvent: (event) => onEvent(sourceRunEventSchema.parse(JSON.parse(event.data))) });
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  while (true) { const { value, done } = await reader.read(); if (done) break; parser.feed(decoder.decode(value, { stream: true })); }
+  parser.feed(decoder.decode());
 }
 
 export async function fetchSourceCollectionRuns(taskId: string): Promise<SourceCollectionRun[]> {

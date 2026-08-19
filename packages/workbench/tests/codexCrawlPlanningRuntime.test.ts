@@ -83,7 +83,8 @@ function handle(message) {
   const prompt = message.params.input.find((item) => item.type === "text")?.text ?? "";
   const skill = message.params.input.find((item) => item.type === "skill");
   if (!prompt.includes("$plan-product-crawl") || !prompt.includes("Required task topics")) process.exit(6);
-  if (skill?.name !== "plan-product-crawl" || !String(skill.path).endsWith(".agents/skills/plan-product-crawl/SKILL.md")) process.exit(7);
+  const normalizedSkillPath = String(skill?.path).replaceAll("\\\\", "/");
+  if (skill?.name !== "plan-product-crawl" || !normalizedSkillPath.endsWith(".agents/skills/plan-product-crawl/SKILL.md")) process.exit(7);
   emit({ id: message.id, result: { turn: { id: "turn-1" } } });
   emit({ method: "turn/started", params: {} });
   ${includeSearch ? `emit({ method: "item/started", params: { item: { id: "search-1", type: "webSearch", query: "京东 冰箱" } } });
@@ -104,6 +105,10 @@ function runtimeOutput(): CrawlPlanningRuntimeOutput {
       sources: [{
         key: "jd", name: "京东", publisher: "京东", sourceKind: "retailer",
         role: "覆盖商品详情", entryUrls: ["https://www.jd.com/"],
+        provider: { key: "jd.catalog-product", version: "1.0.0", configuration: [{ key: "mode", value: "cdp" }] },
+        accessPolicy: { kind: "paced_http", version: "jd-low-frequency-v1", maxRequestsPerMinute: 2, minimumIntervalMs: 10_000, maximumRunMs: 180_000 },
+        stopPolicy: { requestBudget: 2, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true },
+        rawOutputPolicy: { formats: ["html"], retainAssets: false },
         observationLevel: "search_discovered", accessState: "unknown",
         observedAt: "2026-08-19T00:00:00.000Z",
         targets: [{

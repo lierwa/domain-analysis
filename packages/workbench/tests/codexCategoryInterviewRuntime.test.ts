@@ -100,10 +100,10 @@ describe("Codex 采访结果投影与连接复用", () => {
     ]);
     expect(events.filter((event) => event.type === "activity")).toEqual([
       { type: "activity", activity: {
-        id: "turn-lifecycle", kind: "agent", label: "启动抓取规划 Agent", status: "running",
+        id: "turn-lifecycle", kind: "agent", label: "启动商品采访 Agent", status: "running",
       } },
       { type: "activity", activity: {
-        id: "turn-lifecycle", kind: "analysis", label: "理解用户输入并更新抓取范围", status: "running",
+        id: "turn-lifecycle", kind: "analysis", label: "理解用户输入并更新采访记录", status: "running",
       } },
       { type: "activity", activity: {
         id: "search-1", kind: "web_search", label: "搜索网页",
@@ -123,10 +123,10 @@ describe("Codex 采访结果投影与连接复用", () => {
         urls: ["https://www.midea.cn/"], status: "completed",
       } },
       { type: "activity", activity: {
-        id: "turn-finalizing", kind: "finalizing", label: "整理并校验本轮结果", status: "running",
+        id: "turn-finalizing", kind: "finalizing", label: "整理并校验采访记录", status: "running",
       } },
       { type: "activity", activity: {
-        id: "turn-finalizing", kind: "finalizing", label: "整理并校验本轮结果", status: "completed",
+        id: "turn-finalizing", kind: "finalizing", label: "整理并校验采访记录", status: "completed",
       } },
     ]);
     expect(JSON.stringify(events)).not.toContain("C:/private/file");
@@ -135,17 +135,33 @@ describe("Codex 采访结果投影与连接复用", () => {
     expect(completed).toMatchObject({
       type: "completed",
       output: {
-        assistantText: "已完成第一轮调查并生成抓取任务草稿。",
-        taskCandidate: {
-          jd: {
-            applicable: true,
-            disposition: "pending",
-          },
-        },
+        assistantText: "已完成第一轮调查并生成采访范围草案。",
+        draftMarkdown: expect.stringContaining("冰箱采访范围"),
       },
     });
     if (completed?.type !== "completed") throw new Error("采访运行时没有返回 completed");
     expect(completed.output.proposedDecision).toBeUndefined();
+  });
+
+  it("确认 Markdown 后使用独立结构化调用生成正式 Capture Task", async () => {
+    const runtime = createCodexCategoryInterviewRuntime({
+      repositoryRoot: process.cwd(),
+      model: "gpt-5.6-terra",
+      reasoningEffort: "medium",
+      executable: await fakeCodexExecutable(materializationSource()),
+    });
+    runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
+
+    const output = await runtime.materialize({
+      session: emptyInterviewView(),
+      draftMarkdown: "# 冰箱采访范围\n\n覆盖中国大陆当前在售家用冰箱。",
+    });
+
+    expect(output).toMatchObject({
+      category: { code: "refrigerator", label: "冰箱" },
+      sourceCandidates: [{ entryUrl: "https://www.jd.com/" }],
+    });
+    expect(output.sourceCandidates[0]).not.toHaveProperty("observedAt");
   });
 
   it("同一 client 连续两轮只初始化一次连接，但每轮新建 ephemeral thread", async () => {
@@ -231,28 +247,8 @@ async function fakeCodexExecutable(source: string) {
 
 function successSource(failedSearch = false) {
   const output = JSON.stringify({
-    assistantText: "已完成第一轮调查并生成抓取任务草稿。",
-    taskCandidate: {
-      originalRequest: "抓冰箱",
-      category: { code: "refrigerator", label: "冰箱" },
-      marketScope: "中国大陆普通消费者可以买到的家用冰箱",
-      generalTopics: ["品牌、型号、商品详情和原始参数"],
-      categoryTopics: ["能效、容量、制冷方式和核心部件"],
-      jd: { applicable: true, disposition: "pending", scope: [], rationale: "等待平台策略补全。" },
-      sourceCandidates: [{
-        id: "source-jd-refrigerator",
-        name: "京东冰箱频道",
-        publisher: "京东",
-        entryUrl: "https://www.jd.com/",
-        sourceKind: "retailer",
-        expectedContents: ["冰箱类目、商品参数和评价指标"],
-        observedFormats: ["HTML"],
-        accessState: "public",
-        observedAt: "2026-08-19T10:00:00+08:00",
-      }],
-      excludedContent: [],
-      decisionIds: [],
-    },
+    assistantText: "已完成第一轮调查并生成采访范围草案。",
+    draftMarkdown: "# 冰箱采访范围\n\n覆盖中国大陆家用冰箱，并记录京东和品牌官网等调查事实。",
     unresolvedItems: [],
     resolvedUnresolvedKeys: [],
   });
@@ -291,9 +287,11 @@ async function handle(message) {
     if (!prompt.includes("不要通过本地命令查找或读取 Skill、AGENTS.md、开发文档或 Git 状态")) process.exit(9);
     if (!prompt.includes("不得把默认采集内容改写成采集深度问题")) process.exit(10);
     const skill = message.params.input.find((item) => item.type === "skill");
+    const normalizedSkillPath = String(skill?.path).replaceAll("\\\\", "/");
+    const normalizedCwd = productInterviewCwd.replaceAll("\\\\", "/");
     if (skill?.name !== "interview-product-category"
-      || !String(skill.path).startsWith(productInterviewCwd)
-      || !String(skill.path).endsWith(".agents/skills/interview-product-category/SKILL.md")) {
+      || !normalizedSkillPath.startsWith(normalizedCwd)
+      || !normalizedSkillPath.endsWith(".agents/skills/interview-product-category/SKILL.md")) {
       process.exit(7);
     }
   }
@@ -340,6 +338,46 @@ async function handle(message) {
   emit({ method: "turn/completed", params: { turn: {
     status: "completed", error: null, items: [finalItem]
   } } });
+}
+`;
+}
+
+function materializationSource() {
+  const output = JSON.stringify({
+    originalRequest: "抓冰箱",
+    category: { code: "refrigerator", label: "冰箱" },
+    marketScope: "中国大陆当前在售家用冰箱",
+    generalTopics: ["品牌、型号、商品详情和原始参数"],
+    categoryTopics: ["能效、容量、制冷方式和核心部件"],
+    jd: { applicable: true, disposition: "pending", scope: [], rationale: "草案明确适用京东。" },
+    sourceCandidates: [{
+      id: "source-jd-refrigerator", name: "京东冰箱频道", publisher: "京东",
+      entryUrl: "https://www.jd.com/", sourceKind: "retailer",
+      expectedContents: ["冰箱类目、商品参数和评价指标"], observedFormats: ["HTML"],
+      accessState: "public",
+    }],
+    excludedContent: [],
+  });
+  return fakeServerPrelude() + `
+function handle(message) {
+  if (message.method === "initialize") {
+    emit({ id: message.id, result: { userAgent: "fake" } });
+    return;
+  }
+  if (message.method === "thread/start") {
+    if (message.params.ephemeral !== true) process.exit(31);
+    emit({ id: message.id, result: { thread: { id: "thread-1", ephemeral: true } } });
+    emit({ method: "thread/started", params: { thread: { id: "thread-1" } } });
+    return;
+  }
+  if (message.method !== "turn/start") return;
+  const prompt = message.params.input.find((item) => item.type === "text")?.text ?? "";
+  if (!prompt.includes("确认后的纯结构化步骤") || !prompt.includes("不得调用 web search")) process.exit(32);
+  emit({ id: message.id, result: { turn: { id: "turn-1" } } });
+  emit({ method: "turn/started", params: { turn: { id: "turn-1" } } });
+  const finalItem = { id: "message-1", type: "agentMessage", text: ${JSON.stringify(output)}, phase: "final_answer" };
+  emit({ method: "item/completed", params: { item: finalItem } });
+  emit({ method: "turn/completed", params: { turn: { status: "completed", error: null, items: [finalItem] } } });
 }
 `;
 }

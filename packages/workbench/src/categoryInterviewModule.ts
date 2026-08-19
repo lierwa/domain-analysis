@@ -12,6 +12,7 @@ import {
   normalizedInterviewMessageSchema,
   type CaptureTask,
   type CaptureTaskDraftVersion,
+  type CaptureTaskMaterialization,
   type CategoryInterviewRuntimeOutput,
   type CategoryInterviewView,
   type InterviewMessageTimelinePart,
@@ -44,7 +45,7 @@ import {
   requireCategoryInterviewView,
 } from "./categoryInterviewViewStore";
 import { contentHash } from "./contentHash";
-import { prepareInterviewTurn } from "./categoryInterviewTurnPolicy";
+import { materializeCaptureTaskContent, prepareInterviewTurn } from "./categoryInterviewTurnPolicy";
 
 export { CategoryInterviewError } from "./categoryInterviewRecords";
 
@@ -56,6 +57,7 @@ export type CategoryInterviewRuntimeEvent =
 
 export interface CategoryInterviewRuntime {
   run(input: CategoryInterviewRuntimeInput): AsyncIterable<CategoryInterviewRuntimeEvent>;
+  materialize(input: CategoryInterviewMaterializationInput): Promise<CaptureTaskMaterialization>;
   close?(): Promise<void>;
 }
 
@@ -63,6 +65,11 @@ export interface CategoryInterviewRuntimeInput {
   session: CategoryInterviewView;
   trigger: { type: "user_message"; text: string };
   signal?: AbortSignal;
+}
+
+export interface CategoryInterviewMaterializationInput {
+  session: CategoryInterviewView;
+  draftMarkdown: string;
 }
 
 export interface CategoryInterviewModule {
@@ -97,7 +104,7 @@ export function createCategoryInterviewModule(
     getByTaskId: (taskId) => loadCategoryInterviewViewByTaskId(db, taskId),
     remove: (sessionId) => removeStandaloneInterviewSession(db, sessionId),
     runTurn: (input) => runTurn(db, runtime, input, now, createId),
-    confirmTaskDraft: (input) => confirmTaskDraft(db, input, now, createId),
+    confirmTaskDraft: (input) => confirmTaskDraft(db, runtime, input, now, createId),
   };
 }
 
@@ -292,14 +299,14 @@ async function finishTurn(
         eq(categoryInterviewUnresolvedItems.key, decisionChange.proposed.key),
       ));
     }
-    if (output.taskCandidate) {
+    if (output.draftMarkdown) {
       await transaction.update(captureTaskDraftVersions).set({ status: "superseded" })
         .where(and(eq(captureTaskDraftVersions.sessionId, view.session.id),
           eq(captureTaskDraftVersions.status, "draft")));
       await transaction.insert(captureTaskDraftVersions).values({
         id: createId("capture-task-draft"), sessionId: view.session.id,
         version: Math.max(0, ...rawDrafts.map((item) => item.version)) + 1,
-        status: "draft", contentHash: contentHash(output.taskCandidate), content: output.taskCandidate,
+        status: "draft", contentHash: contentHash(output.draftMarkdown), briefMarkdown: output.draftMarkdown,
         createdAt: timestamp,
       });
     }
@@ -314,6 +321,7 @@ async function finishTurn(
 
 async function confirmTaskDraft(
   db: WorkbenchDb,
+  runtime: CategoryInterviewRuntime,
   input: { sessionId: string; draftId: string; expectedRevision: number },
   now: () => Date,
   createId: (kind: string) => string,
@@ -327,18 +335,31 @@ async function confirmTaskDraft(
     .filter((item) => item.status === "draft")
     .sort((left, right) => right.version - left.version)[0];
   if (!draft || draft.id !== input.draftId) throw invalidState("只有最新待确认草稿可以生成抓取任务");
-  const confirmedIds = new Set(view.decisions.filter((item) => item.status === "confirmed").map((item) => item.id));
-  if (draft.content.decisionIds.some((id) => !confirmedIds.has(id))) throw invalidState("抓取任务引用了尚未确认的负责人取舍");
+  // WHY：采访阶段只确认人能读懂的范围草案；正式业务结构必须在确认之后单独生成，避免 schema 反过来绑架采访。
+  const materialization = await runtime.materialize({ session: view, draftMarkdown: draft.markdown });
+  const current = await requireCategoryInterviewView(db, input.sessionId);
+  requireRevision(current, input.expectedRevision);
+  if (current.session.phase !== "task_ready" || current.session.turnState !== "idle") {
+    throw invalidState("只有当前待确认草稿可以生成抓取任务");
+  }
+  const currentDraft = current.taskDrafts
+    .filter((item) => item.status === "draft")
+    .sort((left, right) => right.version - left.version)[0];
+  if (!currentDraft || currentDraft.id !== input.draftId) {
+    throw invalidState("只有最新待确认草稿可以生成抓取任务");
+  }
   const timestamp = now().toISOString();
-  const previousDraft = [...view.taskDrafts].reverse().find((item) => item.status === "confirmed" && item.taskId);
+  const content = materializeCaptureTaskContent(current, materialization, timestamp);
+  const previousDraft = [...current.taskDrafts].reverse()
+    .find((item) => item.status === "confirmed" && item.taskId);
   const previousTask = previousDraft?.taskId
     ? await db.query.captureTasks.findFirst({ where: eq(captureTasks.id, previousDraft.taskId) })
     : undefined;
   const task = buildConfirmedCaptureTask(
-    draft.content,
+    content,
     timestamp,
     previousTask?.id ?? createId("capture-task"),
-    draft.version,
+    currentDraft.version,
     previousTask ? new Date(previousTask.createdAt).toISOString() : timestamp,
   );
   await db.transaction(async (transaction) => {
@@ -363,17 +384,17 @@ async function confirmTaskDraft(
     }
     const changedDraft = await transaction.update(captureTaskDraftVersions).set({
       status: "confirmed", taskId: task.id, confirmedAt: timestamp,
-    }).where(and(eq(captureTaskDraftVersions.id, draft.id),
+    }).where(and(eq(captureTaskDraftVersions.id, currentDraft.id),
       eq(captureTaskDraftVersions.status, "draft"))).returning({ id: captureTaskDraftVersions.id });
     if (changedDraft.length !== 1) throw invalidState("待确认抓取任务草稿已更新");
     const changed = await transaction.update(categoryInterviewSessions).set({
-      phase: "confirmed", revision: view.session.revision + 1, updatedAt: timestamp,
+      phase: "confirmed", revision: current.session.revision + 1, updatedAt: timestamp,
     }).where(and(eq(categoryInterviewSessions.id, input.sessionId),
       eq(categoryInterviewSessions.revision, input.expectedRevision))).returning({ id: categoryInterviewSessions.id });
     if (changed.length !== 1) throw revisionConflict(input.sessionId);
   });
   const interview = await requireCategoryInterviewView(db, input.sessionId);
-  const confirmedDraft = interview.taskDrafts.find((item) => item.id === draft.id)!;
+  const confirmedDraft = interview.taskDrafts.find((item) => item.id === currentDraft.id)!;
   return { interview, draft: confirmedDraft, task };
 }
 

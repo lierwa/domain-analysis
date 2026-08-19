@@ -73,7 +73,7 @@ export function createCrawlPlanningModule(
   db: WorkbenchDb,
   captureTasks: CaptureTaskModule,
   runtime: CrawlPlanningRuntime,
-  options: { now?: () => Date; createId?: (kind: string) => string } = {},
+  options: { now?: () => Date; createId?: (kind: string) => string; validateSource?: (source: CrawlPlan["content"]["sources"][number]) => void | Promise<void> } = {},
 ): CrawlPlanningModule {
   const now = options.now ?? (() => new Date());
   const createId = options.createId ?? ((kind) => `${kind}-${randomUUID()}`);
@@ -83,7 +83,7 @@ export function createCrawlPlanningModule(
       return task ? loadView(db, task) : null;
     },
     run: (input) => runPlanning(db, captureTasks, runtime, input, now, createId),
-    confirm: (input) => confirmPlan(db, captureTasks, input, now),
+    confirm: (input) => confirmPlan(db, captureTasks, input, now, options.validateSource),
   };
 }
 
@@ -219,6 +219,7 @@ async function confirmPlan(
   captureTasks: CaptureTaskModule,
   input: { taskId: string; planId: string; expectedTaskRevision: number },
   now: () => Date,
+  validateSource?: (source: CrawlPlan["content"]["sources"][number]) => void | Promise<void>,
 ) {
   const confirmation = confirmCrawlPlanSchema.parse({ expectedTaskRevision: input.expectedTaskRevision });
   const task = await requireTask(captureTasks, input.taskId);
@@ -230,6 +231,16 @@ async function confirmPlan(
   if (!plan) throw new CrawlPlanningError("not_found", `抓取计划不存在：${input.planId}`);
   if (plan.taskRevision !== task.revision) throw revisionConflict(task.id);
   if (plan.status !== "draft") throw new CrawlPlanningError("invalid_state", "只有当前草稿计划可以确认");
+  const parsed = crawlPlanContentSchema.parse(plan.content);
+  for (const source of parsed.sources) {
+    if (source.executionBlockers.length > 0) throw new CrawlPlanningError("invalid_state", `计划仍有执行阻塞：${source.executionBlockers.join("；")}`);
+    try {
+      await validateSource?.(source);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new CrawlPlanningError("invalid_state", `来源执行预检失败：${message.slice(0, 1_500)}`);
+    }
+  }
   const timestamp = now().toISOString();
   await db.transaction(async (transaction) => {
     await transaction.update(sourceCollectionPlans).set({ status: "superseded" })

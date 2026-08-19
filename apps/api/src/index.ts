@@ -5,12 +5,18 @@ import {
   createCodexCrawlPlanningRuntime,
   openDataCollectionWorkbench,
 } from "@domain-analysis/workbench";
+import { createJdCatalogProvider } from "@domain-analysis/worker";
 
 import { loadConfig } from "./config";
 import { buildServer } from "./server";
 
 const config = loadConfig();
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const sourceProviders = new Map();
+if (config.jdCdpEndpoint) {
+  const provider = createJdCatalogProvider({ endpointUrl: config.jdCdpEndpoint });
+  sourceProviders.set(provider.key, provider);
+}
 const workbench = await openDataCollectionWorkbench({
   databaseUrl: config.postgresDatabaseUrl,
   categoryInterviewRuntime: createCodexCategoryInterviewRuntime({
@@ -23,6 +29,7 @@ const workbench = await openDataCollectionWorkbench({
     model: config.interviewModelId,
     reasoningEffort: config.interviewReasoningEffort,
   }),
+  sourceProviders,
 });
 const app = await buildServer({ workbench });
 

@@ -643,6 +643,13 @@ Browser
 - 接受的新边界是 input-first：Workbench 先保存任意 Composer 原文，再把原文、当前 proposal、历史消息/活动、决定、未决项和草稿版本一并交给 ephemeral Codex 回合。Codex final answer 只提交本轮理解增量；明确回答使用 `decisionResolution` 引用当前 proposal，成立的前提否定使用 `decisionWithdrawal` 撤回问题，附加事实同时写入说明和下一版草稿，含糊或追问则不确认。Workbench 校验引用并原子持久化，不再提供独立 Decision confirm HTTP 路径或 `decision_confirmed` trigger。
 - `grill-with-docs` 只组合自然语言 `grilling` 和随会话维护记录的 `domain-modeling`，不定义 JSON 传输。项目 Skill 因此只定义理解、调查、提问和记录纪律；机器字段继续由 runtime schema 独占。最终 JSON 仍是 App Server seam 下本轮 typed delta，因为 Workbench 必须在无状态回合后校验状态变化；它不再同时维护 `question`/`proposedDecision` 两种问题结构，也不要求模型重报完整会话。
 - 平台和网站是系统应调查的来源事实，不是负责人选择题。京东对家电保持默认核心覆盖；淘宝是后续同级平台候选，但当前没有淘宝 crawler/Provider，任何草稿都不能把搜索发现误写成已接入能力。
+
+#### 2026-08-20 采访文字记录与确认后结构化纠错
+
+- 最新真实失败记录显示，采访回合被要求同时输出完整 `taskCandidate.sourceCandidates`，Codex 对可选时间返回 `null`、对来源入口返回非 URL 文本后，被本地正式任务 Zod schema 拒绝。逐字段放宽只会继续让采访阶段承担尚未确认的正式数据设计，根因不是四个空值，而是结构化时机错误。
+- 产品负责人明确确认四段流程：采访与搜索事实记录 → Markdown 范围草案确认 → 正式 Capture Task 与 Crawl Plan 结构化/确认 → 显式开始执行。前三段确认均不自动抓取。该决定记录在 `REQUIREMENTS-ALIGNMENT.md` D009。
+- 现有 App Server、Zod、Drizzle 和 PostgreSQL 已能承担所需边界，不引入新库、状态机、工作流或第二会话层。采访 final answer 收窄为最小增量和可选 `draftMarkdown`；用户确认后复用同一 App Server client 发起独立 ephemeral materialization，禁止 `web_search`，再由现有 Zod 正式任务 schema 校验。
+- 数据迁移把历史 `content_json` 草稿原样包入带说明的 Markdown fenced block 后转换为 `brief_markdown`，保留历史内容；生产运行不保留双字段、兼容 parser 或旧 `taskCandidate` fallback。
 - 任意新输入都会使旧草稿离开当前可确认态，避免用户在本轮仍运行或失败时确认过期范围。只有最新回合结束、session 为 `idle + task_ready` 且最新草稿通过完整性校验时，确认入口和后端命令才开放；用户显式确认才创建或推进 Capture Task。
 - 纯解释回合只返回普通说明，不生成决定或草稿修订。
 - 来源 `observedAt` 不是模型权威字段。Workbench 忽略模型给出的时间，在草稿提交时统一写入当前时间。
@@ -942,6 +949,21 @@ Node/TypeScript、本地/离线和部署边界：纯 Node 24/TypeScript；App Se
 真实结果：在正式“家用冰箱抓取任务”上完成两个前台 Planning Run。v2 沿用并重新核实京东冰箱频道、国家标准全文阅读和美的官方说明书三类来源，明确目录/详情全量、每 SKU 30 条评价样本、相关标准题录全量和 20 份说明书样本，并逐项给出分母、遍历、停止条件和执行阻塞。v1 保留为 superseded，v2 保持 draft，刷新后仍可审查；所有来源只由 Workbench 记为 `search_discovered / unknown`，发现时间等于 v2 完成时间。Source Run 数量为 0，证明规划没有越权执行。全量 40 tests passed / 1 skipped，六 workspace typecheck 和生产构建通过。
 
 结论与确认：复用现有 App Server seam，新建一个 CrawlPlanningModule 和一个专用短 Skill；该 runtime 在生命周期内复用一条已初始化连接，每次 Planning Run 新建 ephemeral thread，采用前台可见、断连中止、完成结果持久化的最小流程。若真实使用证明跨页面持续是必要需求，再以 DBOS 等成熟工作流重新进入调研/原型门。
+
+### R-036 京东有界 CDP Provider 与显式 Source Run
+
+状态：最小生产实现已接受；真实目录 passed，详情访问被登录门 blocked
+目标阶段：1C/1D 首个纵切片
+
+问题：Crawl Plan 必须能指导已实现程序，而不是把自然语言 traversal 当 crawler；确认与开始必须分离，来源原始结果必须进入正式 Source Dataset。
+
+候选与官方依据：继续采用 R-012 已验证的官方 Playwright CDP 能力与系统 Chrome，锁定 `playwright-core@1.62.1`（Apache-2.0、Node/TypeScript、本地）；复用已接受的 `p-queue@9.3.3`、`cockatiel@4.0.0`、PostgreSQL、Drizzle、Fastify SSE 和 Zod。拒绝复制 Cookie/Profile、Patchright/反检测、动态插件系统、自研队列和运行时生成 crawler。
+
+产品边界：Provider 配置使用通用 key/value 数组，JD 当前验证 `mode=cdp`、`include_text`、`exclude_text`；品类与排除词是 plan data，JD DOM/导航机制只在 Provider。入口仅允许 `https://www.jd.com`，CDP 仅允许 loopback；计划固定请求预算 2、每分钟最多 2、最小间隔 10 秒、最长 3 分钟、零重试。HTML 可内联保存；登录页、Cookie、Profile、认证 Header 和验证码材料不保存。
+
+真实结果（2026-08-20 Windows）：全新冰箱采访完成 19 个网页搜索并生成可读 Markdown；确认后得到 Capture Task v1。Planning v3 以 20 个网页搜索核实入口，冻结 `jd.catalog-product@1.0.0` 与 include/exclude 配置并通过 CDP preflight。两次独立 Source Run 均从正式 Web 显式开始：目录 HTML accessible，详情 SKU `100377318432` 被重定向到 `passport.jd.com`，记录 `login_required` 并停止；每次 2 snapshots、1 accessible、1 failed、0 assets，JSONL 各 2 条。该结果证明目录、写入、查看和导出闭环，详情为 blocked，不证明完整京东访问通过。
+
+退出成本：删除 composition-root 注入与 JD Provider 不改变 Crawl Plan、Source Execution 或 Source Dataset contract；其他来源必须各自通过同一调研和真实门。
 
 ### R-007 依赖复现与安全升级
 

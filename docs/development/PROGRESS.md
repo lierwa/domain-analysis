@@ -1,13 +1,13 @@
 # 数据抓取与清洗平台开发进度
 
-更新日期：2026-08-19
-当前阶段：`ROADMAP.md` 1B 最小抓取规划；1A 采访契约已通过自动化与真实页面终检，产品负责人验收待完成
-总体状态：Capture Task → 可见 Planning Run → 版本化 Crawl Plan Draft → 人工确认的 1B 纵切片已实现，最新 Crawl Plan 仍为未确认 v2，确认不会创建 Source Run。1A 已把任意 Composer 输入统一交给 Codex 理解，平台来源由系统调查，最新草稿只有显式确认后才创建或推进 Capture Task；本轮全量测试、类型检查、生产构建和真实页面烟测已通过。
+更新日期：2026-08-20
+当前阶段：`ROADMAP.md` 1C/1D 首个京东有界纵切片
+总体状态：采访 → Markdown 确认 → Capture Task → 可执行 Crawl Plan → 显式 Start → Source Dataset 已形成生产闭环。真实京东目录 HTML 已通过并持久化；商品详情被京东登录门阻塞并 truthful 停止，尚未通过完整详情访问。
 当前积分：85.5（以 `AGENT-SCORECARD.md` 为准）
 
 ## 1. 本轮目标
 
-用户已确认项目只有两个阶段：数据抓取、数据清洗。当前为已确认的标准商品 Capture Task 建立最小抓取规划纵切片，让计划直接冻结具体来源、每个来源的原始捕获内容和数量；确认计划不得创建 Source Run 或访问真实来源。手工制品、孤品和定制品等非标准商品不在当前范围。
+用户已确认项目只有两个阶段：数据抓取、数据清洗，并进一步确认从首句到执行必须分成四段。当前先把 1A 纠正为“采访文字记录与搜索事实 → Markdown 范围确认 → 确认后正式结构化”，同时保留 1B 对来源、内容、数量和停止口径的独占结构化职责；任何确认都不得自动创建 Source Run。
 
 ## 2. 已完成的代码清理
 
@@ -30,17 +30,17 @@
 
 ## 3. 当前对话产物
 
-完成对话后得到一个版本化 `抓取任务草稿`，包含：
+完成对话后得到一个版本化 Markdown `采访范围草案`，用自然语言包含：
 
 - 用户原始需求；
 - 商品门类；
 - 中国大陆普通消费者实际可购买的市场口径，不按品牌国籍排除；
 - 通用抓取内容和该品类补充内容；
 - 平台来源范围（京东由标准商品平台来源策略确定，不作为负责人取舍题；淘宝是后续同级候选，当前没有 crawler/Provider）；
-- 系统通过已完成搜索发现的候选来源及当前已知格式和访问状态，不把搜索结果冒充已接入或已抓取；
+- 系统通过已完成搜索得到的来源事实及当前已知格式和访问状态，不把搜索结果冒充已接入或已抓取；
 - 排除项、未决项和已确认决定。
 
-用户整体确认后生成正式 Capture Task；不会自动开始真实抓取。草稿或正式任务范围不足时都能继续原对话：新草稿追加版本，后续确认保持 Capture Task ID 不变并推进 revision，历史确认版本不覆盖。
+采访回合不生成正式任务字段。用户整体确认 Markdown 后，Workbench 才发起一次禁止搜索和新增事实的独立转换，校验并生成正式 Capture Task；不会自动启动 Crawl Planning 或真实抓取。草稿或正式任务范围不足时都能继续原对话：新草稿追加版本，后续确认保持 Capture Task ID 不变并推进 revision，历史确认草案不覆盖。
 
 ## 4. Baseline Impact
 
@@ -449,7 +449,42 @@ Patch Disposition:
 
 ## 8. 下一步与停止门
 
-当前下一步：用户在任务页审查 1A 新建与修订结果，并决定是否确认最新 Crawl Plan v2；若计划需补来源、内容或数量，继续输入要求生成 v3，不覆盖 v2。确认后仍不开始抓取。后续 1C 必须先为一个已确认来源完成 Provider、许可、访问方式、频控、停止条件和原始持久化通过门。当前请求未授权 commit/push，因此全部修改只在本机，尚未形成跨电脑接续点。
+2026-08-20 Windows 本地启动补全：根命令新增幂等 `db:start-local`。`npm run dev` 在建库和启动 API/Web 前先探测 `POSTGRES_DATABASE_URL`；端口已监听或数据目录对应的 PostgreSQL 已运行时不会重复启动，只有本机 PostgreSQL 未运行时才使用该数据目录记录的官方 `pg_ctl` 启动。冷启动实测恢复 PostgreSQL 14；紧接着第二次执行只报告“已运行”，没有再次启动；`db:ensure-local` 确认 `domain_analysis` 已存在。完整 `npm run dev` 随后复用运行中的 PostgreSQL，API `/health` 返回 200，Vite 在 6173 就绪；本轮 API/Web 验证进程已停止，PostgreSQL 保持运行。该改动只补全本地开发依赖生命周期，架构影响为无变化，不改变业务模块、事实源、公共 contract 或阶段 1B 停止门。
+
+### 2026-08-20 采访阶段结构化时机纠错
+
+```text
+Baseline Impact:
+- touched modules: shared Interview/Capture Task contract, Workbench interview runtime and confirmation path, PostgreSQL draft storage, Web draft card, interview Skill and authority docs
+- owning fact source: Interview/PostgreSQL owns messages, answers, search activities and Markdown drafts; Capture Task owns confirmed structured scope; Crawl Plan continues to own source/content/quantity/stop decisions
+- public interface changed: yes, CaptureTaskDraftVersion.content replaced by markdown; interview runtime taskCandidate replaced by draftMarkdown
+- new protocol/adapter/fallback: no new transport or fallback; existing App Server client gains one confirmation-only materialization call
+- compatibility or legacy path changed: yes, migration converts historical content_json drafts into readable Markdown and removes the old column; no runtime dual-read path
+- research update required: yes, R-029 records why the failure is a stage-boundary defect rather than a nullable-field defect
+- architecture or ADR update required: yes, D009 and ADR-0012 freeze the four-stage workflow and confirmation boundary
+- tests and real-surface validation to run: full Vitest, six workspace typechecks, production build, real PostgreSQL migration, real App Server interview/search and confirmation
+```
+
+```text
+Patch Disposition:
+- delete: interview taskCandidate/sourceCandidates/observedAt generation, structured draft rendering, and tests that protected that premature schema
+- keep: persisted messages, ordered search timeline, user Decision semantics, ephemeral App Server, explicit confirmation, Capture Task and Crawl Planning
+- rewrite: draft persistence/UI to Markdown; confirmation to a separate strict Capture Task materialization
+- reason: latest failure proved the formal task schema was being enforced before the user had confirmed the scope
+```
+
+实现与验证：
+
+- `capture_task_draft_versions.content_json` 已通过 0014 migration 转为 `brief_markdown text`；历史 JSON 被完整包入带迁移说明的 Markdown fenced block，未删除历史内容，也没有保留双字段兼容分支。
+- 采访 final answer 现在只允许最小增量和可选 `draftMarkdown`。用户确认按钮调用独立 materialization；该调用观察到 `web_search` 会失败关闭，Workbench 统一生成 `observedAt`、confirmed decision IDs 和当前未决项。
+- Web 直接显示 Markdown 草案，确认期间禁用重复点击并显示“正在生成正式任务…”。
+- 全量自动化：`65 passed / 1 skipped`；六个 workspace 类型检查通过；生产构建通过，只有既有约 581 kB Web chunk 警告；`git diff --check` 无错误。
+- 真实本机链：Windows PostgreSQL 已运行且 `db:start-local` 二次调用没有重复启动。全新电饭煲会话完成真实 commentary、3 个 web_search activity 和 Markdown v1，状态为 `task_ready + idle`，无 Decision/负责人未决项；草案对象只有 `markdown`，确认前 Capture Task 为 0。显式确认后，独立纯转换生成 `ready` Capture Task revision 1，京东默认范围完整，session 进入 `confirmed + idle`，Source Run 为 0。验收任务随后通过产品删除动作归档，保留审计历史但不污染活动任务列表。
+- 首两次沙箱内真实调用因 `https://api.openai.com/v1/responses` 连接被运行沙箱阻断而失败；在获批的沙箱外开发进程中同一持久化用户消息重试成功。该失败属于验证环境网络边界，不是产品 schema 回归，也没有加入自动重试或 fallback。
+
+架构影响：改变。采访草案的公共 contract 和事实形态由正式任务结构改为 Markdown；Capture Task 的正式结构化职责移动到用户确认之后。Workbench/PostgreSQL 仍是会话事实源，Capture Task 与 Crawl Plan 的 ownership、依赖方向及 App Server transport 不变。
+
+当前下一步：用户直接在正在运行的 Workbench 审查新建与修订效果；已确认任务再显式启动 Crawl Planning。最新 Crawl Plan 未确认、Provider/许可/频控/停止门未通过前，不创建 Source Run。当前请求未授权 commit/push，因此全部修改只在本机，尚未形成跨电脑接续点。
 
 上一轮真流式修复的架构影响：改变外部运行 seam，但不改变领域事实源。Codex 入口由 `exec --ephemeral --json --output-schema` 改为版本锁定的 App Server `stdio`＋`thread/start(ephemeral:true)`；公共 SSE contract 不变，`assistant.delta` 现在来自真实 commentary delta。Workbench 仍是唯一产品会话/任务事实源，没有持久 Codex thread、第二 Provider 或 fallback。
 
@@ -467,9 +502,50 @@ Patch Disposition:
 
 HARD STOP：最新 Crawl Plan 未经用户确认，且 Provider、许可、访问方式、频控与停止门未通过前，不创建 Source Run、不访问真实来源；1A 工程验收虽已通过，仍待产品负责人审查；不调用清洗/Evidence/知识加工链。
 
+### 2026-08-20 可执行品类抓取任务 PRD
+
+- 使用本地 Markdown Issue Tracker 发布 `.scratch/executable-category-crawl/PRD.md`，状态为 `ready-for-agent`。
+- PRD 只定义“新建任务 → 采访工作资料 → 可读草稿 → Capture Task → 唯一可执行 Crawl Plan → 显式开始 → Source Run/原始快照”的最小闭环，并明确计划不能替代 Provider 代码。
+- PRD 同时登记当前生产缺口：采访 proposal 重复 selection、历史 JSON 冒充 Markdown、两套计划结构、缺少 Provider/启动 API/Source Dataset 写入和真实纵向验收。
+- 第一条真实通过门限定为冰箱＋京东的有界 Source Run；自动测试、fixture、搜索发现或计划确认都不能替代真实来源结果。
+- 本轮只新增 PRD 与工程 Skill 本地 Issue Tracker 配置，没有修改生产代码、数据库或运行状态，也没有声称现有抓取链已经可执行。
+
+本轮架构影响：澄清候选。PRD 提议把 Crawl Plan 收口为唯一可执行计划事实源，并增加 Provider 预检、显式 Source Run 启动和 Source Dataset 写入边界；这些尚未实施或验收，不能写成当前架构完成态。实施前必须按 PRD 清算旧补丁，并同步解决现有权威文档与已接受 ADR 的冲突。
+
+### 2026-08-20 可执行 Crawl Plan 与真实京东 Source Run
+
+```text
+Baseline Impact:
+- touched modules: shared plan/dataset contracts, PostgreSQL migration, Workbench planning/execution/dataset, API SSE, Worker JD Provider, Web plan/raw-data UI, authority docs
+- owning fact source: Capture Task owns scope; versioned Crawl Plan owns executable source/limits; Source Dataset owns run/object/snapshot/asset
+- public interface changed: yes; provider binding, explicit Start and Source Dataset write interface
+- new protocol/adapter/fallback: JD CDP Provider and foreground Source Run SSE; no fallback or background queue
+- compatibility or legacy path changed: old Source Collection Plan and structured draft rows remain legacy/read-only
+- research update required: yes, R-036
+- architecture or ADR update required: yes, ADR-0013 and 1C/1D baseline
+- tests and real-surface validation: 69 automated passed/1 realtime skipped; six workspace typechecks, production build and diff check passed; two real JD runs classified below
+```
+
+```text
+Patch Disposition:
+- delete: proposal selection duplication; legacy JSON as current confirmable draft; dual-authority active plan behavior
+- keep: Interview Working Record, Markdown drafts, Timeline, PostgreSQL raw tables, read/export, pacing/circuit breaker and idempotent startup
+- rewrite: active plan execution fields, confirmation/preflight, explicit Start, transactional dataset writes and JD Provider
+- reason: PRD requires one reviewable and machine-executable plan with truthful real-source results
+```
+
+- proposal 只保存问题、2–3 个选项、唯一推荐和 rationale；selection 只在后续 confirmed resolution。0015 migration 让历史 proposed row 可为空，并把旧结构化 draft 明确保持 superseded。
+- active Crawl Plan 冻结 Provider key/version、key/value 配置、access/stop/raw-output policy；缺 Provider、blocker、配置或 CDP preflight 失败时不能确认或创建假 run。
+- Source Execution 从 PostgreSQL 重读 confirmed task revision/plan version；一个 source 可由 Provider 展开目录与详情。Source Dataset 单一事务入口复用对象、追加 immutable snapshot、幂等检查并更新计数。
+- 真实 Workbench：全新“抓冰箱”完成 19 个网页搜索、可读 Markdown v1 和 Capture Task v1。Planning v3 完成 20 个网页搜索，冻结 `mode=cdp / include_text=冰箱 / exclude_text=二手|冷柜|冰吧`，无 blocker 并通过 preflight。
+- 两次独立真实 Source Run 均为：目录 `accessible`、详情 SKU `100377318432` → `passport.jd.com` → `login_required`，持久化 run=`failed` 且 UI 显示 `blocked · login_required`，snapshot=2、accessible=1、failed=1、asset=0。重启 API/Web 后两条 run 和快照仍可见；JSONL 各 2 条，CSV 均经引号感知解析为表头＋2 条。没有读取日常 Profile、复制 Cookie、绕过登录、自动重试或保存登录页内容。
+- 当前分类：passed=采访/Markdown/Capture Task/plan/preflight/显式 Start/目录 HTML/不可变写入/重启恢复/页面查看与截断/JSONL 与 CSV 导出/幂等 PostgreSQL 启动/全量自动化；blocked=京东详情登录；failed=两次旧 observedAt schema run 与一次非法 camelCase provider key run，均已按根因修正且保留审计；untested=登录后详情成功、asset 下载、完整京东平台覆盖、Linux 安装与运行。
+
+本轮架构影响：改变。新增 ADR-0013 的 Source Execution/Provider seam；事实源仍分别为 Capture Task、Crawl Plan 和 Source Dataset，没有第二套计划、会话、队列或 fallback。交付提交与远程 SHA 在推送完成后登记。
+
 ## 9. Git 状态
 
-- 仓库：`/Users/guojunxi/Desktop/work/domain-analysis`
+- 仓库：`D:\work\domain-analysis`
 - 分支：`master`
-- 本轮起始 HEAD：`1191a38c15744537282de5f88b960e8c8a30a589`；本地 `master` 比 `origin/master` 超前 1 个提交。开始时工作区已有用户上一轮的大量未提交文档修改，本轮在其上做最小一致增量，没有回退或覆盖。
-- 当前工作区包含既有文档 WIP 与本轮 Crawl Planning contract、迁移、Workbench/API/Web/Skill/测试和文档修改；未 commit、未 push，仅本机可继续。
+- 本轮起始 HEAD：`0afa6c12fff7e06b2406154286179e6352dcd8c2`；当前与 `origin/master` SHA 一致。
+- 当前工作区包含本轮 PostgreSQL 幂等启动脚本、采访 Markdown/确认后结构化 contract、0014 migration、Workbench/Web/Skill/测试和权威文档修改；未 commit、未 push，仅本机可继续。

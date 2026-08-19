@@ -132,6 +132,22 @@ export const sourceSnapshotRecordSchema = z.object({
   assets: z.array(sourceAssetSchema),
 }).strict();
 
+export const sourceSnapshotCommitSchema = z.object({
+  runId: idSchema,
+  idempotencyKey: idSchema,
+  object: sourceObjectInputSchema,
+  observation: rawSourceObservationSchema,
+  payload: rawSourcePayloadSchema.optional(),
+}).strict();
+
+export const sourceRunEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("run.started"), run: sourceCollectionRunSchema }).strict(),
+  z.object({ type: z.literal("run.updated"), run: sourceCollectionRunSchema }).strict(),
+  z.object({ type: z.literal("run.completed"), run: sourceCollectionRunSchema }).strict(),
+  z.object({ type: z.literal("run.failed"), run: sourceCollectionRunSchema }).strict(),
+  z.object({ type: z.literal("run.stopped"), run: sourceCollectionRunSchema }).strict(),
+]);
+
 export const sourceDatasetRunViewSchema = z.object({
   run: sourceCollectionRunSchema,
   records: z.array(sourceSnapshotRecordSchema),
@@ -149,3 +165,5 @@ export type SourceSnapshot = z.infer<typeof sourceSnapshotSchema>;
 export type SourceAsset = z.infer<typeof sourceAssetSchema>;
 export type SourceSnapshotRecord = z.infer<typeof sourceSnapshotRecordSchema>;
 export type SourceDatasetRunView = z.infer<typeof sourceDatasetRunViewSchema>;
+export type SourceSnapshotCommit = z.infer<typeof sourceSnapshotCommitSchema>;
+export type SourceRunEvent = z.infer<typeof sourceRunEventSchema>;

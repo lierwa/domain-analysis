@@ -8,6 +8,7 @@ const configSchema = z.object({
     .default("postgresql://guojunxi@127.0.0.1:5432/domain_analysis"),
   interviewModelId: z.string().min(1).default("gpt-5.6-terra"),
   interviewReasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).default("medium"),
+  jdCdpEndpoint: z.string().url().optional(),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -20,5 +21,6 @@ export function loadConfig(env = process.env): AppConfig {
     postgresDatabaseUrl: env.POSTGRES_DATABASE_URL,
     interviewModelId: env.INTERVIEW_MODEL_ID,
     interviewReasoningEffort: env.INTERVIEW_REASONING_EFFORT,
+    jdCdpEndpoint: env.JD_CDP_ENDPOINT,
   });
 }

@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   makeQuestionVisible,
-  requiresCategoryResearch,
   requiresInitialCategoryResearch,
 } from "../src/codexCategoryInterviewRuntime";
 
@@ -75,7 +74,6 @@ describe("采访后续调查门", () => {
           { label: "近三年", description: "兼顾历史。", recommended: false },
           { label: "全部覆盖", description: "工作量最大。", recommended: false },
         ],
-        selection: "仅在售",
         rationale: "首期优先当前市场。",
       },
       unresolvedItems: [], resolvedUnresolvedKeys: [],
@@ -110,50 +108,7 @@ describe("采访后续调查门", () => {
     })).toBe(false);
   });
 
-  it("已有草稿切换到新品类时重新要求本轮搜索", () => {
-    const view = categoryInterviewViewSchema.parse({
-      session: {
-        id: "session-1", initialRequest: "抓冰箱", phase: "task_ready", turnState: "running",
-        revision: 4, createdAt: "2026-08-19T00:00:00.000Z", updatedAt: "2026-08-19T00:03:00.000Z",
-      },
-      messages: [message(1, "user", "抓冰箱", "completed")],
-      decisions: [], unresolvedItems: [],
-      taskDrafts: [{
-        id: "draft-1", sessionId: "session-1", version: 1, status: "draft",
-        contentHash: "a".repeat(64), createdAt: "2026-08-19T00:02:00.000Z",
-        content: taskCandidate("refrigerator", "冰箱"),
-      }],
-    });
-    const input = { session: view, trigger: { type: "user_message" as const, text: "改成电视机" } };
-
-    expect(requiresCategoryResearch(input, {
-      assistantText: "已切换品类。", taskCandidate: taskCandidate("television", "电视机"),
-      unresolvedItems: [], resolvedUnresolvedKeys: [],
-    })).toBe(true);
-    expect(requiresCategoryResearch(input, {
-      assistantText: "只补充来源。", taskCandidate: taskCandidate("refrigerator", "冰箱"),
-      unresolvedItems: [], resolvedUnresolvedKeys: [],
-    })).toBe(false);
-
-    expect(requiresCategoryResearch(input, {
-      assistantText: "品类标签已经切换。",
-      taskCandidate: taskCandidate("refrigerator", "电视机"),
-      unresolvedItems: [], resolvedUnresolvedKeys: [],
-    })).toBe(true);
-  });
-
 });
-
-function taskCandidate(code: string, label: string) {
-  return {
-    originalRequest: `抓${label}`,
-    category: { code, label },
-    marketScope: "中国大陆当前在售新品",
-    generalTopics: ["品牌、型号和参数"], categoryTopics: [],
-    jd: { applicable: true, disposition: "included" as const, scope: [], rationale: "默认覆盖。" },
-    sourceCandidates: [], excludedContent: [], unresolvedItems: [], decisionIds: [],
-  };
-}
 
 function message(
   sequence: number,

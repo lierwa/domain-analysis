@@ -69,6 +69,15 @@ export const captureTaskContentSchema = z.object({
   decisionIds: z.array(idSchema),
 }).strict();
 
+export const captureTaskMaterializationSchema = captureTaskContentSchema.omit({
+  sourceCandidates: true,
+  unresolvedItems: true,
+  decisionIds: true,
+}).extend({
+  // WHY：采访草案确认后才做正式结构化；观察时间仍由 Workbench 在提交时统一写入。
+  sourceCandidates: z.array(sourceCandidateSchema.omit({ observedAt: true })),
+}).strict();
+
 export const captureTaskSchema = z.object({
   id: idSchema,
   name: z.string().min(1).max(160),
@@ -90,7 +99,7 @@ export const captureTaskDraftVersionSchema = z.object({
   version: z.number().int().positive(),
   status: z.enum(["draft", "confirmed", "superseded"]),
   contentHash: hashSchema,
-  content: captureTaskContentSchema,
+  markdown: z.string().min(1).max(100_000),
   taskId: idSchema.optional(),
   createdAt: isoDateSchema,
   confirmedAt: isoDateSchema.optional(),
@@ -99,6 +108,7 @@ export const captureTaskDraftVersionSchema = z.object({
 export type SourceCandidate = z.infer<typeof sourceCandidateSchema>;
 export type JdCollectionIntent = z.infer<typeof jdCollectionIntentSchema>;
 export type CaptureTaskContent = z.infer<typeof captureTaskContentSchema>;
+export type CaptureTaskMaterialization = z.infer<typeof captureTaskMaterializationSchema>;
 export type CaptureTask = z.infer<typeof captureTaskSchema>;
 export type CaptureTaskDraftVersion = z.infer<typeof captureTaskDraftVersionSchema>;
 

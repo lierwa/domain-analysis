@@ -32,7 +32,6 @@ describe("抓取任务对话契约", () => {
           { label: "仅当前在售", description: "边界清晰，京东当前页更容易核验。", recommended: true },
           { label: "加近两年停售", description: "覆盖更广，但会增加京东历史页核验量。", recommended: false },
         ],
-        selection: "仅当前在售",
         rationale: "该取舍决定型号生命周期，不是在询问是否纳入京东。",
       },
       unresolvedItems: [],
@@ -91,7 +90,6 @@ describe("抓取任务对话契约", () => {
           { label: "仅当前在售", description: "边界清晰。", recommended: true },
           { label: "包含停售型号", description: "历史覆盖更广。", recommended: false },
         ],
-        selection: "仅当前在售",
         rationale: "这是型号生命周期边界。",
       },
       unresolvedItems: [], resolvedUnresolvedKeys: [],
@@ -102,7 +100,7 @@ describe("抓取任务对话契约", () => {
 });
 
 describe("抓取任务对话结构约束", () => {
-  it("推荐选择必须与唯一推荐选项一致", () => {
+  it("proposal 不接受尚未发生的用户 selection", () => {
     const result = categoryInterviewRuntimeOutputSchema.safeParse({
       assistantText: "需要确认生命周期。",
       proposedDecision: {

@@ -40,9 +40,34 @@ export const crawlPlanSourceSchema = z.object({
   sourceKind: z.enum(sourceKinds),
   role: z.string().trim().min(1).max(1_000),
   entryUrls: z.array(z.string().url().max(2_048)).min(1).max(50),
+  provider: z.object({
+    key: keySchema,
+    version: idSchema,
+    configuration: z.array(z.object({
+      key: keySchema,
+      value: z.union([z.string(), z.number(), z.boolean()]),
+    }).strict()).max(50),
+  }).strict(),
+  accessPolicy: z.object({
+    kind: z.literal("paced_http"),
+    version: idSchema,
+    maxRequestsPerMinute: z.number().int().positive(),
+    minimumIntervalMs: z.number().int().positive(),
+    maximumRunMs: z.number().int().positive(),
+  }).strict(),
+  stopPolicy: z.object({
+    requestBudget: z.number().int().positive(),
+    noNewUniqueKeysLimit: z.number().int().positive(),
+    stopOnAccessRestriction: z.literal(true),
+  }).strict(),
+  rawOutputPolicy: z.object({
+    formats: z.array(z.enum(["html", "source_json", "document", "image", "text"])).min(1),
+    retainAssets: z.boolean(),
+  }).strict(),
   observationLevel: z.literal("search_discovered"),
   accessState: z.enum(sourceAccessStates),
-  observedAt: isoDateSchema,
+  // WHY：候选时间由模型传来但不会成为事实；Workbench 在持久化前覆盖为服务端时间。
+  observedAt: z.string().min(1).max(100),
   targets: z.array(crawlPlanTargetSchema).min(1).max(100),
   executionBlockers: z.array(boundedText).max(100),
 }).strict().superRefine((source, context) => {
@@ -87,6 +112,11 @@ export const crawlPlanSchema = z.object({
   if (plan.status === "confirmed" && !plan.confirmedAt) {
     context.addIssue({ code: "custom", path: ["confirmedAt"], message: "已确认计划必须记录确认时间" });
   }
+  plan.content.sources.forEach((source, index) => {
+    if (Number.isNaN(Date.parse(source.observedAt))) {
+      context.addIssue({ code: "custom", path: ["content", "sources", index, "observedAt"], message: "持久化计划的观察时间无效" });
+    }
+  });
 });
 
 export const crawlPlanningRunSchema = z.object({
@@ -126,6 +156,11 @@ export const crawlPlanningRunRequestSchema = z.object({
 
 export const confirmCrawlPlanSchema = z.object({
   expectedTaskRevision: z.number().int().positive(),
+}).strict();
+
+export const startCrawlPlanSchema = z.object({
+  expectedTaskRevision: z.number().int().positive(),
+  expectedPlanVersion: z.number().int().positive(),
 }).strict();
 
 export const crawlPlanningRuntimeOutputSchema = z.object({

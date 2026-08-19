@@ -27,7 +27,10 @@ description: 为已确认的标准商品 Capture Task 调查具体来源，并�
 
 - 当前来源观察等级只能是 `search_discovered`，初步访问状态只能是 `unknown`；Workbench 会覆盖真实发现时间。搜索到 URL 不等于页面已由 Provider 验证。
 - 不批量翻页、不枚举商品、不登录、不下载文件、不读取 Cookie/Profile、不绕过验证码或风控。
-- 不编造 Provider、访问许可、并发、频率、重试或恢复参数。
+- 当前唯一可引用的生产 Provider 是 `jd.catalog-product@1.0.0`，只接受京东 `www.jd.com` 入口与 `configuration=[{"key":"mode","value":"cdp"},{"key":"include_text","value":"该任务品类词"},{"key":"exclude_text","value":"用 | 分隔的排除词"}]`；其他来源必须标记 `provider_missing`。不得编造其他 Provider。
+- 京东首个有界计划使用单并发、每分钟最多 2 次、请求间隔至少 10 秒、总请求预算 2、最长 3 分钟；首次登录、验证码、拒绝或风控立即停止且零重试。计划必须保留 HTML 原始响应。
+- 对满足上一条绑定、入口和固定限制的京东来源，`executionBlockers` 必须为空；Provider 存在性、配置和 CDP 连接由 Workbench 在确认时 preflight，登录/验证码/风控是运行时 typed 停止条件，不重复写成确认 blocker。
+- 首个纵切片只保留目录 HTML 和一个详情 HTML；图片等媒体只保留 HTML 中的源站引用，不把未实现的独立资产下载写进 `rawFormats` 或 `retainAssets=true`。
 - 不修改 Capture Task，不新增、改写或省略 Workbench 给出的 task topic。
 - 不自动开始抓取。
 

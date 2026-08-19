@@ -12,6 +12,8 @@ describe("抓取计划投影", () => {
         currentTaskRevision={2}
         isConfirming={false}
         onConfirm={vi.fn()}
+        isExecuting={false}
+        onExecute={vi.fn()}
       />,
     );
 
@@ -22,17 +24,29 @@ describe("抓取计划投影", () => {
     expect(html).toContain("不创建 Source Run，也不开始抓取");
     expect(html).not.toContain(">开始抓取<");
   });
+
+  it("已确认计划显示独立开始动作与 Provider 事实", () => {
+    const html = renderToString(<CrawlPlanCard plan={plan("confirmed")} currentTaskRevision={2}
+      isConfirming={false} onConfirm={vi.fn()} isExecuting={false} onExecute={vi.fn()} />);
+    expect(html).toContain("jd.catalog-product@1.0.0");
+    expect(html).toContain("开始抓取");
+    expect(html).not.toContain("确认此计划");
+  });
 });
 
-function plan() {
+function plan(status: "draft" | "confirmed" = "draft") {
   return crawlPlanSchema.parse({
     id: "plan-1", taskId: "task-1", taskRevision: 2, planningRunId: "run-1",
-    version: 1, status: "draft", contentHash: "0".repeat(64),
+    version: 1, status, contentHash: "0".repeat(64),
     content: {
       taskId: "task-1", taskRevision: 2, summary: "冰箱平台来源计划",
       sources: [{
         key: "jd", name: "京东冰箱分类", publisher: "京东", sourceKind: "retailer",
         role: "覆盖平台商品详情与参数", entryUrls: ["https://www.jd.com/"],
+        provider: { key: "jd.catalog-product", version: "1.0.0", configuration: [{ key: "mode", value: "cdp" }] },
+        accessPolicy: { kind: "paced_http", version: "jd-low-frequency-v1", maxRequestsPerMinute: 2, minimumIntervalMs: 10_000, maximumRunMs: 180_000 },
+        stopPolicy: { requestBudget: 2, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true },
+        rawOutputPolicy: { formats: ["html"], retainAssets: false },
         observationLevel: "search_discovered", accessState: "unknown",
         observedAt: "2026-08-19T00:00:00.000Z",
         targets: [{
@@ -48,5 +62,6 @@ function plan() {
       excludedContent: ["用户账户信息"],
     },
     createdAt: "2026-08-19T00:00:00.000Z",
+    ...(status === "confirmed" ? { confirmedAt: "2026-08-19T00:01:00.000Z" } : {}),
   });
 }

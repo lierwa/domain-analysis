@@ -2,7 +2,7 @@ import {
   applyDefaultJdSourcePolicy,
   captureTaskContentSchema,
   interviewDecisionSchema,
-  type CaptureTaskContent,
+  type CaptureTaskMaterialization,
   type CategoryInterviewRuntimeOutput,
   type CategoryInterviewView,
   type InterviewDecision,
@@ -16,10 +16,6 @@ export interface InterviewDecisionChange {
   withdrawalRationale?: string;
 }
 
-type PreparedInterviewTurnOutput = Omit<CategoryInterviewRuntimeOutput, "taskCandidate"> & {
-  taskCandidate?: CaptureTaskContent;
-};
-
 export function prepareInterviewTurn(
   view: CategoryInterviewView,
   rawOutput: CategoryInterviewRuntimeOutput,
@@ -27,7 +23,7 @@ export function prepareInterviewTurn(
   createId: (kind: string) => string,
   sourceUserMessageId: string,
 ): {
-  output: PreparedInterviewTurnOutput;
+  output: CategoryInterviewRuntimeOutput;
   decisionChange: InterviewDecisionChange | undefined;
   nextPhase: "active" | "task_ready" | "confirmed";
 } {
@@ -35,17 +31,10 @@ export function prepareInterviewTurn(
     view, sourceUserMessageId, rawOutput, timestamp, createId,
   );
   requireResolvedItemsValid(view, rawOutput, decisionChange);
-  const projectedUnresolvedItems = projectOpenUnresolvedItems(view, rawOutput, decisionChange);
-  const { taskCandidate: _runtimeCandidate, ...outputDelta } = rawOutput;
-  const output: PreparedInterviewTurnOutput = rawOutput.taskCandidate
-    ? { ...outputDelta, taskCandidate: normalizeTaskCandidate(
-      view, rawOutput.taskCandidate, decisionChange, projectedUnresolvedItems, timestamp,
-    ) }
-    : outputDelta;
-  requireSingleOwnerQuestion(view, output.proposedDecision, decisionChange);
-  requireTaskCandidateReady(view, output, decisionChange);
-  const nextPhase = output.taskCandidate ? "task_ready" as const : "active" as const;
-  return { output, decisionChange, nextPhase };
+  requireSingleOwnerQuestion(view, rawOutput.proposedDecision, decisionChange);
+  requireDraftReady(view, rawOutput, decisionChange);
+  const nextPhase = rawOutput.draftMarkdown ? "task_ready" as const : "active" as const;
+  return { output: rawOutput, decisionChange, nextPhase };
 }
 
 function buildDecisionChange(
@@ -80,28 +69,25 @@ function buildDecisionChange(
   return { proposed, confirmed };
 }
 
-function normalizeTaskCandidate(
+export function materializeCaptureTaskContent(
   view: CategoryInterviewView,
-  taskCandidate: NonNullable<CategoryInterviewRuntimeOutput["taskCandidate"]>,
-  decisionChange: InterviewDecisionChange | undefined,
-  unresolvedItems: CategoryInterviewRuntimeOutput["unresolvedItems"],
+  materialization: CaptureTaskMaterialization,
   timestamp: string,
 ) {
-  const stamped = captureTaskContentSchema.parse({
-    ...taskCandidate,
-    // WHY：未决事实只由 Workbench 按现状与本轮 delta 投影；模型不能在完整草稿里另报一份并制造分叉。
-    unresolvedItems,
-    sourceCandidates: taskCandidate.sourceCandidates.map((candidate) => ({
+  return applyDefaultJdSourcePolicy(captureTaskContentSchema.parse({
+    ...materialization,
+    unresolvedItems: view.unresolvedItems.filter((item) => item.status === "open").map((item) => ({
+      key: item.key,
+      description: item.description,
+      owner: item.owner,
+    })),
+    decisionIds: view.decisions.filter((item) => item.status === "confirmed").map((item) => item.id),
+    sourceCandidates: materialization.sourceCandidates.map((candidate) => ({
       ...candidate,
-      // WHY：模型不拥有系统时间，草稿提交时统一由 Workbench 盖章，避免任意日期格式让整轮失败。
+      // WHY：只有确认后的正式结构化阶段才创建候选来源，观察时间仍只能由 Workbench 盖章。
       observedAt: timestamp,
     })),
-  });
-  const content = applyDefaultJdSourcePolicy(stamped);
-  if (!decisionChange) return content;
-  const decisionIds = content.decisionIds.filter((id) => id !== decisionChange.proposed.id);
-  if (decisionChange.confirmed) decisionIds.push(decisionChange.confirmed.id);
-  return { ...content, decisionIds: [...new Set(decisionIds)] };
+  }));
 }
 
 function requireResolvedItemsValid(
@@ -131,24 +117,6 @@ function requireResolvedItemsValid(
   }
 }
 
-function projectOpenUnresolvedItems(
-  view: CategoryInterviewView,
-  output: CategoryInterviewRuntimeOutput,
-  decisionChange: InterviewDecisionChange | undefined,
-) {
-  const projected = new Map(view.unresolvedItems
-    .filter((item) => item.status === "open")
-    .map((item) => [item.key, {
-      key: item.key,
-      description: item.description,
-      owner: item.owner,
-    }]));
-  for (const key of output.resolvedUnresolvedKeys) projected.delete(key);
-  if (decisionChange) projected.delete(decisionChange.proposed.key);
-  for (const item of output.unresolvedItems) projected.set(item.key, item);
-  return [...projected.values()];
-}
-
 function requireSingleOwnerQuestion(
   view: CategoryInterviewView,
   proposedDecision: CategoryInterviewRuntimeOutput["proposedDecision"],
@@ -163,12 +131,12 @@ function requireSingleOwnerQuestion(
   if (stillOpen) throw invalidState("当前负责人问题尚未解决，不能同时提出下一问题");
 }
 
-function requireTaskCandidateReady(
+function requireDraftReady(
   view: CategoryInterviewView,
   output: CategoryInterviewRuntimeOutput,
   decisionChange: InterviewDecisionChange | undefined,
 ) {
-  if (!output.taskCandidate) return;
+  if (!output.draftMarkdown) return;
   const resolvedKeys = new Set([
     ...output.resolvedUnresolvedKeys,
     ...(decisionChange ? [decisionChange.proposed.key] : []),
@@ -178,15 +146,7 @@ function requireTaskCandidateReady(
     || view.unresolvedItems.some((item) => item.owner === "user" && item.status === "open"
       && !resolvedKeys.has(item.key))
     || output.unresolvedItems.some((item) => item.owner === "user");
-  if (hasOpenOwnerDecision) throw invalidState("负责人取舍尚未确认，不能生成抓取任务草稿");
-
-  const confirmedIds = new Set(view.decisions
-    .filter((item) => item.status === "confirmed")
-    .map((item) => item.id));
-  if (decisionChange?.confirmed) confirmedIds.add(decisionChange.confirmed.id);
-  if (output.taskCandidate.decisionIds.some((id) => !confirmedIds.has(id))) {
-    throw invalidState("抓取任务草稿引用了尚未确认的负责人取舍");
-  }
+  if (hasOpenOwnerDecision) throw invalidState("负责人取舍尚未确认，不能生成抓取范围草案");
 }
 
 function resolveSelectedOption(options: InterviewDecision["options"], answer: string) {

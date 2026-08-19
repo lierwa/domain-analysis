@@ -14,6 +14,7 @@
     "@crawlee/memory-storage": "3.18.1",
     "@domain-analysis/shared": "0.1.0",
     "cockatiel": "^4.0.0",
-    "p-queue": "^9.3.3"
+    "p-queue": "^9.3.3",
+    "playwright-core": "1.62.1"
   }
 }

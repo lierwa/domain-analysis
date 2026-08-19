@@ -3,10 +3,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import {
+  captureTaskMaterializationSchema,
   categoryInterviewRuntimeOutputSchema,
+  type CaptureTaskMaterialization,
   type CategoryInterviewRuntimeOutput,
 } from "@domain-analysis/shared";
 import type {
+  CategoryInterviewMaterializationInput,
   CategoryInterviewRuntime,
   CategoryInterviewRuntimeEvent,
   CategoryInterviewRuntimeInput,
@@ -42,6 +45,7 @@ export function createCodexCategoryInterviewRuntime(
   });
   return {
     run: (input) => runInterviewTurn(options, client, runtimeCwd, runtimeSkillPath, input),
+    materialize: (input) => materializeCaptureTask(options, client, runtimeSkillPath, input),
     close: () => client.close(),
   };
 }
@@ -53,11 +57,7 @@ async function* runInterviewTurn(
   runtimeSkillPath: string,
   input: CategoryInterviewRuntimeInput,
 ): AsyncIterable<CategoryInterviewRuntimeEvent> {
-  await mkdir(path.dirname(runtimeSkillPath), { recursive: true });
-  await copyFile(
-    path.join(options.repositoryRoot, ".agents", "skills", "interview-product-category", "SKILL.md"),
-    runtimeSkillPath,
-  );
+  await prepareRuntimeSkill(options.repositoryRoot, runtimeSkillPath);
   let result: CodexAppServerResult | undefined;
   let eventSequence = 0;
   let finalizingStarted = false;
@@ -70,9 +70,9 @@ async function* runInterviewTurn(
     if (item.type === "event") {
       eventSequence += 1;
       const activity = projectCodexAppServerActivity(item, eventSequence, {
-        lifecycle: "启动抓取规划 Agent",
-        analysis: "理解用户输入并更新抓取范围",
-        finalizing: "整理并校验本轮结果",
+        lifecycle: "启动商品采访 Agent",
+        analysis: "理解用户输入并更新采访记录",
+        finalizing: "整理并校验采访记录",
       });
       if (activity?.id === "turn-finalizing") {
         if (finalizingStarted && activity.status === "running") continue;
@@ -91,10 +91,43 @@ async function* runInterviewTurn(
   const output = makeQuestionVisible(parseOutput(result.outputText ?? "", result.observedEvents));
   requireInvestigatedTask(output, result.observedItemTypes, input);
   if (!finalizingStarted) {
-    yield { type: "activity", activity: finalizingActivity("整理并校验本轮结果", "running") };
+    yield { type: "activity", activity: finalizingActivity("整理并校验采访记录", "running") };
   }
-  yield { type: "activity", activity: finalizingActivity("整理并校验本轮结果", "completed") };
+  yield { type: "activity", activity: finalizingActivity("整理并校验采访记录", "completed") };
   yield { type: "completed", output };
+}
+
+async function materializeCaptureTask(
+  options: CodexCategoryInterviewRuntimeOptions,
+  client: CodexAppServerClient,
+  runtimeSkillPath: string,
+  input: CategoryInterviewMaterializationInput,
+): Promise<CaptureTaskMaterialization> {
+  await prepareRuntimeSkill(options.repositoryRoot, runtimeSkillPath);
+  let result: CodexAppServerResult | undefined;
+  for await (const item of client.run(materializationPrompt(input))) {
+    if (item.type === "result") result = item.result;
+  }
+  if (!result) throw new Error("Codex 结构化执行流未返回结果");
+  if (result.interrupted) throw new Error("Codex 结构化执行被中断");
+  if (result.observedItemTypes.includes("web_search")) {
+    // WHY：确认后的步骤只能忠实转换已确认范围；继续调查会在用户不知情时改变任务事实。
+    throw new Error("确认后的结构化步骤不得继续搜索或补充新事实");
+  }
+  return parseCodexStructuredOutput({
+    text: result.outputText ?? "",
+    schema: captureTaskMaterializationSchema,
+    label: "Codex 返回的正式抓取任务",
+    observedEvents: result.observedEvents,
+  });
+}
+
+async function prepareRuntimeSkill(repositoryRoot: string, runtimeSkillPath: string) {
+  await mkdir(path.dirname(runtimeSkillPath), { recursive: true });
+  await copyFile(
+    path.join(repositoryRoot, ".agents", "skills", "interview-product-category", "SKILL.md"),
+    runtimeSkillPath,
+  );
 }
 
 function codexOutputSchema() {
@@ -131,13 +164,13 @@ function requireInvestigatedTask(
   observedItemTypes: string[],
   input: CategoryInterviewRuntimeInput,
 ) {
-  if (!requiresCategoryResearch(input, output)) return;
+  if (!requiresInitialCategoryResearch(input)) return;
   if (!observedItemTypes.includes("web_search")) {
     // WHY：URL 字符串本身不能证明 Agent 做过调查；App Server 的 webSearch item 是当前运行 seam 可审计的最小真实行为证据。
-    throw new Error("抓取任务草稿缺少本轮主动来源调查证据（未观察到已完成的 web_search item）");
+    throw new Error("采访范围草案缺少本轮主动来源调查证据（未观察到已完成的 web_search item）");
   }
-  if (!output.proposedDecision && !output.taskCandidate) {
-    throw new Error("新品类首轮调查后既未提出真实负责人问题，也未形成抓取任务草稿");
+  if (!output.proposedDecision && !output.draftMarkdown) {
+    throw new Error("新品类首轮调查后既未提出真实负责人问题，也未形成采访范围草案");
   }
 }
 
@@ -151,12 +184,12 @@ function interviewPrompt(input: CategoryInterviewRuntimeInput) {
     initialResearchInstruction,
     "执行期间必须通过 commentary agent message 用正常中文持续汇报真实进展；commentary 会直接流式展示给用户，绝对不能输出 JSON。",
     "只有 final_answer 是机器协议：最终只返回一份符合下方 JSON Schema 的 JSON 对象，不要使用 Markdown 代码块或添加解释。",
-    "每轮 final_answer 表达的是你对本轮原始输入的理解和由此产生的增量，不要重报 Workbench 已持有的全部状态。普通解释写入 assistantText；用户提供或纠正的相关事实要在 assistantText 中明确记录。输入改变任务范围时形成新的完整 taskCandidate；纯解释可以只返回 assistantText。",
+    "每轮 final_answer 表达的是你对本轮原始输入的理解和由此产生的增量，不要重报 Workbench 已持有的全部状态。普通解释写入 assistantText；用户提供或纠正的相关事实要在 assistantText 中明确记录。纯解释可以只返回 assistantText。",
     "若当前存在 proposed Decision，先判断用户原文如何处理它。只有语义明确回答时才返回 decisionResolution：decisionId 必须引用现有 proposal；序号、‘按推荐’等表达规范化成对应 option label；自定义答案提炼成准确选择；rationale 说明如何理解整条原文。用户若纠正或否定问题前提，且该问题确实不应由负责人决定，则改用 decisionWithdrawal 引用并撤回现有 proposal，rationale 记录原因；两者不能同时返回。用户同时补充的范围、排除项、来源或事实不能丢弃。若语义不明确或只是在追问原因，则两者都省略，先正常回应或只追问一个必要澄清。",
-    "decisionResolution 与 decisionWithdrawal 都不是单独回合。处理当前问题后必须在同一个 final_answer 继续推进：仍有下一个真实负责人取舍就提出一个新的 proposedDecision；没有则完成必要调查并形成 taskCandidate。不要只回复‘已记录’后等待用户再说‘继续’。",
+    "decisionResolution 与 decisionWithdrawal 都不是单独回合。处理当前问题后必须在同一个 final_answer 继续推进：仍有下一个真实负责人取舍就提出一个新的 proposedDecision；没有则完成必要调查并形成 draftMarkdown。不要只回复‘已记录’后等待用户再说‘继续’。",
     "需要负责人决定时，assistantText 只写背景，不得抄写问题、选项或编号；只用 proposedDecision 表达唯一问题、2–3 个建议、推荐选择与理由。owner=user 未决项必须与这个 proposal 使用同一个 key，resolvedUnresolvedKeys 只能独立解决系统负责的未决事实。界面会把问题确定性编号后合成为普通对话，用户可以直接输入建议之外的答案。",
-    "来源平台、网站与渠道是系统调查事实，不能提出给负责人选择；京东适用时按 Skill 默认覆盖，淘宝等平台只能按当前真实能力记录为后续候选。不得把默认采集内容改写成采集深度问题。若本轮把当前品类切换为另一品类，必须先调用 web search 完成新调查，再提出该品类的负责人问题或形成草稿。只要本轮仍有新的 proposedDecision 或 user unresolved item，就必须省略 taskCandidate；本轮 decisionResolution 已明确解决最后一个旧问题时可以同时形成草稿。",
-    "taskCandidate 不重复填写未决项；只通过本轮顶层未决事实增量打开、更新或解决未决事实，Workbench 会把唯一的当前未决集合投影进草稿。",
+    "来源平台、网站与渠道是系统调查事实，不能提出给负责人选择；京东适用时按 Skill 默认覆盖，淘宝等平台只能按当前真实能力记录为后续候选。不得把默认采集内容改写成采集深度问题。若本轮把当前品类切换为另一品类，必须先调用 web search 完成新调查，再提出该品类的负责人问题或形成草案。只要本轮仍有新的 proposedDecision 或 user unresolved item，就必须省略 draftMarkdown；本轮 decisionResolution 已明确解决最后一个旧问题时可以同时形成草案。",
+    "draftMarkdown 是给人审阅的采访范围草案，不是 CaptureTask 数据结构。它只能使用普通 Markdown，总结用户原始要求、已确认范围、纳入/排除项、采访回答和调查事实；来源可以用自然语言和链接记录。严禁在这里输出 JSON、taskCandidate、sourceCandidates、observedAt、decisionIds 或正式 Crawl Plan。",
     `Final answer JSON Schema: ${JSON.stringify(codexOutputSchema())}`,
     `Workbench state: ${JSON.stringify(input.session)}`,
     "Current turn 始终是未经预先解释的用户原文，可能同时包含回答、事实补充、纠正、否定或问题；必须逐项承接后再决定本轮状态增量。",
@@ -174,29 +207,6 @@ export function requiresInitialCategoryResearch(input: CategoryInterviewRuntimeI
     && !hasPersistedSearchEvidence;
 }
 
-export function requiresCategoryResearch(
-  input: CategoryInterviewRuntimeInput,
-  output: CategoryInterviewRuntimeOutput,
-) {
-  if (requiresInitialCategoryResearch(input)) return true;
-  const target = output.taskCandidate?.category;
-  if (!target) return false;
-  const current = [...input.session.taskDrafts].reverse().find((item) => item.status === "draft"
-    || item.status === "confirmed");
-  return Boolean(current && !sameCategory(current.content.category, target));
-}
-
-function sameCategory(
-  left: { code: string; label: string },
-  right: { code: string; label: string },
-) {
-  return left.code === right.code && normalizeCategoryLabel(left.label) === normalizeCategoryLabel(right.label);
-}
-
-function normalizeCategoryLabel(value: string) {
-  return value.toLocaleLowerCase("zh-CN").replace(/[\s_，。！？、；：,.!?;:-]/g, "");
-}
-
 function parseOutput(text: string, observedEvents: string[]): CategoryInterviewRuntimeOutput {
   const output = parseCodexStructuredOutput({
     text,
@@ -205,4 +215,18 @@ function parseOutput(text: string, observedEvents: string[]): CategoryInterviewR
     observedEvents,
   });
   return output;
+}
+
+function materializationPrompt(input: CategoryInterviewMaterializationInput) {
+  return [
+    "把用户已经确认的 Markdown 采访范围草案忠实转换成正式 Capture Task。",
+    "这是确认后的纯结构化步骤：不得调用 web search、不得提出问题、不得补充草案中不存在的事实、不得改变范围。",
+    "sourceCandidates 只能收录草案中已经明确出现且具有有效 http/https URL 的来源；没有精确 URL 就省略该来源。entryUrl 必须是完整有效 URL。",
+    "originalRequest 使用最初用户要求；category.code 使用稳定的小写英文 slug。京东是否适用只按草案事实表达，Workbench 会统一应用默认京东范围策略。",
+    "最终只返回符合下方 JSON Schema 的 JSON 对象，不要使用 Markdown 代码块或添加解释。",
+    `Final answer JSON Schema: ${JSON.stringify(zodSchemaToCodexJsonSchema(captureTaskMaterializationSchema))}`,
+    `Initial request: ${JSON.stringify(input.session.session.initialRequest)}`,
+    `Confirmed decisions: ${JSON.stringify(input.session.decisions.filter((item) => item.status === "confirmed"))}`,
+    `Confirmed Markdown draft:\n${input.draftMarkdown}`,
+  ].join("\n\n");
 }

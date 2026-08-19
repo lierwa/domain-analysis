@@ -91,7 +91,7 @@ describeWithPostgres("任务记录生命周期", () => {
       version: 1,
       status: "confirmed",
       contentHash: "0".repeat(64),
-      content: task.content,
+      briefMarkdown: "# 冰箱采访范围\n\n覆盖中国大陆家用冰箱。",
       taskId: task.id,
       createdAt: task.createdAt,
       confirmedAt: task.confirmedAt,
@@ -125,6 +125,10 @@ async function openDb() {
 
 class UnusedRuntime implements CategoryInterviewRuntime {
   async *run(): ReturnType<CategoryInterviewRuntime["run"]> {
+    throw new Error("该测试不应启动 Codex runtime");
+  }
+
+  async materialize(): ReturnType<CategoryInterviewRuntime["materialize"]> {
     throw new Error("该测试不应启动 Codex runtime");
   }
 }

@@ -6,12 +6,18 @@ import {
   sourceDatasetRunViewSchema,
   sourceObjectSchema,
   sourceSnapshotSchema,
+  sourceSnapshotCommitSchema,
   type SourceCollectionRun,
   type SourceDatasetRunView,
+  type SourceSnapshotCommit,
+  type SourceAccessPolicy,
 } from "@domain-analysis/shared";
 import type { WorkbenchDb } from "@domain-analysis/db";
 import { sourceAssets, sourceCollectionRuns, sourceObjects, sourceSnapshots } from "@domain-analysis/db";
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { asc, desc, eq, inArray, sql } from "drizzle-orm";
+
+import { contentHash } from "./contentHash";
 
 import { serializeSourceDataset } from "./sourceDatasetExport";
 
@@ -19,6 +25,9 @@ export interface SourceDatasetModule {
   listTask(taskId: string): Promise<SourceCollectionRun[]>;
   getRun(runId: string): Promise<SourceDatasetRunView | null>;
   exportRun(input: { runId: string; format: "jsonl" | "csv" }): AsyncIterable<string>;
+  startRun(input: { taskId: string; planId: string; sourceKey: string; providerKey: string; accessPolicy: SourceAccessPolicy }): Promise<SourceCollectionRun>;
+  commitSnapshot(input: SourceSnapshotCommit): Promise<SourceDatasetRunView>;
+  finishRun(input: { runId: string; status: "completed" | "failed" | "stopped"; terminationReason?: string }): Promise<SourceCollectionRun>;
 }
 
 export function createSourceDatasetModule(db: WorkbenchDb): SourceDatasetModule {
@@ -28,7 +37,52 @@ export function createSourceDatasetModule(db: WorkbenchDb): SourceDatasetModule 
       .map(normalizeRun),
     getRun: (runId) => loadRun(db, runId),
     exportRun: (input) => exportRun(db, input),
+    startRun: async (input) => {
+      const row = { id: `source-run-${randomUUID()}`, taskId: input.taskId,
+        sourceCollectionPlanId: input.planId, sourceCollectionPlanSourceKey: input.sourceKey,
+        providerKey: input.providerKey, accessPolicy: input.accessPolicy, status: "running" as const,
+        startedAt: new Date().toISOString() };
+      await db.insert(sourceCollectionRuns).values(row);
+      return normalizeRun((await db.query.sourceCollectionRuns.findFirst({ where: eq(sourceCollectionRuns.id, row.id) }))!);
+    },
+    commitSnapshot: (input) => commitSnapshot(db, input),
+    finishRun: async (input) => {
+      await db.update(sourceCollectionRuns).set({ status: input.status, finishedAt: new Date().toISOString(),
+        terminationReason: input.terminationReason }).where(eq(sourceCollectionRuns.id, input.runId));
+      const row = await db.query.sourceCollectionRuns.findFirst({ where: eq(sourceCollectionRuns.id, input.runId) });
+      if (!row) throw new Error(`来源运行不存在：${input.runId}`);
+      return normalizeRun(row);
+    },
   };
+}
+
+async function commitSnapshot(db: WorkbenchDb, raw: SourceSnapshotCommit) {
+  const input = sourceSnapshotCommitSchema.parse(raw);
+  await db.transaction(async (transaction) => {
+    const run = await transaction.query.sourceCollectionRuns.findFirst({ where: eq(sourceCollectionRuns.id, input.runId) });
+    if (!run || run.status !== "running") throw new Error("来源运行不存在或已经结束");
+    const objectId = `source-object-${randomUUID()}`;
+    await transaction.insert(sourceObjects).values({ id: objectId, taskId: run.taskId, ...input.object }).onConflictDoNothing();
+    const object = await transaction.query.sourceObjects.findFirst({ where: sql`${sourceObjects.taskId}=${run.taskId} and ${sourceObjects.sourceIdentity}=${input.object.sourceIdentity} and ${sourceObjects.kind}=${input.object.kind} and ${sourceObjects.externalKey}=${input.object.externalKey}` });
+    if (!object) throw new Error("来源对象写入失败");
+    const hash = contentHash({ observation: input.observation, payload: input.payload });
+    const inserted = await transaction.insert(sourceSnapshots).values({ id: `source-snapshot-${randomUUID()}`,
+      runId: run.id, objectId: object.id, idempotencyKey: input.idempotencyKey,
+      observation: input.observation, payload: input.payload, contentHash: hash })
+      .onConflictDoNothing().returning({ id: sourceSnapshots.id });
+    if (inserted.length === 0) {
+      const existing = await transaction.query.sourceSnapshots.findFirst({ where: sql`${sourceSnapshots.runId}=${run.id} and ${sourceSnapshots.idempotencyKey}=${input.idempotencyKey}` });
+      if (!existing || existing.contentHash !== hash) throw new Error("同一幂等键对应了不同来源内容");
+      return;
+    }
+    const accessible = input.observation.state === "accessible";
+    await transaction.update(sourceCollectionRuns).set({
+      snapshotCount: sql`${sourceCollectionRuns.snapshotCount} + 1`,
+      accessibleCount: accessible ? sql`${sourceCollectionRuns.accessibleCount} + 1` : sourceCollectionRuns.accessibleCount,
+      failedCount: accessible ? sourceCollectionRuns.failedCount : sql`${sourceCollectionRuns.failedCount} + 1`,
+    }).where(eq(sourceCollectionRuns.id, run.id));
+  });
+  return (await loadRun(db, input.runId))!;
 }
 
 async function loadRun(db: WorkbenchDb, runId: string): Promise<SourceDatasetRunView | null> {

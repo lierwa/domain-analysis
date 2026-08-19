@@ -7,3 +7,4 @@ export * from "./dataCollectionWorkbench";
 export * from "./sourceDatasetError";
 export * from "./sourceDatasetModule";
 export * from "./sourceDatasetExport";
+export * from "./sourceExecutionModule";

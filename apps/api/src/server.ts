@@ -5,6 +5,7 @@ import {
   CaptureTaskError,
   CategoryInterviewError,
   CrawlPlanningError,
+  SourceExecutionError,
   SourceDatasetError,
   type DataCollectionWorkbench,
 } from "@domain-analysis/workbench";
@@ -15,6 +16,7 @@ import { registerCategoryInterviewRoutes } from "./routes/categoryInterviewRoute
 import { registerCrawlPlanningRoutes } from "./routes/crawlPlanningRoutes";
 import { registerHealthRoutes } from "./routes/health";
 import { registerSourceDatasetRoutes } from "./routes/sourceDatasetRoutes";
+import { registerSourceExecutionRoutes } from "./routes/sourceExecutionRoutes";
 
 export interface BuildServerOptions extends FastifyServerOptions {
   workbench?: DataCollectionWorkbench;
@@ -28,6 +30,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
     reply.status(statusCode).send({
       error: error instanceof CaptureTaskError || error instanceof CategoryInterviewError
         || error instanceof CrawlPlanningError
+        || error instanceof SourceExecutionError
         || error instanceof SourceDatasetError
         ? error.code
         : statusCode >= 500 ? "internal_server_error" : "bad_request",
@@ -40,7 +43,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
     app.addHook("onClose", () => options.workbench!.close());
     await registerCaptureTaskRoutes(app, options.workbench.captureTasks);
     await registerSourceDatasetRoutes(app, options.workbench.sourceDatasets);
-    if (options.workbench.categoryInterviews || options.workbench.crawlPlanning) {
+    if (options.workbench.categoryInterviews || options.workbench.crawlPlanning || options.workbench.sourceExecution) {
       await app.register(FastifySSEPlugin, { retryDelay: false });
     }
     if (options.workbench.categoryInterviews) {
@@ -48,6 +51,9 @@ export async function buildServer(options: BuildServerOptions = {}) {
     }
     if (options.workbench.crawlPlanning) {
       await registerCrawlPlanningRoutes(app, options.workbench.crawlPlanning);
+    }
+    if (options.workbench.sourceExecution) {
+      await registerSourceExecutionRoutes(app, options.workbench.sourceExecution);
     }
   }
   return app;
@@ -62,6 +68,11 @@ function resolveStatusCode(error: Error & { statusCode?: number }) {
     return 422;
   }
   if (error instanceof CrawlPlanningError) {
+    if (error.code === "not_found") return 404;
+    if (error.code === "revision_conflict") return 409;
+    return 422;
+  }
+  if (error instanceof SourceExecutionError) {
     if (error.code === "not_found") return 404;
     if (error.code === "revision_conflict") return 409;
     return 422;

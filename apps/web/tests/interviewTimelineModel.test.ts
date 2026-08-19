@@ -147,7 +147,7 @@ describe("采访单回合时间线", () => {
   });
 
   it("持久化助手消息已显示同一错误时不再渲染第二份全局错误", () => {
-    const error = "Codex 返回结果不符合协议：taskCandidate.jd.scope";
+    const error = "Codex 返回结果不符合协议：draftMarkdown";
     const failed = {
       ...assistantMessage("assistant-failed", 1, "正在整理结果。"),
       deliveryStatus: "failed" as const,

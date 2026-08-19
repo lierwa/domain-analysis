@@ -39,7 +39,11 @@ export async function loadCategoryInterviewView(
       .orderBy(asc(captureTaskDraftVersions.version)),
   ]);
   const taskDrafts = rawDrafts.flatMap((row) => {
-    const parsed = captureTaskDraftVersionSchema.safeParse(omitNulls(normalizeTimestamps(row)));
+    const { briefMarkdown, ...draftRow } = row;
+    const parsed = captureTaskDraftVersionSchema.safeParse({
+      ...omitNulls(normalizeTimestamps(draftRow)),
+      markdown: briefMarkdown,
+    });
     return parsed.success ? [parsed.data] : [];
   });
   const normalizedDecisions = decisions.map(normalizeDecision);
@@ -76,11 +80,9 @@ function normalizeSession(
   unresolvedItems: CategoryInterviewView["unresolvedItems"] = [],
 ) {
   const rawPhase = row.phase as string;
-  const confirmedIds = new Set(decisions.filter((item) => item.status === "confirmed").map((item) => item.id));
   const hasOpenOwnerDecision = decisions.some((item) => item.status === "proposed")
     || unresolvedItems.some((item) => item.owner === "user" && item.status === "open");
-  const hasConfirmableDraft = !hasOpenOwnerDecision && drafts.some((item) => item.status === "draft"
-    && item.content.decisionIds.every((id) => confirmedIds.has(id)));
+  const hasConfirmableDraft = !hasOpenOwnerDecision && drafts.some((item) => item.status === "draft");
   // WHY：历史 task_ready 只能在草稿仍可确认时保留；真实 active/running/failed 状态不能被旧草稿反向升级。
   const phase = rawPhase === "confirmed" ? "confirmed"
     : rawPhase === "task_ready" && hasConfirmableDraft ? "task_ready" : "active";
@@ -89,7 +91,7 @@ function normalizeSession(
 
 function normalizeDecision(row: typeof categoryInterviewDecisions.$inferSelect) {
   const options = row.options && row.options.length >= 2 ? row.options : [
-    { label: row.selection, description: row.rationale, recommended: true },
+    { label: row.selection ?? "历史记录", description: row.rationale, recommended: true },
     { label: "重新讨论", description: "历史决定未保存完整选项，需要时重新讨论。", recommended: false },
   ];
   return interviewDecisionSchema.parse(omitNulls(normalizeTimestamps({ ...row, options })));

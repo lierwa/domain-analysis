@@ -11,6 +11,8 @@ import {
   migrateWorkbenchDatabase,
   sourceCollectionPlans,
   sourceCollectionRuns,
+  sourceSnapshots,
+  sourceObjects,
   type WorkbenchDb,
 } from "@domain-analysis/db";
 import { eq } from "drizzle-orm";
@@ -20,6 +22,8 @@ import {
   buildConfirmedCaptureTask,
   createCaptureTaskModule,
   createCrawlPlanningModule,
+  createSourceDatasetModule,
+  createSourceExecutionModule,
   type CrawlPlanningModule,
   type CrawlPlanningRuntime,
   type CrawlPlanningRuntimeEvent,
@@ -34,7 +38,10 @@ describeWithPostgres("抓取计划版本与确认", () => {
 
   afterEach(async () => {
     if (db && taskId) {
+      const runs = await db.select({ id: sourceCollectionRuns.id }).from(sourceCollectionRuns).where(eq(sourceCollectionRuns.taskId, taskId));
+      for (const run of runs) await db.delete(sourceSnapshots).where(eq(sourceSnapshots.runId, run.id));
       await db.delete(sourceCollectionRuns).where(eq(sourceCollectionRuns.taskId, taskId));
+      await db.delete(sourceObjects).where(eq(sourceObjects.taskId, taskId));
       await db.delete(sourceCollectionPlans).where(eq(sourceCollectionPlans.taskId, taskId));
       await db.delete(crawlPlanningRuns).where(eq(crawlPlanningRuns.taskId, taskId));
       await db.delete(captureTasks).where(eq(captureTasks.id, taskId));
@@ -126,6 +133,30 @@ describeWithPostgres("抓取计划版本与确认", () => {
       taskId, planId: view.plans[0]!.id, expectedTaskRevision: 1,
     })).rejects.toMatchObject({ code: "revision_conflict" });
   });
+
+  it("显式开始会重读已确认计划并写入不可变 Source Snapshot", async () => {
+    const opened = await openModules(); db = opened.db; taskId = opened.task.id;
+    opened.runtime.push(validOutput(20));
+    await collect(opened.planning.run({ taskId, expectedTaskRevision: 1 }));
+    let view = (await opened.planning.get(taskId))!;
+    view = await opened.planning.confirm({ taskId, planId: view.plans[0]!.id, expectedTaskRevision: 1 });
+    const provider = {
+      key: "jd.catalog-product", version: "1.0.0", validate() {}, async preflight() {},
+      async *collect(source: typeof view.plans[0]["content"]["sources"][number]) {
+        const text = `real-seam:${source.key}`;
+        yield { idempotencyKey: `${source.key}-1`, object: { sourceIdentity: source.key, kind: "catalog", externalKey: "entry" },
+          observation: { requestedUrl: source.entryUrls[0]!, observedAt: "2026-08-20T00:00:00.000Z", state: "accessible" as const, responseHeaders: {} },
+          payload: { kind: "inline_text" as const, mediaType: "text/plain", text, bytes: text.length, contentHash: "0".repeat(64) } };
+      },
+    };
+    const providers = new Map([["jd.catalog-product", provider], ["missing.provider", { ...provider, key: "missing.provider" }]]);
+    const execution = createSourceExecutionModule(opened.planning, createSourceDatasetModule(db), providers);
+    const events = [];
+    for await (const event of execution.start({ taskId, planId: view.plans[0]!.id, expectedTaskRevision: 1, expectedPlanVersion: 1 })) events.push(event);
+    expect(events.filter((event) => event.type === "run.completed")).toHaveLength(2);
+    const runs = await db.select().from(sourceCollectionRuns).where(eq(sourceCollectionRuns.taskId, taskId));
+    expect(runs.map((run) => [run.status, run.snapshotCount])).toEqual([["completed", 1], ["completed", 1]]);
+  });
 });
 
 async function openModules() {
@@ -195,8 +226,12 @@ function source(key: string, name: string, entryUrl: string, targets: ReturnType
   return {
     key, name, publisher: name, sourceKind: key === "jd" ? "retailer" as const : "regulator" as const,
     role: "提供任务所需原始数据", entryUrls: [entryUrl], observationLevel: "search_discovered" as const,
+    provider: { key: key === "jd" ? "jd.catalog-product" : "missing.provider", version: "1.0.0", configuration: [{ key: "mode", value: "cdp" }] },
+    accessPolicy: { kind: "paced_http" as const, version: "jd-low-frequency-v1", maxRequestsPerMinute: 2, minimumIntervalMs: 10_000, maximumRunMs: 180_000 },
+    stopPolicy: { requestBudget: 2, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true as const },
+    rawOutputPolicy: { formats: ["html" as const], retainAssets: false },
     accessState: "unknown" as const, observedAt: "2026-08-19T00:00:00.000Z", targets,
-    executionBlockers: ["Provider 与访问频控尚未验证"],
+    executionBlockers: [],
   };
 }
 

@@ -1,9 +1,7 @@
 import { z } from "zod";
 
 import {
-  captureTaskContentSchema,
   captureTaskDraftVersionSchema,
-  sourceCandidateSchema,
 } from "./capture-task";
 
 const idSchema = z.string().min(1).max(240);
@@ -62,7 +60,7 @@ export const interviewDecisionSchema = z.object({
   key: z.string().regex(/^[a-z][a-z0-9_.-]+$/),
   question: z.string().min(1).max(1000),
   options: z.array(decisionOptionSchema).min(2).max(3),
-  selection: z.string().min(1).max(2000),
+  selection: z.string().min(1).max(2000).optional(),
   rationale: z.string().min(1).max(4000),
   status: z.enum(["proposed", "confirmed", "superseded"]),
   sourceMessageId: idSchema,
@@ -102,7 +100,6 @@ const proposedDecisionSchema = z.object({
   key: z.string().regex(/^[a-z][a-z0-9_.-]+$/),
   question: z.string().min(1).max(1000),
   options: z.array(decisionOptionSchema).min(2).max(3),
-  selection: z.string().min(1).max(2000),
   rationale: z.string().min(1).max(4000),
 }).strict().superRefine((decision, context) => {
   const recommended = decision.options.filter((option) => option.recommended);
@@ -112,10 +109,6 @@ const proposedDecisionSchema = z.object({
   const labels = decision.options.map((option) => option.label.trim());
   if (new Set(labels).size !== labels.length) {
     context.addIssue({ code: "custom", path: ["options"], message: "问题选项标签不能重复" });
-  }
-  const recommendedOption = recommended[0];
-  if (recommendedOption && decision.selection.trim() !== recommendedOption.label.trim()) {
-    context.addIssue({ code: "custom", path: ["selection"], message: "推荐选择必须等于唯一推荐选项的标签" });
   }
 });
 
@@ -130,21 +123,6 @@ const decisionWithdrawalSchema = z.object({
   rationale: z.string().min(1).max(4000),
 }).strict();
 
-const runtimeSourceCandidateSchema = sourceCandidateSchema.omit({ observedAt: true }).extend({
-  // WHY：观察时间属于 Workbench 提交事实；兼容模型返回的日期字符串，但不把它当成权威时间。
-  observedAt: z.string().max(100).optional(),
-}).transform(({ observedAt: _ignored, ...candidate }) => ({
-  ...candidate,
-  observedAt: "1970-01-01T00:00:00.000Z",
-}));
-
-const runtimeTaskCandidateSchema = captureTaskContentSchema.omit({
-  sourceCandidates: true,
-  unresolvedItems: true,
-}).extend({
-  sourceCandidates: z.array(runtimeSourceCandidateSchema),
-});
-
 export const categoryInterviewRuntimeOutputSchema = z.object({
   assistantText: z.string().min(1).max(40_000),
   decisionResolution: decisionResolutionSchema.nullable().optional().transform((value) => value ?? undefined),
@@ -156,7 +134,9 @@ export const categoryInterviewRuntimeOutputSchema = z.object({
     owner: z.enum(["system", "user"]),
   }).strict()).nullable().default([]).transform((value) => value ?? []),
   resolvedUnresolvedKeys: z.array(z.string().min(1)).nullable().default([]).transform((value) => value ?? []),
-  taskCandidate: runtimeTaskCandidateSchema.nullable().optional().transform((value) => value ?? undefined),
+  // WHY：采访只交付可读范围草案；正式业务结构必须晚于用户确认，避免来源字段反向阻断自然语言回答。
+  draftMarkdown: z.string().min(1).max(100_000).nullable().optional()
+    .transform((value) => value ?? undefined),
 }).strict().superRefine((output, context) => {
   if (output.decisionResolution && output.decisionWithdrawal) {
     context.addIssue({
@@ -190,10 +170,10 @@ export const categoryInterviewRuntimeOutputSchema = z.object({
   }
   const hasPendingOwnerDecision = Boolean(output.proposedDecision)
     || output.unresolvedItems.some((item) => item.owner === "user");
-  if (output.taskCandidate && hasPendingOwnerDecision) {
+  if (output.draftMarkdown && hasPendingOwnerDecision) {
     context.addIssue({
       code: "custom",
-      path: ["taskCandidate"],
+      path: ["draftMarkdown"],
       message: "存在待负责人确认的问题时不能生成抓取任务草稿",
     });
   }
@@ -202,7 +182,7 @@ export const categoryInterviewRuntimeOutputSchema = z.object({
 function describesSourceOwnerChoice(decision: z.infer<typeof proposedDecisionSchema>) {
   return isSourceOwnerChoice(
     decision.key,
-    [decision.question, decision.selection, ...decision.options.map((option) => option.label)].join(" "),
+    [decision.question, ...decision.options.map((option) => option.label)].join(" "),
   );
 }
 

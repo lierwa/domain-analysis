@@ -22,7 +22,8 @@ await killPortProcess(activePorts, { signal: "SIGTERM", silent: true });
 await waitOn({
   resources: activePorts.map((port) => `tcp:127.0.0.1:${port}`),
   reverse: true,
-  timeout: 5_000,
+  // Windows 上 Node 子进程收到 SIGTERM 后，端口释放可能晚于进程管理库返回；给退出门留出确定的收敛时间。
+  timeout: 15_000,
   interval: 100,
   log: false,
 });
