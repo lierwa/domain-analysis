@@ -5,12 +5,18 @@ import path from "node:path";
 import type { CategoryInterviewView } from "@domain-analysis/shared";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { CodexAppServerError, streamCodexAppServer } from "../src/codexAppServerClient";
+import {
+  CodexAppServerError,
+  createCodexAppServerClient,
+  streamCodexAppServer,
+} from "../src/codexAppServerClient";
 import { createCodexCategoryInterviewRuntime } from "../src/codexCategoryInterviewRuntime";
 
 const temporaryRoots: string[] = [];
+const runtimeClosers: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  await Promise.all(runtimeClosers.splice(0).map((close) => close()));
   await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -60,6 +66,20 @@ describe("Codex 采访运行时事件边界", () => {
     expect(remaining.at(-1)).toMatchObject({ type: "result", result: { interrupted: false } });
   });
 
+  it("started/failed 搜索仍可见，但不计为完成证据", async () => {
+    const items = await collect(streamCodexAppServer(
+      clientOptions(await fakeCodexExecutable(successSource(true))), "抓冰箱",
+    ));
+
+    expect(items).toContainEqual(expect.objectContaining({
+      type: "event", eventType: "item.completed", itemType: "web_search", itemStatus: "failed",
+    }));
+    const result = items.at(-1);
+    expect(result?.type === "result" ? result.result.observedItemTypes : []).not.toContain("web_search");
+  });
+});
+
+describe("Codex 采访结果投影与连接复用", () => {
   it("把真实 commentary 和网页搜索映射给 Workbench，但不暴露内部本地命令", async () => {
     const runtime = createCodexCategoryInterviewRuntime({
       repositoryRoot: process.cwd(),
@@ -67,6 +87,7 @@ describe("Codex 采访运行时事件边界", () => {
       reasoningEffort: "medium",
       executable: await fakeCodexExecutable(successSource()),
     });
+    runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
 
     const events = await collect(runtime.run({
       session: emptyInterviewView(),
@@ -82,7 +103,7 @@ describe("Codex 采访运行时事件边界", () => {
         id: "turn-lifecycle", kind: "agent", label: "启动抓取规划 Agent", status: "running",
       } },
       { type: "activity", activity: {
-        id: "turn-lifecycle", kind: "analysis", label: "分析需求与当前抓取范围", status: "running",
+        id: "turn-lifecycle", kind: "analysis", label: "理解用户输入并更新抓取范围", status: "running",
       } },
       { type: "activity", activity: {
         id: "search-1", kind: "web_search", label: "搜索网页",
@@ -110,14 +131,42 @@ describe("Codex 采访运行时事件边界", () => {
     ]);
     expect(JSON.stringify(events)).not.toContain("C:/private/file");
     expect(JSON.stringify(events)).not.toContain("Cannot find path");
-    expect(events.at(-1)).toMatchObject({
+    const completed = events.at(-1);
+    expect(completed).toMatchObject({
       type: "completed",
       output: {
-        assistantText: expect.stringContaining("1. 完整京东范围（推荐）：包含评价样本和评分指标。"),
+        assistantText: "已完成第一轮调查并生成抓取任务草稿。",
+        taskCandidate: {
+          jd: {
+            applicable: true,
+            disposition: "pending",
+          },
+        },
       },
     });
+    if (completed?.type !== "completed") throw new Error("采访运行时没有返回 completed");
+    expect(completed.output.proposedDecision).toBeUndefined();
   });
 
+  it("同一 client 连续两轮只初始化一次连接，但每轮新建 ephemeral thread", async () => {
+    const client = createCodexAppServerClient(clientOptions(
+      await fakeCodexExecutable(reusableConnectionSource()),
+    ));
+    runtimeClosers.push(() => client.close());
+
+    const first = await collect(client.run("第一轮"));
+    const second = await collect(client.run("第二轮"));
+    const firstResult = first.find((item) => item.type === "result");
+    const secondResult = second.find((item) => item.type === "result");
+
+    expect(first).toContainEqual({ type: "event", eventType: "thread.started" });
+    expect(second).toContainEqual({ type: "event", eventType: "thread.started" });
+    expect(firstResult?.type === "result" ? firstResult.result.outputText : undefined)
+      .toBe(secondResult?.type === "result" ? secondResult.result.outputText : undefined);
+  });
+});
+
+describe("Codex 采访中断与错误边界", () => {
   it("停止时终止当前 app-server 进程并返回 interrupted", async () => {
     const controller = new AbortController();
     const iterator = streamCodexAppServer(
@@ -135,7 +184,7 @@ describe("Codex 采访运行时事件边界", () => {
       type: "result",
       result: {
         interrupted: true,
-        observedEvents: ["thread.started"],
+        observedEvents: ["thread.started", "turn.started", "turn.completed"],
         observedItemTypes: [],
       },
     });
@@ -158,6 +207,7 @@ describe("Codex 采访运行时事件边界", () => {
       expect((error as Error).message).not.toContain("\u001b");
     }
   });
+
 });
 
 function clientOptions(executable: string) {
@@ -179,21 +229,39 @@ async function fakeCodexExecutable(source: string) {
   return executable;
 }
 
-function successSource() {
+function successSource(failedSearch = false) {
   const output = JSON.stringify({
-    assistantText: "已完成第一轮调查。",
-    question: {
-      key: "jd.scope",
-      text: "本轮京东抓取到什么范围？",
-      options: [
-        { label: "完整京东范围", description: "包含评价样本和评分指标。", recommended: true },
-        { label: "仅商品资料", description: "不采集评论。", recommended: false },
-      ],
-      rationale: "需要负责人决定。",
+    assistantText: "已完成第一轮调查并生成抓取任务草稿。",
+    taskCandidate: {
+      originalRequest: "抓冰箱",
+      category: { code: "refrigerator", label: "冰箱" },
+      marketScope: "中国大陆普通消费者可以买到的家用冰箱",
+      generalTopics: ["品牌、型号、商品详情和原始参数"],
+      categoryTopics: ["能效、容量、制冷方式和核心部件"],
+      jd: { applicable: true, disposition: "pending", scope: [], rationale: "等待平台策略补全。" },
+      sourceCandidates: [{
+        id: "source-jd-refrigerator",
+        name: "京东冰箱频道",
+        publisher: "京东",
+        entryUrl: "https://www.jd.com/",
+        sourceKind: "retailer",
+        expectedContents: ["冰箱类目、商品参数和评价指标"],
+        observedFormats: ["HTML"],
+        accessState: "public",
+        observedAt: "2026-08-19T10:00:00+08:00",
+      }],
+      excludedContent: [],
+      decisionIds: [],
     },
     unresolvedItems: [],
     resolvedUnresolvedKeys: [],
   });
+  const rawCompletedSearch = failedSearch ? "" : `emit({ method: "rawResponseItem/completed", params: {
+    threadId: "thread-1", turnId: "turn-1", item: {
+      type: "web_search_call", id: "raw-search-1", status: "completed",
+      action: { type: "open_page", url: "https://www.midea.cn/" }
+    }
+  } });`;
   return fakeServerPrelude() + `
 let productInterviewThread = false;
 let productInterviewCwd = "";
@@ -254,6 +322,7 @@ async function handle(message) {
   } } });
   emit({ method: "item/completed", params: { item: {
     id: "search-1", type: "webSearch", query: "冰箱 中国市场 主流品牌 官方网站",
+    status: "${failedSearch ? "failed" : "completed"}",
     action: { type: "openPage", url: "https://www.jd.com/", query: null, queries: null },
     results: [
       { title: "京东", url: "https://www.jd.com/" },
@@ -262,12 +331,7 @@ async function handle(message) {
       { title: "无效协议", link: "javascript:alert(1)" }
     ]
   } } });
-  emit({ method: "rawResponseItem/completed", params: {
-    threadId: "thread-1", turnId: "turn-1", item: {
-      type: "web_search_call", id: "raw-search-1", status: "completed",
-      action: { type: "open_page", url: "https://www.midea.cn/" }
-    }
-  } });
+  ${rawCompletedSearch}
   const finalItem = { id: "message-2", type: "agentMessage", text: ${JSON.stringify(output)}, phase: "final_answer" };
   emit({ method: "item/started", params: { item: {
     id: "message-2", type: "agentMessage", text: "", phase: "final_answer"
@@ -276,6 +340,36 @@ async function handle(message) {
   emit({ method: "turn/completed", params: { turn: {
     status: "completed", error: null, items: [finalItem]
   } } });
+}
+`;
+}
+
+function reusableConnectionSource() {
+  return fakeServerPrelude() + `
+const connectionToken = String(process.pid) + "-" + String(Date.now());
+let initializeCount = 0;
+let threadCount = 0;
+function handle(message) {
+  if (message.method === "initialize") {
+    initializeCount += 1;
+    if (initializeCount !== 1) process.exit(21);
+    emit({ id: message.id, result: { userAgent: "fake" } });
+    return;
+  }
+  if (message.method === "thread/start") {
+    threadCount += 1;
+    if (message.params.ephemeral !== true) process.exit(22);
+    emit({ id: message.id, result: { thread: { id: "thread-" + threadCount, ephemeral: true } } });
+    emit({ method: "thread/started", params: { thread: { id: "thread-" + threadCount } } });
+    return;
+  }
+  if (message.method !== "turn/start") return;
+  const turnId = "turn-" + threadCount;
+  emit({ id: message.id, result: { turn: { id: turnId } } });
+  emit({ method: "turn/started", params: { turn: { id: turnId } } });
+  const finalItem = { id: "message-" + threadCount, type: "agentMessage", text: connectionToken, phase: "final_answer" };
+  emit({ method: "item/completed", params: { item: finalItem } });
+  emit({ method: "turn/completed", params: { turn: { status: "completed", error: null, items: [finalItem] } } });
 }
 `;
 }
@@ -302,14 +396,28 @@ function handle(message) {
 
 function cancellableSource() {
   return fakeServerPrelude() + `
+let activeThreadId = "thread-1";
+let activeTurnId = "turn-1";
 function handle(message) {
   if (message.method === "initialize") {
     emit({ id: message.id, result: { userAgent: "fake" } });
     return;
   }
   if (message.method === "thread/start") {
-    emit({ id: message.id, result: { thread: { id: "thread-1", ephemeral: true } } });
+    emit({ id: message.id, result: { thread: { id: activeThreadId, ephemeral: true } } });
     emit({ method: "thread/started", params: {} });
+    return;
+  }
+  if (message.method === "turn/start") {
+    emit({ id: message.id, result: { turn: { id: activeTurnId } } });
+    emit({ method: "turn/started", params: { threadId: activeThreadId, turn: { id: activeTurnId } } });
+    return;
+  }
+  if (message.method === "turn/interrupt") {
+    emit({ id: message.id, result: {} });
+    emit({ method: "turn/completed", params: { turn: {
+      status: "interrupted", error: null, items: []
+    } } });
   }
 }
 setInterval(() => {}, 60_000);

@@ -36,7 +36,7 @@ import {
 export function InterviewThread({
   messages,
   isRunning,
-  isSubmitting,
+  isRestoring,
   awaitingDecision,
   onNew,
   onCancel,
@@ -44,7 +44,7 @@ export function InterviewThread({
 }: {
   messages: InterviewUiMessage[];
   isRunning: boolean;
-  isSubmitting: boolean;
+  isRestoring: boolean;
   awaitingDecision: boolean;
   onNew: (message: AppendMessage) => Promise<void>;
   onCancel: () => Promise<void>;
@@ -64,7 +64,9 @@ export function InterviewThread({
         <ThreadPrimitive.Viewport className="relative flex min-h-0 flex-1 flex-col overflow-y-auto p-3 sm:p-5">
           {messages.length === 0 && (
             <div className="m-auto max-w-md text-center text-sm leading-6 text-muted">
-              直接输入你要抓的商品，例如“抓冰箱”。系统会调查内容范围和候选来源，只向你询问必须决定的取舍。
+              {isRestoring
+                ? "正在恢复采访…"
+                : "直接输入你要抓的商品，例如“抓冰箱”。系统会调查内容范围和候选来源，只向你询问必须决定的取舍。"}
             </div>
           )}
           <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
@@ -81,9 +83,11 @@ export function InterviewThread({
               <ComposerPrimitive.Input
                 id="category-interview-input"
                 className="max-h-36 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-2 py-3 text-base outline-none disabled:cursor-wait disabled:opacity-60 sm:text-sm"
-                placeholder={awaitingDecision ? "直接回答，也可以输入不同于建议的方案" : "例如：抓冰箱"}
+                placeholder={isRestoring
+                  ? "正在恢复采访…"
+                  : awaitingDecision ? "可以回答、补充、纠正或追问" : "例如：抓冰箱"}
                 aria-label="输入抓取需求或回答"
-                disabled={isSubmitting}
+                disabled={isRestoring}
               />
               {isRunning ? (
                 <ComposerPrimitive.Cancel className="icon-button shrink-0 bg-ink text-surface hover:bg-ink/85" aria-label="停止生成">
@@ -92,12 +96,10 @@ export function InterviewThread({
               ) : (
                 <ComposerPrimitive.Send
                   className="icon-button shrink-0 bg-ink text-surface hover:bg-ink/85 disabled:cursor-wait disabled:opacity-60"
-                  aria-label={isSubmitting ? "正在提交回答" : "发送消息"}
-                  disabled={isSubmitting}
+                  aria-label="发送消息"
+                  disabled={isRestoring}
                 >
-                  {isSubmitting
-                    ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    : <ArrowUp className="h-5 w-5" aria-hidden="true" />}
+                  <ArrowUp className="h-5 w-5" aria-hidden="true" />
                 </ComposerPrimitive.Send>
               )}
             </ComposerPrimitive.Root>
@@ -169,7 +171,7 @@ function AssistantMessage() {
   );
 }
 
-function InterviewActivity({ activity }: { activity: InterviewTurnActivity }) {
+export function InterviewActivity({ activity }: { activity: InterviewTurnActivity }) {
   if (activity.kind === "web_search") return <WebSearchActivity activity={activity} />;
   if (activity.kind === "tool") {
     return <ToolActivity activity={activity} />;

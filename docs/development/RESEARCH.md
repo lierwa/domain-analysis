@@ -3,38 +3,23 @@
 > 2026-08-18 当前边界：项目只实施阶段 1 数据抓取。本文保留历史候选和淘汰依据，但其中 Evidence、Knowledge Factory、知识包、Runtime、Market Universe 及具体来源 Provider 均已退出当前生产组合根，不得按历史“接受”状态继续实现。当前继续复用的成熟组件只有 PostgreSQL/Drizzle、Fastify、assistant-ui、Codex CLI、Crawlee、p-queue 与 cockatiel；后续新增 Crawl Plan 或 Provider 必须在用户验收 1A 后重新进入调研和真实原型门。
 
 状态：持续维护
-更新日期：2026-08-18
+更新日期：2026-08-19
 
-本文件只记录技术问题、成熟候选、官方依据、原型结果、接受/拒绝/替代状态和退出成本。阶段进度看 `PROGRESS.md`，模块边界看 `ARCHITECTURE.md`，详细历史样本看对应 `pocs/` 与 ADR。
+本文件只记录技术问题、成熟候选、官方依据、原型结果、接受/拒绝/替代状态和退出成本。阶段进度看 `PROGRESS.md`，模块边界看 `ARCHITECTURE.md`，已删除 POC 的历史结论只通过本文件、ADR 与 Git 历史追溯。
 
 ## 1. 当前结论索引
 
 | 编号 | 主题 | 当前状态 |
 | --- | --- | --- |
-| R-001/R-012 | 京东与官网浏览器访问 | 只接受来源访问/状态能力；整页产物结论已替代 |
-| R-002/R-017 | durable Pipeline | 接受 DBOS Transact 4.25.14；6.3 父/子 Queue 生产 seam 已通过 |
-| R-003/R-015 | 知识包存储/全文 | 接受 SQLite＋FTS5；R-034 新证据/第二品类复核通过 |
-| R-004/R-021 | Workbench 数据库/migration | 接受 PostgreSQL＋Drizzle，DBOS 独立 schema |
-| R-005 | Codex SDK/模型 | 窄候选用途接受；新用途必须重新讨论/原型 |
-| R-006 | 内容寻址 | 只接受 cacache 保存最小 EvidenceItem 字节 |
-| R-007 | 依赖复现/安全 | 持续维护 |
-| R-008 | 跨品类商品模型 | 方向接受；生产共享模型/字典仍未完成 |
-| R-009/R-010 | 来源、身份、市场总体 | 6.1 覆盖定义调研完成；生产 contract 与真实完整枚举等待 6.2+ |
-| R-011 | 质量/人工频次 | contract 接受；数值待真实样本 |
-| R-013/R-023/R-024/R-025 | 快照、投影、旧 Acquisition contract | 已由 R-026/ADR-0011 替代；局部组件保留 |
-| R-014 | PDF/XLSX/单位/候选 | 局部组件证据保留；旧输入 contract 已替代 |
-| R-019 | 稳定内容指纹 | 接受 RFC 8785 canonicalize |
-| R-020 | DBOS 替代品 | Resonate 等候选未过等价门，拒绝 |
-| R-022 | Product/Pipeline 应用接线 | 原则接受，等待新 contract 换接 |
-| R-026 | 目的驱动采集/最小证据/媒体 | 静态 HTML/JSON、PDF 页、XLSX 行和整图字节门已 POC；动态/图片正式投影/异常矩阵继续 |
+| R-001/R-012 | 京东与官网浏览器访问 | 保留访问状态、风险页和停止条件证据；1A 后重新选生产 reader，不授权当前真实请求 |
+| R-004/R-021 | Workbench 数据库/migration | 当前接受 PostgreSQL＋Drizzle；旧 DBOS schema 只保留本机历史结构，不是当前流程 |
+| R-007 | 依赖复现/安全 | 当前持续维护 |
 | R-027 | 死代码清算 | 使用 CodeGraph＋真实 entry；不新增 Knip |
-| R-028 | 本地 Chat Timeline | 接受 `assistant-ui` ExternalStoreRuntime；2026-08-19 改为单回合有序 parts、普通问题文案和 Composer 自定义回答，真实页面待用户复验 |
+| R-028 | 本地 Chat Timeline | 接受 `assistant-ui` ExternalStoreRuntime；单回合有序 parts、普通问题文案、Composer 自定义回答和刷新恢复已验证 |
 | R-029 | Codex 交互运行时与 Pi 边界 | 接受：锁定官方 `codex app-server` `stdio`，每轮 `thread/start(ephemeral:true)`；commentary 用官方 delta，最终 JSON 由本地 Zod 校验；MVP 不引入 Pi |
-| R-030 | 商品底层知识来源与质量门 | 代表性来源证明范围与许可门已形成；生产白名单和真实纵切片未冻结 |
-| R-031 | 跨品类来源数据集 contract 与导出 | 已接受并通过冰箱＋电视 PostgreSQL/API/PC 纵切片；真实来源矩阵待补 |
-| R-032 | 来源访问限速、取消与熔断 | 真实 60 秒、DBOS 强杀恢复与生产组合已接受；京东 reader/探针未通过 |
-| R-033 | 公开技术网页正文提取 | Readability＋jsdom 在 macOS/Node 24 接受；Linux 门待补 |
-| R-034 | 电视第二品类真实纵切片 | DOE/EPA→Evidence→Factory/Review→SQLite Runtime 与 PC 通过 |
+| R-035 | Crawl Planning Agent 运行与版本化计划 | 接受复用 App Server/Skill/Zod/PostgreSQL；前台可见、断连中止；拒绝为短规划引入后台队列 |
+| R-032 | 来源访问限速、取消与熔断 | 当前只保留 `p-queue`＋`cockatiel` 基础；具体 Crawl Plan、持久恢复和京东真实窗口在 1A 后重新验证 |
+| 历史 R-002～R-026、R-030～R-034 | 旧知识生产与 POC | 只保留调研/失败证据；DBOS、Evidence、知识包、Runtime、Market Universe 和旧 Source Dataset contract 均由 ADR-0015 退出当前范围 |
 
 ## 2. 仍然有效的基础设施决定
 
@@ -637,13 +622,32 @@ Browser
 - 用户指出“Codex 不可能不支持流式”是正确的。旧结论把三个事实混在了一起：`codex exec --json` 提供的是 JSONL 生命周期事件；`--output-schema` 约束最终助手消息；旧 adapter 又主动丢弃 `agent_message` 并等待 `--output-last-message` 文件。因此页面只能看到活动，不能看到文字 token delta。
 - 重新核对官方 App Server 文档与本机锁定的 `@openai/codex@0.147.0` 生成协议：稳定 schema 同时包含 `ThreadStartParams.ephemeral`、`item/agentMessage/delta`、`MessagePhase = commentary | final_answer`。此前“只有 thread/fork 支持 ephemeral”的结论来自不完整文档阅读，现已推翻。协议只生成到两个 `/tmp` 目录，核对后删除，没有把生成物写回仓库：https://developers.openai.com/codex/app-server
 - 真实协议探针证明：设置 `turn/start.outputSchema` 时，commentary 也会被模型约束成 JSON token；去掉该参数后，commentary 是正常中文 delta，final_answer 仍可按提示只返回 JSON。正式 adapter 因而不再设置 `outputSchema`，而是在 prompt 中附最终 JSON Schema，并对完整 final_answer 执行既有 Zod 校验。失败即公开报错，不做宽松 parser、修复模型或自动重试。
-- 当前接受边界为：每轮启动官方 App Server `stdio`，`thread/start` 强制 `ephemeral:true`、只读 sandbox、never approval，并使用不继承工程仓库 `AGENTS.md` 的隔离空目录；只把 `phase=commentary` 的 delta 投影为 `assistant.delta`，把 `phase=final_answer` 留在服务端解析。Workbench/PostgreSQL 仍拥有全部消息、决定、未决项和任务草稿，进程退出后没有可 resume 的产品 thread。
+- 当前接受边界为：每个注入式 runtime 启动并初始化一次官方 App Server `stdio` 连接，每个业务轮次在同一连接上重新调用 `thread/start`，强制 `ephemeral:true`、只读 sandbox、never approval，并使用不继承工程仓库 `AGENTS.md` 的隔离空目录；只把 `phase=commentary` 的 delta 投影为 `assistant.delta`，把 `phase=final_answer` 留在服务端解析。Workbench/PostgreSQL 仍拥有全部消息、决定、未决项和任务草稿，没有 `resume` 或可持久化的产品 Codex thread。
 - 为避免本机工程规则、通用插件、hooks 和 memories 介入产品采访，启动参数显式关闭后三项稳定 feature。每轮由 Workbench 把仓库内权威 Skill 覆盖同步到隔离 cwd 的标准 `.agents/skills/interview-product-category/SKILL.md`，再按官方推荐在 `turn/start.input` 同时提供 `$interview-product-category` 与该绝对路径 `skill` item；模型不需要也不能执行本地命令寻找文件。官方配置参考同时确认 `features.shell_tool` 和 `features.unified_exec` 都可关闭；采访 App Server 进程因此直接 `--disable` 两项能力，只保留 web search，adapter 对异常/旧 `commandExecution` 继续不投影：https://developers.openai.com/codex/app-server 、https://developers.openai.com/codex/config-reference
-- 真实 `gpt-5.6-terra + medium` 运行同时观察到中文逐 token commentary、多次 `web_search` item 和最终通过 `categoryInterviewRuntimeOutputSchema` 的京东负责人问题。真实 Workbench 页面在运行中先出现中文增量，再追加搜索活动，结束后用已持久化的最终 assistant message 替换临时气泡，浏览器 console 无 error。
+- 历史样本曾同时观察到中文逐 token commentary、多次 `web_search` item 和最终通过当时 schema 的京东负责人问题；该样本只证明流式协议，问题内容已由 2026-08-19 的默认京东策略修复取代，不再是生产接受行为。
 - App Server 命令在 0.147.0 CLI 帮助中仍标记 experimental，因此 adapter 必须继续锁版本、保持单文件薄边界并由 fake 协议回归保护；不引入动态 tools、SDK thread、Pi、第二 Provider 或自动 fallback。若未来版本移除 `thread/start.ephemeral` 或 message phase，直接失败并重新进入调研门，不退回假流式。
 - 官方 App Server 协议声明 `commandExecution` 完成项可带 `status / aggregatedOutput / exitCode / durationMs`，且 `item/completed` 是该 item 的权威最终状态。旧 adapter 先后显示过完整命令和“安全目的摘要”，但两种投影都把工程 Agent 的内部执行误当成抓取产品活动；当前删除整个 `commandExecution` 产品投影，不再显示命令、退出码或目的文案。未来工程诊断只能留在服务端受控边界，不能进入采访 Timeline：https://learn.chatgpt.com/docs/app-server
-- 截图中的命令内容证明旧运行时继承了仓库工程约束，读取采访 Skill、开发基准、进度/积分账本并核对 Git 状态；这不是商品来源调查，也不该成为用户可见步骤。当前运行时把 Skill 同步进隔离 cwd 后显式注入，关闭 shell/unified exec 能力，并在产品 prompt 中禁止寻找 Skill、`AGENTS.md`、开发文档或 Git 状态。首轮/首轮重试在服务端额外要求观察到真实 `web_search` item，否则失败关闭，不接受未调查就提问或生成草稿。
+- 截图中的命令内容证明旧运行时继承了仓库工程约束，读取采访 Skill、开发基准、进度/积分账本并核对 Git 状态；这不是商品来源调查，也不该成为用户可见步骤。当前运行时把 Skill 同步进隔离 cwd 后显式注入，关闭 shell/unified exec 能力，并在产品 prompt 中禁止寻找 Skill、`AGENTS.md`、开发文档或 Git 状态。首次调查或品类发生变化的回合必须观察到已完成的 `web_search` item，否则失败关闭；只有 started/failed 事件不能充当已完成调查。
 - 旧 assistant 消息只保存最终 `text`，运行中的 ordered parts 只存在于 React 内存；因此完整刷新必然丢失搜索和工具历史，旧 Web 测试却把刷新后的“服务端消息”错误地复用了同一份 live parts。当前 `category_interview_messages.timeline_parts_json` 保存有序文字/活动 union，Workbench 与 Web 复用同一组 append/complete/fail 规则，刷新直接重放数据库事实；没有 timeline 的历史消息继续只显示最终文本，不伪造旧工具调用。
+
+#### 2026-08-19 App Server 连接生命周期与京东策略纠错
+
+- 官方 App Server 文档把 `initialize` 定义为每条连接的第一次调用；初始化后，同一连接可重复 `thread/start`，运行中的 turn 可用 `turn/interrupt` 取消。因此每次用户回复都重启 `codex app-server` 不是协议要求，只会重复支付进程与握手成本：https://learn.chatgpt.com/docs/app-server
+- 当前 `CodexAppServerClient` 隔离 transport、通知投影和产品 runtime：连接初始化一次，同一 client 的两个 `run` 分别收到新的 `thread/started`；成功轮不重启进程，Workbench 关闭时统一释放。`thread/start(ephemeral:true)` 仍是每轮边界，不引入持久 thread、resume、后台队列或第二个产品 Session。
+- 京东覆盖是标准商品的平台来源策略，不是负责人取舍。Skill、prompt 和共享 runtime schema 现在共同禁止 `jd.scope` question/proposal/unresolved item；Workbench 在草稿持久化前强制应用完整默认范围。迁移只把历史 open `jd.scope` 状态变成 resolved/superseded，不删除或改写历史消息。
+- 真实新会话先生成并确认默认覆盖京东的冰箱 v1，再在同一会话补充两个淘宝受限入口并确认 v2；两轮均没有负责人 Decision，正式任务 revision=2，Source Run=0。历史失败会话页面只有一个 error alert。自动证据包括两轮同连接协议、序号归一化、字段路径错误、DB 迁移/集成、44 passed / 1 skipped 全量测试、类型检查与生产构建。
+
+#### 2026-08-19 任意采访输入与本轮理解增量纠错
+
+- 上述“序号归一化”只修复裸 `1`，没有覆盖采访的真实输入语义。代码复核证明 Web 在存在 proposed Decision 时先调用独立确认接口并提前返回，Codex 看不到本轮原文，因而无法同时理解“1，另外不含二手”、纠正、否定问题前提或追问；随后再启动 `decision_confirmed` 回合还制造了额外状态转换和一次无意义等待。
+- 接受的新边界是 input-first：Workbench 先保存任意 Composer 原文，再把原文、当前 proposal、历史消息/活动、决定、未决项和草稿版本一并交给 ephemeral Codex 回合。Codex final answer 只提交本轮理解增量；明确回答使用 `decisionResolution` 引用当前 proposal，成立的前提否定使用 `decisionWithdrawal` 撤回问题，附加事实同时写入说明和下一版草稿，含糊或追问则不确认。Workbench 校验引用并原子持久化，不再提供独立 Decision confirm HTTP 路径或 `decision_confirmed` trigger。
+- `grill-with-docs` 只组合自然语言 `grilling` 和随会话维护记录的 `domain-modeling`，不定义 JSON 传输。项目 Skill 因此只定义理解、调查、提问和记录纪律；机器字段继续由 runtime schema 独占。最终 JSON 仍是 App Server seam 下本轮 typed delta，因为 Workbench 必须在无状态回合后校验状态变化；它不再同时维护 `question`/`proposedDecision` 两种问题结构，也不要求模型重报完整会话。
+- 平台和网站是系统应调查的来源事实，不是负责人选择题。京东对家电保持默认核心覆盖；淘宝是后续同级平台候选，但当前没有淘宝 crawler/Provider，任何草稿都不能把搜索发现误写成已接入能力。
+- 任意新输入都会使旧草稿离开当前可确认态，避免用户在本轮仍运行或失败时确认过期范围。只有最新回合结束、session 为 `idle + task_ready` 且最新草稿通过完整性校验时，确认入口和后端命令才开放；用户显式确认才创建或推进 Capture Task。
+- 纯解释回合只返回普通说明，不生成决定或草稿修订。
+- 来源 `observedAt` 不是模型权威字段。Workbench 忽略模型给出的时间，在草稿提交时统一写入当前时间。
+- 用户触发的 retry 不是自动模型修复：只允许重放当前 session 最近一条 failed/interrupted 用户原文，而且该消息之后不能已有 completed assistant 消息。更早历史消息、任意改写文本或正常已完成回合都不能成为 retry target。
+- 本次不引入 dynamic tools、第二次模型抽取、宽松 parser、自动模型重试或新依赖。继续沿用 R-029 已验证的 prompt JSON Schema＋本地 Zod 边界；若该边界仍出现非确定性无效输出，必须用真实失败样本重新进入协议调研，不能把用户原文预先降级成字符串分支作为兜底。
 
 ### R-030 商品底层知识来源与质量门
 
@@ -910,6 +914,34 @@ Socrata 候选与边界：
 结论：第二品类最小迁移门通过；新增内容只有版本化电视数据、DOE/EPA planning rule 和隔离外部协议的 Socrata adapter。公共数据库结构、Knowledge Factory/Review/Package/Runtime interface 与流程无电视/冰箱分支。该结论不等于 1A 完整矩阵完成，不授权 JD 访问，也不证明 Linux/Windows 或图片/动态页。
 
 ## 6. 依赖与安全持续门
+
+### R-035 Crawl Planning Agent 与后台运行边界
+
+状态：已接受；真实 Workbench 规划表面已通过，计划内容仍待用户确认
+目标阶段：1B
+
+问题：Capture Task 确认后需要把业务范围转成直接决定来源、内容和数量的 Crawl Plan。规划过程需要网页搜索、可见进度、结构化结果和中断，但不能把 Codex thread、搜索文本或浏览器状态变成计划事实，也不能为了最多三分钟的单轮任务自研后台队列。
+
+不可取消约束：用户显式启动；Planning Run 不批量抓取；计划必须绑定当前 task revision；只有 Workbench 可以版本化和确认计划；确认不创建 Source Run；正式抓取不得边运行边调用 Codex 无边界搜站。
+
+候选与官方资料：
+
+- 现有 Codex App Server `stdio`：官方把它定位为富客户端集成 interface，提供连接级 `initialize`、可重复的 `thread/start`、`turn/start`、`item/agentMessage/delta`、tool progress、`turn/completed`、`turn/interrupt` 和显式 skill input；当前仓库已经锁版本并验证“一条 runtime 连接、每次运行一个新 ephemeral thread”。接受复用。官方同时说明 App Server command/远程 WebSocket 仍属 experimental，因此继续使用本机锁版本薄 adapter，不扩大到远程服务：https://learn.chatgpt.com/docs/app-server
+- Codex SDK：官方建议自动化 jobs/CI 使用 SDK，但当前生产产品需要显式 skill item、已验证网页搜索活动和同屏 commentary；为同一模型再接第二 transport 会增加协议与测试面，当前拒绝。
+- DBOS TypeScript：MIT、Node >=20、活跃维护，官方提供 PostgreSQL durable workflow/queue 和崩溃恢复，适合真正的长任务后台执行：https://docs.dbos.dev/typescript/tutorials/workflow-tutorial 、https://github.com/dbos-inc/dbos-transact-ts 。当前规划只有单次三分钟上限，断连可安全重试且没有外部写副作用；重新引入 workflow/runtime/schema 的成本大于收益，暂缓而非否定其成熟度。
+- 手写内存 Promise registry/queue：拒绝。进程重启无恢复、需要自行处理取消和孤儿任务，且重复已有成熟工作流能力。
+
+许可证与维护状态：本轮不新增依赖；继续使用仓库已锁定和接受的 OpenAI Codex、PostgreSQL、Drizzle、Fastify、Zod 与 canonicalize。DBOS 仅作为被暂缓候选，不进入 package/lockfile。
+
+Node/TypeScript、本地/离线和部署边界：纯 Node 24/TypeScript；App Server 与 PostgreSQL 均在本机，只有规划时的公开网页搜索需要网络。Skill 复制到隔离临时 cwd，关闭 shell/unified exec；Cookie、Profile、认证 Header 和验证码材料没有输入字段。
+
+安全、测试、升级与退出：Planning Module 只依赖注入式 runtime interface；移除 Codex adapter 不改变 plan/domain contract。测试用确定性 runtime adapter覆盖状态、版本、topic 覆盖和计划确认；真实验收只做搜索/规划，不做批量来源访问。
+
+最小原型与真实样本：不新建 POC package。直接在正式 Module seam 先写 contract/数据库/API/Web 测试，再运行一个真实标准商品 Planning Run；未通过前不注册 Provider 或开始 Source Run。
+
+真实结果：在正式“家用冰箱抓取任务”上完成两个前台 Planning Run。v2 沿用并重新核实京东冰箱频道、国家标准全文阅读和美的官方说明书三类来源，明确目录/详情全量、每 SKU 30 条评价样本、相关标准题录全量和 20 份说明书样本，并逐项给出分母、遍历、停止条件和执行阻塞。v1 保留为 superseded，v2 保持 draft，刷新后仍可审查；所有来源只由 Workbench 记为 `search_discovered / unknown`，发现时间等于 v2 完成时间。Source Run 数量为 0，证明规划没有越权执行。全量 40 tests passed / 1 skipped，六 workspace typecheck 和生产构建通过。
+
+结论与确认：复用现有 App Server seam，新建一个 CrawlPlanningModule 和一个专用短 Skill；该 runtime 在生命周期内复用一条已初始化连接，每次 Planning Run 新建 ephemeral thread，采用前台可见、断连中止、完成结果持久化的最小流程。若真实使用证明跨页面持续是必要需求，再以 DBOS 等成熟工作流重新进入调研/原型门。
 
 ### R-007 依赖复现与安全升级
 

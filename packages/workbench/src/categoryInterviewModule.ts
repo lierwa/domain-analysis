@@ -3,23 +3,19 @@ import { randomUUID } from "node:crypto";
 import {
   appendInterviewTimelineActivity,
   appendInterviewTimelineText,
-  captureTaskDraftVersionSchema,
   categoryInterviewRuntimeOutputSchema,
   categoryInterviewViewSchema,
   completeInterviewTimeline,
   failInterviewTimeline,
-  interviewDecisionConfirmationSchema,
-  interviewDecisionSchema,
   interviewSessionSchema,
   interviewTimelineEventSchema,
-  interviewUnresolvedItemSchema,
   normalizedInterviewMessageSchema,
   type CaptureTask,
   type CaptureTaskDraftVersion,
   type CategoryInterviewRuntimeOutput,
   type CategoryInterviewView,
-  type InterviewDecision,
   type InterviewMessageTimelinePart,
+  type NormalizedInterviewMessage,
   type InterviewSession,
   type InterviewTimelineEvent,
   type InterviewTurnActivity,
@@ -34,7 +30,7 @@ import {
   categoryInterviewSessions,
   categoryInterviewUnresolvedItems,
 } from "@domain-analysis/db";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import { buildConfirmedCaptureTask } from "./captureTaskModule";
 import {
@@ -42,7 +38,13 @@ import {
   listStandaloneInterviewSessions,
   removeStandaloneInterviewSession,
 } from "./categoryInterviewRecords";
+import {
+  loadCategoryInterviewView,
+  loadCategoryInterviewViewByTaskId,
+  requireCategoryInterviewView,
+} from "./categoryInterviewViewStore";
 import { contentHash } from "./contentHash";
+import { prepareInterviewTurn } from "./categoryInterviewTurnPolicy";
 
 export { CategoryInterviewError } from "./categoryInterviewRecords";
 
@@ -54,11 +56,12 @@ export type CategoryInterviewRuntimeEvent =
 
 export interface CategoryInterviewRuntime {
   run(input: CategoryInterviewRuntimeInput): AsyncIterable<CategoryInterviewRuntimeEvent>;
+  close?(): Promise<void>;
 }
 
 export interface CategoryInterviewRuntimeInput {
   session: CategoryInterviewView;
-  trigger: { type: "user_message"; text: string } | { type: "decision_confirmed"; decision: InterviewDecision };
+  trigger: { type: "user_message"; text: string };
   signal?: AbortSignal;
 }
 
@@ -69,12 +72,6 @@ export interface CategoryInterviewModule {
   getByTaskId(taskId: string): Promise<CategoryInterviewView | null>;
   remove(sessionId: string): Promise<void>;
   runTurn(input: InterviewTurnRequest & { sessionId: string; signal?: AbortSignal }): AsyncIterable<InterviewTimelineEvent>;
-  confirmDecision(input: {
-    sessionId: string;
-    decisionId: string;
-    selection: string;
-    expectedRevision: number;
-  }): Promise<CategoryInterviewView>;
   confirmTaskDraft(input: { sessionId: string; draftId: string; expectedRevision: number }): Promise<{
     interview: CategoryInterviewView;
     draft: CaptureTaskDraftVersion;
@@ -92,15 +89,14 @@ export function createCategoryInterviewModule(
   return {
     list: async () => {
       const sessions = await listStandaloneInterviewSessions(db);
-      const views = await Promise.all(sessions.map((session) => loadView(db, session.id)));
+      const views = await Promise.all(sessions.map((session) => loadCategoryInterviewView(db, session.id)));
       return views.flatMap((view) => view ? [view.session] : []);
     },
     start: (input) => start(db, input.initialRequest, now, createId),
-    get: (sessionId) => loadView(db, sessionId),
-    getByTaskId: (taskId) => loadViewByTaskId(db, taskId),
+    get: (sessionId) => loadCategoryInterviewView(db, sessionId),
+    getByTaskId: (taskId) => loadCategoryInterviewViewByTaskId(db, taskId),
     remove: (sessionId) => removeStandaloneInterviewSession(db, sessionId),
     runTurn: (input) => runTurn(db, runtime, input, now, createId),
-    confirmDecision: (input) => confirmDecision(db, input, now, createId),
     confirmTaskDraft: (input) => confirmTaskDraft(db, input, now, createId),
   };
 }
@@ -129,28 +125,21 @@ async function* runTurn(
   now: () => Date,
   createId: (kind: string) => string,
 ): AsyncIterable<InterviewTimelineEvent> {
-  const initial = await requireView(db, input.sessionId);
+  const initial = await requireCategoryInterviewView(db, input.sessionId);
   requireRevision(initial, input.expectedRevision);
-  if (initial.session.phase === "confirmed" && input.trigger !== "user_message") {
-    throw invalidState("已确认抓取任务只能由新的修改要求开启修订");
-  }
-  const confirmedDecision = input.trigger === "decision_confirmed"
-    ? initial.decisions.find((item) => item.id === input.decisionId && item.status === "confirmed")
-    : undefined;
-  if (input.trigger === "decision_confirmed" && !confirmedDecision) throw invalidState("找不到已确认决定");
+  if (initial.session.turnState === "running") throw invalidState("已有采访回合正在运行");
+  const retryMessage = requireRetryMessage(initial, input);
 
   const turnId = createId("interview-turn");
-  await beginTurn(db, initial, input, now, createId);
-  yield parseEvent({ type: "turn.started", sessionId: input.sessionId, turnId });
-  const runtimeView = await requireView(db, input.sessionId);
+  const sourceUserMessageId = await beginTurn(db, initial, input, retryMessage, now, createId);
+  const runtimeView = await requireCategoryInterviewView(db, input.sessionId);
   let partialText = "";
   let timelineParts: InterviewMessageTimelinePart[] = [];
   try {
+    yield parseEvent({ type: "turn.started", sessionId: input.sessionId, turnId });
     for await (const event of runtime.run({
       session: runtimeView,
-      trigger: input.trigger === "user_message"
-        ? { type: "user_message", text: input.text }
-        : { type: "decision_confirmed", decision: confirmedDecision! },
+      trigger: { type: "user_message", text: input.text },
       signal: input.signal,
     })) {
       if (event.type === "activity") {
@@ -170,8 +159,9 @@ async function* runTurn(
         yield parseEvent({ type: "turn.interrupted", sessionId: input.sessionId, turnId });
         return;
       }
-      const completed = await finishTurn(db, runtimeView, event.output,
-        completeInterviewTimeline(timelineParts, event.output.assistantText), now, createId);
+      const completed = await finishTurn(db, runtimeView, sourceUserMessageId, event.output,
+        completeInterviewTimeline(timelineParts, event.output.assistantText),
+        now, createId);
       yield parseEvent({ type: "assistant.message.completed", sessionId: input.sessionId, turnId, message: completed.message });
       yield parseEvent({ type: "interview.state.changed", sessionId: input.sessionId, turnId,
         revision: completed.view.session.revision, phase: completed.view.session.phase,
@@ -192,43 +182,65 @@ async function beginTurn(
   db: WorkbenchDb,
   view: CategoryInterviewView,
   input: InterviewTurnRequest,
+  retry: NormalizedInterviewMessage | undefined,
   now: () => Date,
   createId: (kind: string) => string,
 ) {
   const timestamp = now().toISOString();
-  const retry = input.trigger === "user_message" && input.retryMessageId
-    ? view.messages.find((item) => item.id === input.retryMessageId && item.role === "user" && item.text === input.text)
-    : undefined;
-  if (input.trigger === "user_message" && input.retryMessageId && !retry) throw invalidState("重试必须引用原始用户消息");
+  const sourceUserMessageId = retry?.id ?? createId("interview-message");
   await db.transaction(async (transaction) => {
     const changed = await transaction.update(categoryInterviewSessions).set({
-      // WHY：已确认版本保持不变；新的用户消息只重新打开采访会话，后续生成新草稿版本。
-      phase: view.session.phase === "confirmed" ? "active" : view.session.phase,
+      // WHY：任何新输入都可能修订草稿；先退出 task_ready，只有本轮明确保持或产出新草稿后才能再次确认。
+      phase: "active",
       turnState: "running", revision: view.session.revision + 1, updatedAt: timestamp,
     }).where(and(eq(categoryInterviewSessions.id, view.session.id),
       eq(categoryInterviewSessions.revision, view.session.revision))).returning({ id: categoryInterviewSessions.id });
     if (changed.length !== 1) throw revisionConflict(view.session.id);
-    if (input.trigger === "user_message" && !retry) {
+    if (!retry) {
       await transaction.insert(categoryInterviewMessages).values({
-        id: createId("interview-message"), sessionId: view.session.id,
+        id: sourceUserMessageId, sessionId: view.session.id,
         sequence: view.messages.length + 1, role: "user", text: input.text,
         deliveryStatus: "completed", createdAt: timestamp,
       });
     }
   });
+  return sourceUserMessageId;
+}
+
+function requireRetryMessage(view: CategoryInterviewView, input: InterviewTurnRequest) {
+  if (!input.retryMessageId) return undefined;
+  if (view.session.turnState !== "failed" && view.session.turnState !== "interrupted") {
+    throw invalidState("只有最近一次失败或中断的用户输入可以重试");
+  }
+  const candidate = view.messages.find((item) => item.id === input.retryMessageId
+    && item.role === "user" && item.text === input.text);
+  const latestUser = [...view.messages].reverse().find((item) => item.role === "user");
+  const completedAfter = candidate && view.messages.some((item) => item.sequence > candidate.sequence
+    && item.role === "assistant" && item.deliveryStatus === "completed");
+  if (!candidate || candidate.id !== latestUser?.id || completedAfter) {
+    throw invalidState("重试必须引用最近一次未成功处理的用户原文");
+  }
+  return candidate;
 }
 
 async function finishTurn(
   db: WorkbenchDb,
   view: CategoryInterviewView,
+  sourceUserMessageId: string,
   rawOutput: CategoryInterviewRuntimeOutput,
   timelineParts: InterviewMessageTimelinePart[],
   now: () => Date,
   createId: (kind: string) => string,
 ) {
-  const output = categoryInterviewRuntimeOutputSchema.parse(rawOutput);
+  const parsedOutput = categoryInterviewRuntimeOutputSchema.parse(rawOutput);
   const timestamp = now().toISOString();
-  const current = await requireView(db, view.session.id);
+  const current = await requireCategoryInterviewView(db, view.session.id);
+  if (current.session.revision !== view.session.revision || current.session.turnState !== "running") {
+    throw revisionConflict(view.session.id);
+  }
+  const { output, decisionChange, nextPhase } = prepareInterviewTurn(
+    current, parsedOutput, timestamp, createId, sourceUserMessageId,
+  );
   const message = normalizedInterviewMessageSchema.parse({
     id: createId("interview-message"), sessionId: view.session.id,
     sequence: current.messages.length + 1, role: "assistant", text: output.assistantText,
@@ -236,12 +248,20 @@ async function finishTurn(
   });
   const rawDrafts = await db.select().from(captureTaskDraftVersions)
     .where(eq(captureTaskDraftVersions.sessionId, view.session.id));
-  const proposedDecision = proposedDecisionOf(output);
-  requireTaskCandidateReady(current, output, proposedDecision);
-  const nextPhase = output.taskCandidate ? "task_ready" : current.session.phase;
+  const proposedDecision = output.proposedDecision;
 
   await db.transaction(async (transaction) => {
     await transaction.insert(categoryInterviewMessages).values(message);
+    if (decisionChange) {
+      await transaction.update(categoryInterviewDecisions).set({ status: "superseded" })
+        .where(and(
+          eq(categoryInterviewDecisions.id, decisionChange.proposed.id),
+          eq(categoryInterviewDecisions.status, "proposed"),
+        ));
+      if (decisionChange.confirmed) {
+        await transaction.insert(categoryInterviewDecisions).values(decisionChange.confirmed);
+      }
+    }
     if (proposedDecision) {
       await transaction.insert(categoryInterviewDecisions).values({
         id: createId("interview-decision"), sessionId: view.session.id,
@@ -262,6 +282,16 @@ async function finishTurn(
         .where(and(eq(categoryInterviewUnresolvedItems.sessionId, view.session.id),
           inArray(categoryInterviewUnresolvedItems.key, output.resolvedUnresolvedKeys)));
     }
+    if (decisionChange) {
+      await transaction.update(categoryInterviewUnresolvedItems).set({
+        status: "resolved",
+        resolution: decisionChange.confirmed?.selection ?? decisionChange.withdrawalRationale,
+        resolvedAt: timestamp,
+      }).where(and(
+        eq(categoryInterviewUnresolvedItems.sessionId, view.session.id),
+        eq(categoryInterviewUnresolvedItems.key, decisionChange.proposed.key),
+      ));
+    }
     if (output.taskCandidate) {
       await transaction.update(captureTaskDraftVersions).set({ status: "superseded" })
         .where(and(eq(captureTaskDraftVersions.sessionId, view.session.id),
@@ -279,87 +309,7 @@ async function finishTurn(
       eq(categoryInterviewSessions.revision, current.session.revision))).returning({ id: categoryInterviewSessions.id });
     if (changed.length !== 1) throw revisionConflict(view.session.id);
   });
-  return { message, view: await requireView(db, view.session.id) };
-}
-
-function proposedDecisionOf(output: CategoryInterviewRuntimeOutput) {
-  if (output.proposedDecision) return output.proposedDecision;
-  if (!output.question) return undefined;
-  const recommended = output.question.options.find((option) => option.recommended);
-  if (!recommended) return undefined;
-  // WHY：Skill 允许单独返回 question；在 Workbench 事实边界统一成 proposal，避免文案有问题但 UI 没有可确认选项。
-  return {
-    key: output.question.key,
-    question: output.question.text,
-    options: output.question.options,
-    selection: recommended.label,
-    rationale: output.question.rationale,
-  };
-}
-
-function requireTaskCandidateReady(
-  view: CategoryInterviewView,
-  output: CategoryInterviewRuntimeOutput,
-  proposedDecision: ReturnType<typeof proposedDecisionOf>,
-) {
-  if (!output.taskCandidate) return;
-  const resolvedKeys = new Set(output.resolvedUnresolvedKeys);
-  const hasOpenOwnerDecision = Boolean(proposedDecision)
-    || view.decisions.some((item) => item.status === "proposed")
-    || view.unresolvedItems.some((item) => item.owner === "user"
-      && item.status === "open"
-      && !resolvedKeys.has(item.key))
-    || output.unresolvedItems.some((item) => item.owner === "user")
-    || output.taskCandidate.unresolvedItems.some((item) => item.owner === "user");
-  if (hasOpenOwnerDecision) throw invalidState("负责人取舍尚未确认，不能生成抓取任务草稿");
-
-  const confirmedIds = new Set(view.decisions
-    .filter((item) => item.status === "confirmed")
-    .map((item) => item.id));
-  if (output.taskCandidate.decisionIds.some((id) => !confirmedIds.has(id))) {
-    throw invalidState("抓取任务草稿引用了尚未确认的负责人取舍");
-  }
-}
-
-async function confirmDecision(
-  db: WorkbenchDb,
-  input: { sessionId: string; decisionId: string; selection: string; expectedRevision: number },
-  now: () => Date,
-  createId: (kind: string) => string,
-) {
-  const view = await requireView(db, input.sessionId);
-  const confirmation = interviewDecisionConfirmationSchema.parse({
-    expectedRevision: input.expectedRevision,
-    selection: input.selection,
-  });
-  requireRevision(view, confirmation.expectedRevision);
-  const proposed = view.decisions.find((item) => item.id === input.decisionId && item.status === "proposed");
-  if (!proposed) throw invalidState("待确认决定不存在或已处理");
-  const selectedOption = proposed.options.find((option) => option.label === confirmation.selection);
-  const timestamp = now().toISOString();
-  const responseMessage = normalizedInterviewMessageSchema.parse({
-    id: createId("interview-message"), sessionId: input.sessionId,
-    sequence: view.messages.length + 1, role: "user", text: confirmation.selection,
-    deliveryStatus: "completed", createdAt: timestamp,
-  });
-  await db.transaction(async (transaction) => {
-    await transaction.update(categoryInterviewDecisions).set({ status: "superseded" })
-      .where(eq(categoryInterviewDecisions.id, proposed.id));
-    await transaction.insert(categoryInterviewMessages).values(responseMessage);
-    await transaction.insert(categoryInterviewDecisions).values({
-      ...proposed, id: createId("interview-decision"), status: "confirmed",
-      selection: confirmation.selection,
-      rationale: selectedOption?.description ?? confirmation.selection,
-      sourceMessageId: responseMessage.id, supersedesDecisionId: proposed.id,
-      createdAt: timestamp, confirmedAt: timestamp,
-    });
-    const changed = await transaction.update(categoryInterviewSessions).set({
-      revision: view.session.revision + 1, updatedAt: timestamp,
-    }).where(and(eq(categoryInterviewSessions.id, input.sessionId),
-      eq(categoryInterviewSessions.revision, confirmation.expectedRevision))).returning({ id: categoryInterviewSessions.id });
-    if (changed.length !== 1) throw revisionConflict(input.sessionId);
-  });
-  return requireView(db, input.sessionId);
+  return { message, view: await requireCategoryInterviewView(db, view.session.id) };
 }
 
 async function confirmTaskDraft(
@@ -368,10 +318,15 @@ async function confirmTaskDraft(
   now: () => Date,
   createId: (kind: string) => string,
 ) {
-  const view = await requireView(db, input.sessionId);
+  const view = await requireCategoryInterviewView(db, input.sessionId);
   requireRevision(view, input.expectedRevision);
-  const draft = view.taskDrafts.find((item) => item.id === input.draftId && item.status === "draft");
-  if (!draft) throw invalidState("待确认抓取任务草稿不存在");
+  if (view.session.phase !== "task_ready" || view.session.turnState !== "idle") {
+    throw invalidState("只有当前待确认草稿可以生成抓取任务");
+  }
+  const draft = view.taskDrafts
+    .filter((item) => item.status === "draft")
+    .sort((left, right) => right.version - left.version)[0];
+  if (!draft || draft.id !== input.draftId) throw invalidState("只有最新待确认草稿可以生成抓取任务");
   const confirmedIds = new Set(view.decisions.filter((item) => item.status === "confirmed").map((item) => item.id));
   if (draft.content.decisionIds.some((id) => !confirmedIds.has(id))) throw invalidState("抓取任务引用了尚未确认的负责人取舍");
   const timestamp = now().toISOString();
@@ -406,16 +361,18 @@ async function confirmTaskDraft(
         marketScope: task.content.marketScope,
       });
     }
-    await transaction.update(captureTaskDraftVersions).set({
+    const changedDraft = await transaction.update(captureTaskDraftVersions).set({
       status: "confirmed", taskId: task.id, confirmedAt: timestamp,
-    }).where(eq(captureTaskDraftVersions.id, draft.id));
+    }).where(and(eq(captureTaskDraftVersions.id, draft.id),
+      eq(captureTaskDraftVersions.status, "draft"))).returning({ id: captureTaskDraftVersions.id });
+    if (changedDraft.length !== 1) throw invalidState("待确认抓取任务草稿已更新");
     const changed = await transaction.update(categoryInterviewSessions).set({
       phase: "confirmed", revision: view.session.revision + 1, updatedAt: timestamp,
     }).where(and(eq(categoryInterviewSessions.id, input.sessionId),
       eq(categoryInterviewSessions.revision, input.expectedRevision))).returning({ id: categoryInterviewSessions.id });
     if (changed.length !== 1) throw revisionConflict(input.sessionId);
   });
-  const interview = await requireView(db, input.sessionId);
+  const interview = await requireCategoryInterviewView(db, input.sessionId);
   const confirmedDraft = interview.taskDrafts.find((item) => item.id === draft.id)!;
   return { interview, draft: confirmedDraft, task };
 }
@@ -430,7 +387,9 @@ async function finishAbnormal(
   now: () => Date,
   createId: (kind: string) => string,
 ) {
-  const current = await requireView(db, view.session.id);
+  const current = await requireCategoryInterviewView(db, view.session.id);
+  // WHY：异常收尾也必须持有本轮 revision lease；旧回合不能把后来恢复或修订出的新状态覆盖成 failed。
+  if (current.session.revision !== view.session.revision || current.session.turnState !== "running") return;
   const timestamp = now().toISOString();
   await db.transaction(async (transaction) => {
     if (text) await transaction.insert(categoryInterviewMessages).values({
@@ -438,88 +397,13 @@ async function finishAbnormal(
       sequence: current.messages.length + 1, role: "assistant", text,
       deliveryStatus: status, error, timelineParts, createdAt: timestamp,
     });
-    await transaction.update(categoryInterviewSessions).set({
+    const changed = await transaction.update(categoryInterviewSessions).set({
       turnState: status, revision: current.session.revision + 1, updatedAt: timestamp,
     }).where(and(eq(categoryInterviewSessions.id, view.session.id),
-      eq(categoryInterviewSessions.revision, current.session.revision)));
+      eq(categoryInterviewSessions.revision, view.session.revision),
+      eq(categoryInterviewSessions.turnState, "running"))).returning({ id: categoryInterviewSessions.id });
+    if (changed.length !== 1) throw revisionConflict(view.session.id);
   });
-}
-
-async function loadView(db: WorkbenchDb, sessionId: string): Promise<CategoryInterviewView | null> {
-  const session = await db.query.categoryInterviewSessions.findFirst({ where: eq(categoryInterviewSessions.id, sessionId) });
-  if (!session) return null;
-  const [messages, decisions, unresolvedItems, rawDrafts] = await Promise.all([
-    db.select().from(categoryInterviewMessages).where(eq(categoryInterviewMessages.sessionId, sessionId))
-      .orderBy(asc(categoryInterviewMessages.sequence)),
-    db.select().from(categoryInterviewDecisions).where(eq(categoryInterviewDecisions.sessionId, sessionId))
-      .orderBy(asc(categoryInterviewDecisions.createdAt)),
-    db.select().from(categoryInterviewUnresolvedItems).where(eq(categoryInterviewUnresolvedItems.sessionId, sessionId))
-      .orderBy(asc(categoryInterviewUnresolvedItems.createdAt)),
-    db.select().from(captureTaskDraftVersions).where(eq(captureTaskDraftVersions.sessionId, sessionId))
-      .orderBy(asc(captureTaskDraftVersions.version)),
-  ]);
-  const taskDrafts = rawDrafts.flatMap((row) => {
-    const parsed = captureTaskDraftVersionSchema.safeParse(omitNulls(normalizeTimestamps(row)));
-    return parsed.success ? [parsed.data] : [];
-  });
-  const normalizedDecisions = decisions.map(normalizeDecision);
-  const normalizedUnresolvedItems = unresolvedItems.map((item) => interviewUnresolvedItemSchema.parse(
-    omitNulls(normalizeTimestamps(item)),
-  ));
-  return categoryInterviewViewSchema.parse({
-    session: normalizeSession(session, taskDrafts, normalizedDecisions, normalizedUnresolvedItems),
-    messages: messages.map((item) => normalizedInterviewMessageSchema.parse(omitNulls(normalizeTimestamps(item)))),
-    decisions: normalizedDecisions,
-    unresolvedItems: normalizedUnresolvedItems,
-    taskDrafts,
-  });
-}
-
-async function loadViewByTaskId(db: WorkbenchDb, taskId: string) {
-  const draft = await db.query.captureTaskDraftVersions.findFirst({
-    where: eq(captureTaskDraftVersions.taskId, taskId),
-    orderBy: [desc(captureTaskDraftVersions.version)],
-  });
-  return draft ? loadView(db, draft.sessionId) : null;
-}
-async function requireView(db: WorkbenchDb, sessionId: string) {
-  const view = await loadView(db, sessionId);
-  if (!view) throw new CategoryInterviewError("not_found", `抓取任务对话不存在：${sessionId}`);
-  return view;
-}
-function normalizeSession(
-  row: typeof categoryInterviewSessions.$inferSelect,
-  drafts: CaptureTaskDraftVersion[] = [],
-  decisions: CategoryInterviewView["decisions"] = [],
-  unresolvedItems: CategoryInterviewView["unresolvedItems"] = [],
-) {
-  const rawPhase = row.phase as string;
-  const confirmedIds = new Set(decisions.filter((item) => item.status === "confirmed").map((item) => item.id));
-  const hasOpenOwnerDecision = decisions.some((item) => item.status === "proposed")
-    || unresolvedItems.some((item) => item.owner === "user" && item.status === "open");
-  const hasConfirmableDraft = !hasOpenOwnerDecision && drafts.some((item) => item.status === "draft"
-    && item.content.decisionIds.every((id) => confirmedIds.has(id)));
-  const phase = rawPhase === "confirmed" ? "confirmed" : hasConfirmableDraft ? "task_ready" : "active";
-  return interviewSessionSchema.parse({ ...normalizeTimestamps(row), phase });
-}
-function normalizeDecision(row: typeof categoryInterviewDecisions.$inferSelect) {
-  const options = row.options && row.options.length >= 2 ? row.options : [
-    { label: row.selection, description: row.rationale, recommended: true },
-    { label: "重新讨论", description: "历史决定未保存完整选项，需要时重新讨论。", recommended: false },
-  ];
-  return interviewDecisionSchema.parse(omitNulls(normalizeTimestamps({ ...row, options })));
-}
-function normalizeTimestamps<T extends Record<string, unknown>>(value: T): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...value };
-  for (const key of ["createdAt", "updatedAt", "confirmedAt", "resolvedAt"] as const) {
-    const item = result[key];
-    if (typeof item === "string") result[key] = new Date(item).toISOString();
-  }
-  return result;
-}
-
-function omitNulls<T extends Record<string, unknown>>(value: T) {
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== null));
 }
 
 function requireRevision(view: CategoryInterviewView, expected: number) {

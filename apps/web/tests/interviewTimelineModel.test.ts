@@ -11,6 +11,7 @@ import {
   appendPendingTurn,
   collapseWebSearchActivities,
   completeAssistantMessage,
+  isActionErrorAlreadyVisible,
   reconcilePersistedMessages,
 } from "../src/pages/interviewTimelineModel";
 
@@ -22,7 +23,7 @@ describe("采访单回合时间线", () => {
       userId: "pending-user-1",
       userText: "抓冰箱",
       createdAt: NOW,
-      activity: activity("turn-lifecycle", "agent", "连接本机 Codex"),
+      activity: activity("turn-lifecycle", "agent", "准备本轮分析"),
     });
     messages = appendAssistantActivity(
       messages,
@@ -143,6 +144,18 @@ describe("采访单回合时间线", () => {
 
     expect(search?.type === "activity" ? search.activity.urls : undefined).toHaveLength(52);
     expect(search?.type === "activity" && interviewTurnActivitySchema.safeParse(search.activity).success).toBe(true);
+  });
+
+  it("持久化助手消息已显示同一错误时不再渲染第二份全局错误", () => {
+    const error = "Codex 返回结果不符合协议：taskCandidate.jd.scope";
+    const failed = {
+      ...assistantMessage("assistant-failed", 1, "正在整理结果。"),
+      deliveryStatus: "failed" as const,
+      error,
+    };
+
+    expect(isActionErrorAlreadyVisible([failed], error)).toBe(true);
+    expect(isActionErrorAlreadyVisible([failed], "另一个错误")).toBe(false);
   });
 });
 

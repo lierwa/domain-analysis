@@ -1,13 +1,13 @@
 # 数据抓取与清洗平台开发进度
 
 更新日期：2026-08-19
-当前阶段：`ROADMAP.md` 1A 对话生成抓取任务
-总体状态：代码清理、新 1A 契约和本机迁移已完成；2026-08-19 已根据真实截图和 Workbench 运行纠正 Timeline 顺序、Composer、工具详情、Web Search 折叠/网址保留、icon-text 对齐、未完成对话刷新恢复及任务记录删除。全量类型检查、测试、生产构建和本轮真实 UI/API 已通过；尚未提交/推送，1A 仍待用户验收。
+当前阶段：`ROADMAP.md` 1B 最小抓取规划；1A 采访契约已通过自动化与真实页面终检，产品负责人验收待完成
+总体状态：Capture Task → 可见 Planning Run → 版本化 Crawl Plan Draft → 人工确认的 1B 纵切片已实现，最新 Crawl Plan 仍为未确认 v2，确认不会创建 Source Run。1A 已把任意 Composer 输入统一交给 Codex 理解，平台来源由系统调查，最新草稿只有显式确认后才创建或推进 Capture Task；本轮全量测试、类型检查、生产构建和真实页面烟测已通过。
 当前积分：85.5（以 `AGENT-SCORECARD.md` 为准）
 
 ## 1. 本轮目标
 
-用户已确认项目只有两个阶段：数据抓取、数据清洗。当前只做抓取，并从第一项人工验收开始：在 Workbench 新建抓取任务，输入“抓冰箱”等需求，检查对话和最终抓取任务草稿是否正确。
+用户已确认项目只有两个阶段：数据抓取、数据清洗。当前为已确认的标准商品 Capture Task 建立最小抓取规划纵切片，让计划直接冻结具体来源、每个来源的原始捕获内容和数量；确认计划不得创建 Source Run 或访问真实来源。手工制品、孤品和定制品等非标准商品不在当前范围。
 
 ## 2. 已完成的代码清理
 
@@ -36,8 +36,8 @@
 - 商品门类；
 - 中国大陆普通消费者实际可购买的市场口径，不按品牌国籍排除；
 - 通用抓取内容和该品类补充内容；
-- 京东抓取意向及固定范围；
-- 系统本轮真实调查过的候选来源、格式和访问状态；
+- 平台来源范围（京东由标准商品平台来源策略确定，不作为负责人取舍题；淘宝是后续同级候选，当前没有 crawler/Provider）；
+- 系统通过已完成搜索发现的候选来源及当前已知格式和访问状态，不把搜索结果冒充已接入或已抓取；
 - 排除项、未决项和已确认决定。
 
 用户整体确认后生成正式 Capture Task；不会自动开始真实抓取。草稿或正式任务范围不足时都能继续原对话：新草稿追加版本，后续确认保持 Capture Task ID 不变并推进 revision，历史确认版本不覆盖。
@@ -46,14 +46,14 @@
 
 ```text
 Baseline Impact:
-- touched modules: shared, db, workbench, worker, api, web, repository skill, migrations, authoritative docs
-- owning fact source: Interview Module owns dialogue; Capture Task owns confirmed scope; Source Dataset owns raw captures
-- public interface changed: yes, ProductProject/Brief contracts replaced by CaptureTask/TaskDraft contracts
-- new protocol/adapter/fallback: no new fallback; old legacy source payload is explicitly labeled on read
-- compatibility or legacy path changed: yes, old source rows are preserved; old structured payloads are read as legacy_structured_json
-- research update required: no new technology choice; existing accepted PostgreSQL/Drizzle/Fastify/Codex/Crawlee/p-queue/cockatiel retained
-- architecture or ADR update required: architecture and roadmap changed; no new hard-to-reverse technology ADR
-- tests and real-surface validation to run: typecheck, tests, build, migration, API/Web start, Workbench dialogue acceptance
+- touched modules: shared Crawl Plan contract, db migration, Workbench Planning Module/App Server adapter, API SSE, task-page Web, repository Skill and authority docs
+- owning fact source: Capture Task owns confirmed scope; Planning Run owns generation history; versioned Crawl Plan owns source/content/quantity decisions; Source Dataset continues to own future raw captures
+- public interface changed: yes, added Crawl Planning view/run/confirm contracts and HTTP routes
+- new protocol/adapter/fallback: reuses the existing App Server stdio seam; no new transport, queue or fallback
+- compatibility or legacy path changed: yes, existing legacy source_collection_plans rows remain readable and are excluded from the new task/version uniqueness rule
+- research update required: yes, R-035 records why the visible foreground App Server run is used and durable background workflow is deferred
+- architecture or ADR update required: architecture and roadmap clarified for 1B; ADR-0012 records the explicit bounded exception to the former 1A sequencing gate; no new technology ADR
+- tests and real-surface validation to run: migration, full typecheck/test/build, current task Planning Run, refresh recovery and zero-Source-Run check
 ```
 
 ## 5. Patch Disposition
@@ -198,7 +198,65 @@ Patch Disposition:
 - reason: the old patch fixed the live screen but did not persist tool history and still leaked engineering-agent bootstrap into the product conversation
 ```
 
+### 2026-08-19 产品文档统一与标准商品采访边界
+
+用户确认：
+
+- 采访 Skill 面向有稳定品牌、型号、规格、分类或标准的标准商品，例如冰箱和电视机；手工制品等非标准商品不在当前范围；
+- Agent 是专业抓取任务顾问，参考 `grill-with-docs` 用调查、解释、推荐和一次一问推动负责人理解并确认真实取舍；
+- 推荐项应当是当前证据下的专业默认答案，不能为了凑出相悖选项制造问题；
+- 对冰箱等家电，京东是必须覆盖的核心平台数据源，淘宝是后续同级多平台来源且当前没有 crawler/Provider；不把“是否纳入京东/淘宝”或网站选择作为负责人问题。
+
+文档处置：
+
+- 重写产品导航、PRD、总体技术方案和 MVP 实施计划，使其与当前两阶段架构、`CONTEXT.md`、`ROADMAP.md` 和代码主线一致；
+- 旧 Provider/知识包产品规范明确降为历史资料；旧需求问题树改为当前有效决定；
+- ADR-0012 改为标准商品专业采访与 Capture Task，新增 ADR-0015 记录原始数据优先的两阶段产品决定；旧知识生产 ADR 标记为由 ADR-0015 取代；
+- 更新 `AGENTS.md`、`CONTEXT.md`、`ARCHITECTURE.md`、`ROADMAP.md` 和 `RESEARCH.md` 的当前适用边界。
+
+```text
+Baseline Impact:
+- touched modules: authority/product/domain/architecture/progress docs only
+- owning fact source: Capture Task Interview / Capture Task; Source Dataset owns raw source data
+- public interface changed: no; current jd schema mismatch is recorded, not hidden
+- new protocol/adapter/fallback: no
+- compatibility or legacy path changed: old knowledge-platform docs and ADRs become historical
+- research update required: no new technology; current-applicability index corrected
+- architecture or ADR update required: yes, product scope and interview responsibility changed
+- tests and real-surface validation to run: documentation consistency search and diff check; Skill behavior requires later real Workbench acceptance
+```
+
+本轮架构影响：改变产品适用范围和采访职责基线，但没有修改生产代码或公共 contract。Skill 如何承载平台策略、来源观察层级以及确定性草稿门仍在设计讨论中；未确认前不得直接实现。
+
+### 2026-08-19 Capture Task 到 Crawl Plan 纵切片
+
+```text
+Baseline Impact:
+- touched modules: shared Crawl Planning contract, Workbench DB/schema/module/Codex runtime, API SSE, Web task page, repository Skill, migration and authority docs
+- owning fact source: Capture Task owns requested scope; Crawl Plan owns source/content/quantity; Planning Run owns generation history; Source Run remains future execution fact
+- public interface changed: yes, add typed CrawlPlanningView/Event and three HTTP routes
+- new protocol/adapter/fallback: reuse existing App Server stdio and SSE; no fallback, Provider, background queue or persistent Codex thread
+- compatibility or legacy path changed: existing source_collection_plans rows remain distinguishable because only rows with planning_run_id enter the new planning view
+- research update required: yes, R-035 records App Server reuse and DBOS/background queue deferral
+- architecture or ADR update required: architecture fact ownership and module boundary updated; no new difficult-to-reverse technology ADR
+- tests and real-surface validation to run: contract, fake App Server, PostgreSQL integration, API/Web projection, full typecheck/test/build, real PC Workbench planning run
+```
+
+```text
+Patch Disposition:
+- delete: none; no prior production Crawl Planning implementation existed
+- keep: Capture Task revision, ordered Agent timeline, App Server ephemeral runtime, Source Dataset and immutable raw-data boundary
+- rewrite: unconnected legacy SourceCollectionPlan shape is retained for old rows while new rows receive planning_run_id/version/status and the new Crawl Plan content contract
+- reason: the new contract must directly decide source/content/quantity without pretending that Provider, frequency, permission or persistence gates have passed
+```
+
+实现边界：Planning Run 只使用 App Server 网页搜索，所有来源当前标为 `search_discovered`；未验证的 Provider、许可、登录、验证码、风控、频控和持久化能力必须进入 `executionBlockers`。运行连接关闭即中止，完成版本持久化；不引入 DBOS、手写队列、Agent registry 或自动开始抓取。
+
+本轮架构影响：改变。新增 Crawl Planning Module 与公共 typed contract，明确它独占“来源、内容、数量”的计划事实；Capture Task、Planning Run、Crawl Plan 与 Source Run 的 ownership 分离，API/Web 只适配和投影。依赖方向仍为 Web → API → Workbench → DB/注入式 Codex runtime。
+
 ## 6. 验证记录
+
+本节按时间保留历史验证证据；其中“返回京东范围问题”“Workbench 直接规范化数字答案”“首轮或任意重试看到搜索即通过”等结果已经被后续根因修复取代，只证明当时的 transport/UI 局部能力，不代表当前采访契约。当前有效契约及待验证门以本节末尾“采访工作资料与状态边界补全”为准。
 
 - `npm install` 与依赖清单收口：成功；移除旧表单、旧 POC 和旧组合根的无调用方依赖，lockfile 中 `node_modules` package entries 由 910 降至 768（净减少 142）。当前审计仍报告 19 个依赖漏洞（1 low / 6 moderate / 9 high / 3 critical），未擅自执行 breaking `audit fix`。
 - `npm run typecheck`：shared、db、workbench、worker、api、web 全部通过。
@@ -267,6 +325,115 @@ Patch Disposition:
 
 这些结果不等于 1A 通过；系统运行链已真实通过，但采访问题与后续抓取任务草稿仍必须由用户验收。
 
+### 2026-08-19 Crawl Planning 最小纵切片
+
+- 数据库已应用 `0012_open_sentinel.sql`；新增 Planning Run，并在既有计划表上保存 task revision、版本、状态和确认时间，不建设第二套任务或来源事实源。
+- 真实“家用冰箱抓取任务”运行两版计划。v1 完成后，v2 按“沿用来源、内容和数量口径，但不得把 Provider、许可、频控或可访问性写成已通过”重新核实；v2 成为当前 draft，v1 自动变为 superseded，未覆盖历史。
+- v2 明确规划三个来源：京东冰箱频道、国家标准全文阅读、美的官方说明书；明确目录/详情全量、每 SKU 最多 30 条评价、标准题录全量和 20 份说明书样本，并为每项给出分母、唯一键、遍历与停止条件。
+- Workbench 在运行中真实展示 commentary 和折叠网页搜索，刷新后 v2 仍可审查。来源观察等级、访问状态和发现时间统一由服务端写为 `search_discovered / unknown / Planning Run 完成时间`，模型不能冒充已访问或已获许可。
+- 当前计划仍为 draft，未替用户确认。真实复查 Source Run 数量为 0；生成、修订和确认计划的路径都不负责开始抓取。
+- 自动验证：全量 `npm test` 为 16 files passed、1 skipped，40 tests passed、1 skipped；六 workspace `npm run typecheck` 通过；`npm run build` 通过（Web 2301 modules，主 JS 579.50 kB / gzip 171.08 kB，保留既存大于 500 kB warning）；`git diff --check` 通过。
+
+本轮架构影响：增加 1B 的公共 Crawl Plan contract 与 Workbench 深模块，但不改变采访、Capture Task 或 Source Dataset 的事实归属；Codex 仍是无状态单轮外部执行器。没有新增 Provider、后台队列、自动恢复、repair 或 fallback。
+
+### 2026-08-19 京东默认策略、采访连续运行与失败表面修复（回答路径已被下一节纠正）
+
+状态纠正：本节曾把“Workbench 直接规范化数字答案”当成完成态；真实复验已证明这仍把采访降成表单，并会丢失同一句中的补充、纠正和追问。该回答路径及其测试已由下一节删除或重写；本节只保留当时的历史处置记录，当前行为以下一节为准。
+
+```text
+Baseline Impact:
+- touched modules: interview Skill, shared Capture Task/interview output contract, Category Interview Module, App Server transport/runtime, Web Timeline, PostgreSQL repair migration, focused tests and authority docs
+- owning fact source: unchanged; Workbench/PostgreSQL owns product messages, Decisions, unresolved items and versioned task drafts; platform default policy is enforced at the shared/Workbench boundary
+- public interface changed: yes; runtime output now rejects jd.scope owner questions, and numeric answers are normalized to the corresponding proposal label while preserving the raw user message
+- new protocol/adapter/fallback: App Server stdio connection lifecycle is now explicit and reusable; every business turn still starts a new ephemeral thread; no fallback or persistent Codex thread
+- compatibility or legacy path changed: yes; migration 0013 resolves open jd.scope items and supersedes obsolete decisions that are not referenced by an existing task draft
+- research update required: yes; R-029 records initialize-once connection reuse and corrects the earlier per-turn process conclusion
+- architecture or ADR update required: architecture clarification required; fact ownership and dependency direction are unchanged, so no new ADR
+- tests and real-surface validation to run: shared policy/schema, ordinal confirmation, PostgreSQL repair/integration, two-turn same-connection protocol, structured error detail, duplicate-error projection, full typecheck/test/build, real new-task/revision/history surfaces
+```
+
+```text
+Patch Disposition:
+- delete: forced jd.scope question rules, per-turn App Server process creation, duplicated global error text, and tests that treated the wrong JD question as expected behavior
+- keep: Workbench-owned timeline/state, official ephemeral thread, typed SSE, Zod final boundary, web-search requirement, Source Dataset separation and no-auto-crawl gate
+- rewrite: default JD source policy, decision confirmation normalization, reusable stdio client lifecycle, structured validation error and historical jd.scope state repair
+- reason: the previous patch encoded a platform default as a fake owner choice, paid a new connection cost on every reply, hid the failing field, duplicated the same failure in the UI and left the conversation blocked
+```
+
+- 根因链已闭合：采访 Skill 明写“必须且只能问一次京东范围”；平台 prompt 再次强调该问题；`confirmDecision` 把用户输入 `1` 原样保存且没有解决同 key 的未决项；下一轮因此仍携带冲突状态，最终 Zod 失败又被压成无字段路径的通用错误。Web 同时渲染持久化消息错误和页面级 `actionError`，形成截图中的中断与重复红框。
+- 当前不再向负责人询问 `jd.scope`。`applyDefaultJdSourcePolicy` 对适用标准商品统一写入京东全范围；runtime schema 对任何 question/proposal/unresolved `jd.scope` 失败关闭，Workbench 在草稿落库前再次执行同一策略。用户输入数字序号时，用户消息保留原文，Decision 保存稳定 option label，并同时解决对应未决项。
+- App Server 现在按 runtime 建立一条 `stdio` 连接并只初始化一次；同一连接可以运行多个 `thread/start(ephemeral:true)`，每个业务轮次仍是新的内存 thread，不使用 `resume`。Workbench 关闭时释放连接，取消使用官方 `turn/interrupt`。页面不再把每轮协议握手写成“连接本机 Codex”，而从“准备本轮分析”开始。
+- 结构化输出失败现在返回最多 5 个 Zod 字段路径与原因，并明确“本轮未保存”；UI 检测到同一持久化错误已在 assistant 消息中展示时，不再重复渲染页面级错误文字。迁移 `0013_repair_jd_owner_question.sql` 已应用，历史失败会话的两条 `jd.scope` Decision 均为 `superseded`，未决项均为 `resolved`；历史消息原文保持不可变。
+- 自动验证：官方 Skill validator 输出 `Skill is valid!`；聚焦无数据库回归 13/13、Category Interview PostgreSQL 集成 5/5；全量 `npm test` 为 16 files passed、1 skipped，44 tests passed、1 skipped；六 workspace `npm run typecheck` 通过；`npm run build` 通过（Web 主包 579.98 kB，保留既存大于 500 kB warning）。
+- 终检按代码规范把已有的采访视图读取/历史规范化逻辑移入同层 `categoryInterviewViewStore.ts`；它隔离 PostgreSQL 读取 seam，主 `categoryInterviewModule.ts` 降为 494 行，没有新增公共接口或转发层。拆分后重新运行上述全量测试、类型检查和构建，结果不变。
+- 真实 PC 路径：新会话 `interview-session-89c424c1-ef45-4d22-b9af-da7a65caffd0` 输入“抓冰箱”后直接形成 0 个负责人 Decision、5 个来源的 v1 草稿，京东默认包含完整类目/商品/参数/媒体/评价范围；确认后继续输入“补充淘宝公开入口，不改变其他范围”，同一会话形成并确认 v2，新增 2 个淘宝受限来源且未改京东范围。正式任务 `capture-task-f6aaf4e8-41d4-43f5-bbb5-6f0764b119c5` 当前 revision=2，Source Run=0。
+- 历史失败会话 `interview-session-da08e840-b6d0-4fcb-b368-3f2589dcec35` 真实页面复验只有一个 error alert；旧错误问句作为历史消息保留，不再是可确认的生产 Decision。较早验证记录中“返回三项京东范围问题”“显示连接本机 Codex”的内容均是修复前历史证据，不再代表当前验收行为。
+
+本轮架构影响：外部 App Server seam 的连接生命周期由“每轮进程”改为“runtime 复用连接、每轮 ephemeral thread”，并收紧 shared runtime output contract；产品会话、Decision、草稿和任务事实仍只属于 Workbench/PostgreSQL，没有第二套 Session、后台队列、Provider、repair fallback 或自动抓取。
+
+### 2026-08-19 任意采访输入先理解、再提交工作资料
+
+```text
+Baseline Impact:
+- touched modules: interview Skill, shared per-turn output contract, Category Interview Module, Codex interview runtime, API/Web Composer path, focused tests and authority docs
+- owning fact source: unchanged; Workbench/PostgreSQL owns raw messages, Decisions, unresolved items, research observations and versioned task drafts; Codex only proposes one-turn semantic deltas
+- public interface changed: yes; every turn is now user_message, decisionResolution replaces the direct confirmation endpoint, and proposedDecision is the only question representation
+- new protocol/adapter/fallback: no; existing App Server stdio, ephemeral thread and local Zod boundary remain; no automatic model retry, repair, fallback or persistent Codex thread; user-triggered retry is restricted to the latest failed/interrupted raw input
+- compatibility or legacy path changed: yes; historical failed messages and old Decisions remain immutable/readable, but no new input can enter the direct-confirm branch
+- research update required: yes; R-029 records why arbitrary interview input requires an input-first semantic delta rather than a form confirmation path
+- architecture or ADR update required: clarification only; the Workbench/Codex ownership boundary is unchanged and ADR-0012 is updated, so no new ADR
+- tests and real-surface validation to run: mixed ordinal-plus-facts, custom answer, question/non-answer, same-turn next question/draft, duplicate question removal, full typecheck/test/build, Skill validation and real browser run
+```
+
+```text
+Patch Disposition:
+- delete: Web direct-confirm branch, confirmation HTTP/client method, `decision_confirmed` trigger, duplicate `question` output, Skill-level full-state JSON protocol and tests protecting those paths
+- keep: raw user-message persistence, Workbench/PostgreSQL fact ownership, append-only draft/version history, ephemeral App Server turn, typed final boundary, default JD policy and explicit final task confirmation
+- rewrite: runtime output as one-turn semantic delta; Workbench atomically resolves the current proposed Decision and records additional facts/unresolved changes/task draft from the same input
+- reason: the previous patch only made bare ordinals pass; it could not understand `1，另外排除二手` or distinguish an answer from a correction, rejection, supplement or question
+```
+
+- 旧截图对应的可验证根因不是“严格 JSON 本身不该存在”，也不只是字符 `1`。旧 Web 在存在 proposed Decision 时绕过 Codex，直接把原始输入交给 `confirmDecision`；数据库因此留下 `selection: "1"`，下一轮才调用 Codex，并在最终结构校验处显示通用失败。历史运行没有保存完整原始 final JSON/Zod 字段路径，因此不能伪造当时究竟是哪一个字段违规；可以确认的是语义理解在模型之前被短路，而严格校验只是错误显现的位置。
+- 当前 Composer 不再判断“这是选项回答还是普通消息”。任何输入都先按原文持久化并交给 Codex；模型可以在同一 typed delta 中解析当前决定、记录补充/纠正事实、更新未决项，并提出下一项真实取舍或生成完整草稿。Workbench 校验并提交增量，Skill 只约束采访行为和工作资料记录，不再拥有传输 JSON 协议。
+- 红灯先证明 `1，另外不包含二手商品` 无法产生确认决定；修复后定向测试覆盖：序号加补充事实、自由回答、只追问不误确认、同轮继续下一题或生成草稿、原始消息/稳定选项/决定引用、唯一 proposedDecision 表达。官方 Skill validator 输出 `Skill is valid!`。
+- 上一版自动验证（不覆盖下方最新契约修复）：全量 `npm test` 为 16 files passed、1 skipped，45 tests passed、1 skipped；六 workspace `npm run typecheck` 通过；`npm run build` 通过（Web 2301 modules，主 JS 578.57 kB / gzip 170.93 kB，保留既存大于 500 kB warning）；`git diff --check` 通过。
+- 上一版真实 PC 复验（只作为历史基线）在历史失败会话 `interview-session-da08e840-b6d0-4fcb-b368-3f2589dcec35` 上继续进行，因此旧红色失败消息仍按不可变历史保留。输入“抓电视机，首期在售型号和近三年停售型号之间我还没决定”后，Agent 默认纳入京东且只询问真实的型号时间范围；再输入“1，另外明确排除二手商品；淘宝只是后续同级平台，现在不要写成已经有淘宝爬虫”，同一轮将 `1` 确认为“仅在售型号（推荐）”，记录二手排除和淘宝能力纠正，并生成未确认 v1 草稿。该轮当时为 `task_ready/idle` 且没有创建 Capture Task 或 Source Run，但它尚未覆盖下方新增的撤回、范围未变、换品类、时间和 retry 门。
+
+本轮架构影响：澄清并收紧采访公共 contract，但不改变事实归属。Codex 只返回本轮理解增量；Workbench 仍是消息、决定、事实资料、未决项和版本化草稿的唯一权威来源。没有新增 Provider、第二套会话、后台运行、自动模型重试、repair、fallback 或自动抓取。
+
+### 2026-08-19 采访工作资料与状态边界补全（最终验证待完成）
+
+```text
+Baseline Impact:
+- touched modules: interview Skill, shared per-turn output contract, Category Interview Module/state policy, App Server search completion signal, Web confirmation projection, focused tests and authority docs
+- owning fact source: Workbench/PostgreSQL continues to own raw messages, Decisions, unresolved items, source observations and versioned drafts; Capture Task owns only explicitly confirmed scope
+- public interface changed: yes; 增加问题撤回，移除独立 Decision 确认路径，并收窄草稿确认、retry 和搜索完成证据
+- new protocol/adapter/fallback: no new transport or fallback; retain App Server stdio, ephemeral thread, typed final boundary and user-triggered bounded retry
+- compatibility or legacy path changed: historical messages/drafts remain readable; new input can no longer leave an older draft confirmable
+- research update required: yes; R-029 records the corrected input, search-completion, observedAt and retry boundaries
+- architecture or ADR update required: yes, clarify the confirmed interview contract in ARCHITECTURE and amend ADR-0012; fact ownership and dependency direction do not change
+- tests and real-surface validation to run: mixed raw input, withdrawal, platform owner-question rejection, explicit/latest draft confirmation, revision history, exact retry, completed search evidence, full test/typecheck/build, clean browser smoke and screenshots
+```
+
+```text
+Patch Disposition:
+- delete: any remaining assumption that a current question limits user input, that a started search proves research, or that an older task-ready draft remains confirmable during a new turn
+- keep: input-first raw-message persistence, Workbench-owned working record, strict runtime Zod boundary, append-only draft history, default JD policy and explicit task confirmation
+- rewrite: question rejection as withdrawal, confirmability as latest idle+task_ready only, source timestamps as Workbench-owned, and retry as exact latest failed/interrupted message only
+- reason: these are the remaining state and evidence gaps that could still interrupt a valid interview or confirm stale scope
+```
+
+已确认契约：
+
+- Composer 的任意内容都先由 Agent 结合完整工作资料理解；成立的问题前提否定撤回当前问题，不能强行归入选项；
+- 品牌、型号、标准、来源平台、网站和入口由系统调查。家电默认覆盖京东；淘宝是后续同级候选且当前没有 crawler/Provider；
+- 工作资料持续保留用户事实、纠正、决定/撤回、未决项、来源调查和草稿版本。纯解释可明确当前范围不变，不制造新 revision；
+- 任意新输入立即使旧草稿离开可确认态；只有最新回合结束且 session 为 `idle + task_ready` 时可确认，只有用户显式确认才创建或推进 Capture Task；
+- 模型提供的来源时间不权威；Workbench 在草稿提交时写入当前时间；
+- 首次调查和换品类必须完成 `web_search`，started/failed 不算；retry 只允许最近一条 failed/interrupted 原文，不能重放更早历史消息。
+
+验证状态：2026-08-19 当前代码全量自动化 `65 passed / 1 skipped`，六个 workspace 类型检查通过，生产构建通过；Web 构建仅有既有 581.35 kB chunk 警告。真实页面以全新冰箱会话完成三轮：首轮主动搜索且只问型号生命周期，混合输入“1＋排除二手＋淘宝仅后续候选”被完整理解，后续按推荐确认品类边界后生成 v1 草稿；页面无错误，持久状态为 `task_ready + idle`、失败消息 0、草稿未关联 `taskId`，京东默认纳入，淘宝为 `unknown` 后续候选，正式 Capture Task 仍为 2 条。最终 Web 函数拆分后又以完整边界原文重跑一轮式烟测，当前代码直接生成相同约束的 v1 草稿，状态仍为 `task_ready + idle`、失败消息 0、正式任务仍为 2 条。发现模型正文可能导致选项显示“1、3”后，改由 Workbench 按结构化 options 确定性编号；重启 API 再跑首轮已显示连续 1/2/3 且无错误。全部临时烟测会话已精确删除；三张截图仅保存在本机验收目录，不属于跨电脑证据，跨电脑接续以包含本节的远端 Git 提交为准。产品负责人验收尚未关闭。
+
 ## 7. 数据迁移结果
 
 迁移已删除已经退出当前阶段的旧表名和知识字段；它保留：
@@ -278,11 +445,11 @@ Patch Disposition:
 
 迁移前发现上一版 0010 已经删除阶段 2 表并新增部分列，但没有完成任务表/列改名。当前迁移按真实状态补齐改名、外键和索引，并使用 `IF EXISTS` 兼容“旧表仍存在/已不存在”两种本地状态。保留表行数前后相同。
 
-用户授权清空后又进行了真实页面复验；清理本轮全部精确测试记录后，当前本机共有 5 个采访 session、11 条消息、3 条决定、3 个未决项、1 个任务草稿和 1 个正式抓取任务，正式任务仍为 `ready`、归档任务为 0。新增部分来自用户本轮“电视机”未完成采访；没有原始抓取数据写进这台 Mac 的正式数据库。
+用户授权清空后又进行了真实页面复验；较早记录中的精确行数只是当时快照。当前本机额外保留本轮真实验收产生的冰箱会话与 revision=2 正式 Capture Task，作为可见证据；其 Source Run 为 0，没有原始抓取数据写进这台 Mac 的正式数据库。历史失败会话没有删除，迁移只修复其可执行状态，不改写消息原文。
 
 ## 8. 下一步与停止门
 
-当前下一步：由用户验收 Web Search、工具时间线刷新恢复和任务记录删除；随后进入采访 Skill 的问题颗粒度、事实调查职责和 confirmed brief 输出设计讨论。本轮只修正 Skill 的运行隔离与注入边界，没有修改采访问题和产物设计。当前请求未授权 commit/push，因此工作区只在本机形成已验证补丁，尚未形成跨电脑接续点。
+当前下一步：用户在任务页审查 1A 新建与修订结果，并决定是否确认最新 Crawl Plan v2；若计划需补来源、内容或数量，继续输入要求生成 v3，不覆盖 v2。确认后仍不开始抓取。后续 1C 必须先为一个已确认来源完成 Provider、许可、访问方式、频控、停止条件和原始持久化通过门。当前请求未授权 commit/push，因此全部修改只在本机，尚未形成跨电脑接续点。
 
 上一轮真流式修复的架构影响：改变外部运行 seam，但不改变领域事实源。Codex 入口由 `exec --ephemeral --json --output-schema` 改为版本锁定的 App Server `stdio`＋`thread/start(ephemeral:true)`；公共 SSE contract 不变，`assistant.delta` 现在来自真实 commentary delta。Workbench 仍是唯一产品会话/任务事实源，没有持久 Codex thread、第二 Provider 或 fallback。
 
@@ -298,11 +465,11 @@ Patch Disposition:
 
 本轮工具时间线持久化与工程命令隔离的架构影响：改变公共消息 contract，`NormalizedInterviewMessage.timelineParts` 成为刷新恢复文字/活动顺序的可选持久化事实；Category Interview/PostgreSQL 的 ownership 与依赖方向不变。App Server 每轮先同步权威 Skill 到隔离产品 cwd，再显式注入并关闭 `shell_tool`/`unified_exec`；新品类首轮没有真实 web search 时失败关闭，adapter 对异常/旧 `commandExecution` 仍不投影。没有新增 Provider、repair、fallback 或第二会话事实源。
 
-HARD STOP：1A 未人工验收前，不实现 Crawl Plan，不访问真实来源，不调用清洗/Evidence/知识加工链。
+HARD STOP：最新 Crawl Plan 未经用户确认，且 Provider、许可、访问方式、频控与停止门未通过前，不创建 Source Run、不访问真实来源；1A 工程验收虽已通过，仍待产品负责人审查；不调用清洗/Evidence/知识加工链。
 
 ## 9. Git 状态
 
 - 仓库：`/Users/guojunxi/Desktop/work/domain-analysis`
 - 分支：`master`
-- 起始 HEAD：`38d5a23e0728019d8265417240b7f4a62fa74233`，开始时与 `origin/master` 一致且工作区干净。
-- 当前工作区包含 Web Search URL contract、持久化 assistant 工具时间线、App Server 工程命令隔离、Web disclosure/alignment、刷新恢复、任务记录删除、测试和架构/调研/进度文档；未 commit、未 push，仅本机可继续。
+- 本轮起始 HEAD：`1191a38c15744537282de5f88b960e8c8a30a589`；本地 `master` 比 `origin/master` 超前 1 个提交。开始时工作区已有用户上一轮的大量未提交文档修改，本轮在其上做最小一致增量，没有回退或覆盖。
+- 当前工作区包含既有文档 WIP 与本轮 Crawl Planning contract、迁移、Workbench/API/Web/Skill/测试和文档修改；未 commit、未 push，仅本机可继续。

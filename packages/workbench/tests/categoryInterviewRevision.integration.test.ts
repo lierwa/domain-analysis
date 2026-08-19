@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type {
-  CaptureTaskContent,
-  CategoryInterviewRuntimeOutput,
-} from "@domain-analysis/shared";
+import type { CategoryInterviewRuntimeOutput } from "@domain-analysis/shared";
 import {
   captureTaskDraftVersions,
   captureTasks,
@@ -20,293 +17,215 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createCategoryInterviewModule,
+  type CategoryInterviewModule,
   type CategoryInterviewRuntime,
   type CategoryInterviewRuntimeEvent,
+  type CategoryInterviewRuntimeInput,
 } from "../src/categoryInterviewModule";
 
 const databaseUrl = process.env.POSTGRES_DATABASE_URL;
 const describeWithPostgres = databaseUrl ? describe.sequential : describe.skip;
+type RuntimeTaskCandidate = NonNullable<CategoryInterviewRuntimeOutput["taskCandidate"]>;
+type Harness = Awaited<ReturnType<typeof createHarness>>;
+let db: WorkbenchDb | undefined;
+let sessionId: string | undefined;
 
-describeWithPostgres("抓取任务确认与修订", () => {
-  let db: WorkbenchDb | undefined;
-  let sessionId: string | undefined;
+afterEach(async () => {
+  if (db && sessionId) await removeSession(db, sessionId);
+  await db?.$client.end();
+  db = undefined;
+  sessionId = undefined;
+});
 
-  afterEach(async () => {
-    if (db && sessionId) await removeSession(db, sessionId);
-    await db?.$client.end();
-    db = undefined;
-    sessionId = undefined;
-  });
-
-  it("将 question 归一化为待回答决定，确认建议项，并在确认后生成同一任务的新版本", async () => {
-    await migrateWorkbenchDatabase(databaseUrl!);
-    db = createWorkbenchDb(databaseUrl!);
-    const runtime = new QueueRuntime();
-    const prefix = `revision-${randomUUID()}`;
-    let idSequence = 0;
-    const interviews = createCategoryInterviewModule(db, runtime, {
-      createId: (kind) => `${prefix}-${kind}-${++idSequence}`,
-    });
-    let view = await interviews.start({ initialRequest: "抓冰箱" });
-    sessionId = view.session.id;
-
-    runtime.push(decisionOutput());
-    await collect(interviews.runTurn({
-      sessionId,
-      trigger: "user_message",
-      text: "抓冰箱",
-      expectedRevision: view.session.revision,
-    }));
-    view = (await interviews.get(sessionId))!;
-    const proposed = view.decisions.find((decision) => decision.status === "proposed")!;
-    view = await interviews.confirmDecision({
-      sessionId,
-      decisionId: proposed.id,
-      selection: "仅商品资料",
-      expectedRevision: view.session.revision,
-    });
-    const confirmed = view.decisions.find((decision) => decision.status === "confirmed")!;
-    expect(confirmed).toMatchObject({
-      selection: "仅商品资料",
-      rationale: "保留分类、店铺和商品详情，不抓评论。",
-    });
-
-    runtime.push(taskOutput(taskContent(confirmed.id, ["https://example.com/jd-fridge"])));
-    await collect(interviews.runTurn({
-      sessionId,
-      trigger: "decision_confirmed",
-      decisionId: confirmed.id,
-      expectedRevision: view.session.revision,
-    }));
-    view = (await interviews.get(sessionId))!;
-    const firstDraft = view.taskDrafts.find((draft) => draft.status === "draft")!;
-    const first = await interviews.confirmTaskDraft({
-      sessionId,
-      draftId: firstDraft.id,
-      expectedRevision: view.session.revision,
-    });
-    expect(first.task.revision).toBe(firstDraft.version);
-
-    runtime.push(taskOutput(taskContent(confirmed.id, [
-      "https://example.com/jd-fridge",
-      "https://example.com/haier-fridge",
-    ])));
-    await collect(interviews.runTurn({
-      sessionId,
-      trigger: "user_message",
-      text: "品牌官网太少，补充海尔官网",
-      expectedRevision: first.interview.session.revision,
-    }));
-    view = (await interviews.get(sessionId))!;
-    const revisedDraft = view.taskDrafts.find((draft) => draft.status === "draft")!;
-    const revised = await interviews.confirmTaskDraft({
-      sessionId,
-      draftId: revisedDraft.id,
-      expectedRevision: view.session.revision,
-    });
-
-    expect(revised.task.id).toBe(first.task.id);
-    expect(revised.task.revision).toBe(revisedDraft.version);
-    expect(revised.task.content.sourceCandidates).toHaveLength(2);
-    expect(revised.interview.taskDrafts.filter((draft) => draft.status === "confirmed")).toHaveLength(2);
-    await expect(interviews.getByTaskId(first.task.id)).resolves.toMatchObject({
-      session: { id: sessionId, phase: "confirmed" },
-    });
-  });
-
-  it("把 Composer 中不同于建议项的回答保存为用户消息和 confirmed Decision", async () => {
-    await migrateWorkbenchDatabase(databaseUrl!);
-    db = createWorkbenchDb(databaseUrl!);
-    const runtime = new QueueRuntime();
-    const prefix = `custom-answer-${randomUUID()}`;
-    let idSequence = 0;
-    const interviews = createCategoryInterviewModule(db, runtime, {
-      createId: (kind) => `${prefix}-${kind}-${++idSequence}`,
-    });
-    let view = await interviews.start({ initialRequest: "抓冰箱" });
-    sessionId = view.session.id;
-
-    runtime.push(decisionOutput());
-    await collect(interviews.runTurn({
-      sessionId,
-      trigger: "user_message",
-      text: "抓冰箱",
-      expectedRevision: view.session.revision,
-    }));
-    view = (await interviews.get(sessionId))!;
-    const proposed = view.decisions.find((decision) => decision.status === "proposed")!;
-    const customAnswer = "纳入京东商品详情和说明书，但不抓评价";
-    view = await interviews.confirmDecision({
-      sessionId,
-      decisionId: proposed.id,
-      selection: customAnswer,
-      expectedRevision: view.session.revision,
-    });
-
-    const userMessage = view.messages.at(-1)!;
-    const confirmed = view.decisions.find((decision) => decision.status === "confirmed")!;
-    expect(userMessage).toMatchObject({ role: "user", text: customAnswer });
-    expect(confirmed).toMatchObject({
-      selection: customAnswer,
-      rationale: customAnswer,
-      sourceMessageId: userMessage.id,
-      supersedesDecisionId: proposed.id,
-    });
-  });
-
-  it("将已展示的网页搜索与说明按顺序持久化，重新读取会话仍完整保留", async () => {
-    await migrateWorkbenchDatabase(databaseUrl!);
-    db = createWorkbenchDb(databaseUrl!);
-    const prefix = `timeline-${randomUUID()}`;
-    let idSequence = 0;
-    const interviews = createCategoryInterviewModule(db, new TimelineRuntime(), {
-      createId: (kind) => `${prefix}-${kind}-${++idSequence}`,
-    });
-    const started = await interviews.start({ initialRequest: "抓电视机" });
-    sessionId = started.session.id;
-
-    await collect(interviews.runTurn({
-      sessionId,
-      trigger: "user_message",
-      text: "抓电视机",
-      expectedRevision: started.session.revision,
-    }));
-
-    const reloaded = await interviews.get(sessionId);
-    expect(reloaded?.messages.at(-1)).toMatchObject({
-      role: "assistant",
-      timelineParts: [
-        { type: "activity", activity: {
-          id: "search-1",
-          kind: "web_search",
-          status: "completed",
-          urls: ["https://www.jd.com/", "https://www.tcl.com/cn/zh/tvs"],
-        } },
-        { type: "text", text: "正在核对电视机来源。" },
-        { type: "text", text: "请选择京东抓取范围。" },
-      ],
-    });
-  });
-
-  it("拒绝把待确认负责人问题和任务草稿写进同一轮", async () => {
-    await migrateWorkbenchDatabase(databaseUrl!);
-    db = createWorkbenchDb(databaseUrl!);
-    const runtime = new QueueRuntime();
-    const prefix = `invalid-draft-${randomUUID()}`;
-    let idSequence = 0;
-    const interviews = createCategoryInterviewModule(db, runtime, {
-      createId: (kind) => `${prefix}-${kind}-${++idSequence}`,
-    });
-    const started = await interviews.start({ initialRequest: "抓电视机" });
-    sessionId = started.session.id;
-    runtime.push({
-      ...decisionOutput(),
-      proposedDecision: {
-        key: "television.initial-data-scope",
-        question: "首期电视机数据应采集到什么深度？",
-        options: decisionOutput().question!.options,
-        selection: "完整京东范围",
-        rationale: "需要负责人决定。",
+describeWithPostgres("抓取任务草稿生成与确认", () => {
+  it("完整混合原文进入 Agent 并形成草稿，确认前没有 Capture Task", async () => {
+    const harness = await createHarness("抓冰箱");
+    ({ db } = harness);
+    sessionId = harness.view.session.id;
+    harness.runtime.push(decisionOutput());
+    await run(harness, "抓冰箱");
+    let view = (await harness.interviews.get(sessionId))!;
+    const proposed = view.decisions.find((item) => item.status === "proposed")!;
+    const candidate = taskContent("refrigerator", "冰箱", proposed.id);
+    candidate.excludedContent = ["二手商品"];
+    const answer = "1，另外不包含二手商品";
+    harness.runtime.push({
+      assistantText: "已采用当前在售型号，并排除二手商品。",
+      decisionResolution: {
+        decisionId: proposed.id, selection: "仅当前在售型号",
+        rationale: "序号回答与补充排除条件已一并理解。",
       },
-      unresolvedItems: [{
-        key: "television.initial-data-scope",
-        description: "等待负责人确认首期范围。",
-        owner: "user",
-      }],
-      taskCandidate: taskContent("television.initial-data-scope", ["https://example.com/tv"]),
+      taskCandidate: candidate,
+      unresolvedItems: [],
+      resolvedUnresolvedKeys: ["catalog.lifecycle-scope"],
+    });
+    await run(harness, answer, view.session.revision);
+    view = (await harness.interviews.get(sessionId))!;
+
+    expect(harness.runtime.inputs.at(-1)?.trigger).toEqual({ type: "user_message", text: answer });
+    expect(view.decisions).toContainEqual(expect.objectContaining({ status: "confirmed" }));
+    expect(view.taskDrafts[0]?.content.excludedContent).toContain("二手商品");
+    expect(await taskCount(db!, sessionId)).toBe(0);
+  });
+
+  it("只有显式确认最新草稿才创建 Capture Task，并应用京东默认范围", async () => {
+    const harness = await createHarness("抓冰箱");
+    ({ db } = harness);
+    sessionId = harness.view.session.id;
+    const view = await createDraft(harness, taskContent("refrigerator", "冰箱"));
+    expect(await taskCount(db!, sessionId)).toBe(0);
+
+    const draft = view.taskDrafts.find((item) => item.status === "draft")!;
+    const confirmed = await harness.interviews.confirmTaskDraft({
+      sessionId, draftId: draft.id, expectedRevision: view.session.revision,
     });
 
-    const events = await collect(interviews.runTurn({
-      sessionId,
-      trigger: "user_message",
-      text: "抓电视机",
-      expectedRevision: started.session.revision,
-    }));
-    const reloaded = await interviews.get(sessionId);
-
-    expect(events).toContainEqual(expect.objectContaining({ type: "turn.failed" }));
-    expect(reloaded?.session).toMatchObject({ phase: "active", turnState: "failed" });
-    expect(reloaded?.taskDrafts).toHaveLength(0);
-    expect(reloaded?.decisions).toHaveLength(0);
-    expect(reloaded?.unresolvedItems).toHaveLength(0);
+    expect(await taskCount(db!, sessionId)).toBe(1);
+    expect(confirmed.task).toMatchObject({
+      revision: 1,
+      content: { jd: { applicable: true, disposition: "included" } },
+    });
+    expect(confirmed.task.content.jd.scope).toContain("review_samples");
   });
 });
 
-class QueueRuntime implements CategoryInterviewRuntime {
+describeWithPostgres("抓取任务草稿历史与最新版本", () => {
+  it("修订产生新草稿但不覆盖历史，确认后更新同一 Capture Task 的版本", async () => {
+    const harness = await createHarness("抓冰箱");
+    ({ db } = harness);
+    sessionId = harness.view.session.id;
+    let view = await createDraft(harness, taskContent("refrigerator", "冰箱"));
+    const firstDraft = view.taskDrafts.find((item) => item.status === "draft")!;
+    const first = await harness.interviews.confirmTaskDraft({
+      sessionId, draftId: firstDraft.id, expectedRevision: view.session.revision,
+    });
+    const revision = taskContent("refrigerator", "冰箱");
+    revision.sourceCandidates.push(brandSource());
+    harness.runtime.push(taskOutput(revision));
+    await run(harness, "补充品牌官网", first.interview.session.revision);
+    view = (await harness.interviews.get(sessionId))!;
+
+    expect(view.taskDrafts.find((item) => item.id === firstDraft.id)).toMatchObject({ status: "confirmed" });
+    expect(view.taskDrafts.find((item) => item.id === firstDraft.id)?.content.sourceCandidates).toHaveLength(1);
+    const latest = view.taskDrafts.find((item) => item.status === "draft")!;
+    expect(latest.content.sourceCandidates).toHaveLength(2);
+    const revised = await harness.interviews.confirmTaskDraft({
+      sessionId, draftId: latest.id, expectedRevision: view.session.revision,
+    });
+    expect(revised.task).toMatchObject({ id: first.task.id, revision: 2 });
+    expect(revised.interview.taskDrafts.filter((item) => item.status === "confirmed")).toHaveLength(2);
+  });
+
+  it("非最新草稿不能确认，也不会提前创建 Capture Task", async () => {
+    const harness = await createHarness("抓显示器");
+    ({ db } = harness);
+    sessionId = harness.view.session.id;
+    let view = await createDraft(harness, taskContent("monitor", "显示器"));
+    const oldDraft = view.taskDrafts.find((item) => item.status === "draft")!;
+    const revision = taskContent("monitor", "显示器");
+    revision.excludedContent = ["二手商品"];
+    harness.runtime.push(taskOutput(revision));
+    await run(harness, "排除二手商品", view.session.revision);
+    view = (await harness.interviews.get(sessionId))!;
+
+    await expect(harness.interviews.confirmTaskDraft({
+      sessionId, draftId: oldDraft.id, expectedRevision: view.session.revision,
+    })).rejects.toThrow("只有最新待确认草稿可以生成抓取任务");
+    expect(await taskCount(db!, sessionId)).toBe(0);
+  });
+});
+
+class RecordingRuntime implements CategoryInterviewRuntime {
+  readonly inputs: CategoryInterviewRuntimeInput[] = [];
   private readonly outputs: CategoryInterviewRuntimeOutput[] = [];
-
-  push(output: CategoryInterviewRuntimeOutput) {
-    this.outputs.push(output);
-  }
-
-  async *run(): AsyncIterable<CategoryInterviewRuntimeEvent> {
+  push(output: CategoryInterviewRuntimeOutput) { this.outputs.push(output); }
+  async *run(input: CategoryInterviewRuntimeInput): AsyncIterable<CategoryInterviewRuntimeEvent> {
+    this.inputs.push(input);
     const output = this.outputs.shift();
     if (!output) throw new Error("测试没有准备采访输出");
     yield { type: "completed", output };
   }
 }
 
-class TimelineRuntime implements CategoryInterviewRuntime {
-  async *run(): AsyncIterable<CategoryInterviewRuntimeEvent> {
-    yield { type: "activity", activity: {
-      id: "search-1", kind: "web_search", label: "搜索网页",
-      urls: ["https://www.jd.com/"], status: "running",
-    } };
-    yield { type: "text_delta", delta: "正在核对电视机来源。" };
-    yield { type: "activity", activity: {
-      id: "search-1", kind: "web_search", label: "搜索网页",
-      urls: ["https://www.tcl.com/cn/zh/tvs"], status: "completed",
-    } };
-    yield { type: "completed", output: decisionOutput() };
-  }
+async function createHarness(initialRequest: string) {
+  await migrateWorkbenchDatabase(databaseUrl!);
+  const db = createWorkbenchDb(databaseUrl!);
+  const runtime = new RecordingRuntime();
+  const prefix = `interview-${randomUUID()}`;
+  let idSequence = 0;
+  const interviews = createCategoryInterviewModule(db, runtime, {
+    createId: (kind) => `${prefix}-${kind}-${++idSequence}`,
+    now: () => new Date("2026-08-19T14:00:00.000Z"),
+  });
+  return { db, runtime, interviews, view: await interviews.start({ initialRequest }) };
+}
+
+async function run(harness: Harness, text: string, revision = harness.view.session.revision) {
+  return collect(harness.interviews.runTurn({
+    sessionId: harness.view.session.id, trigger: "user_message", text, expectedRevision: revision,
+  }));
+}
+
+async function createDraft(harness: Harness, content: RuntimeTaskCandidate) {
+  harness.runtime.push(taskOutput(content));
+  await run(harness, content.originalRequest);
+  return (await harness.interviews.get(harness.view.session.id))!;
 }
 
 function decisionOutput(): CategoryInterviewRuntimeOutput {
-  const options = [
-    { label: "完整京东范围", description: "包含评价样本和评分指标。", recommended: true },
-    { label: "仅商品资料", description: "保留分类、店铺和商品详情，不抓评论。", recommended: false },
-    { label: "不纳入京东", description: "只调查官网与标准来源。", recommended: false },
-  ];
   return {
-    assistantText: "请选择京东抓取范围。",
-    question: { key: "jd.scope", text: "京东抓到什么范围？", options, rationale: "需要负责人决定。" },
-    unresolvedItems: [],
+    assistantText: "请确认首期型号生命周期范围。",
+    proposedDecision: {
+      key: "catalog.lifecycle-scope", question: "首期是否纳入已停售型号？",
+      options: [
+        { label: "仅当前在售型号", description: "范围清楚，适合首版。", recommended: true },
+        { label: "包含近三年停售型号", description: "覆盖历史型号，成本更高。", recommended: false },
+      ],
+      selection: "仅当前在售型号", rationale: "该范围会直接改变来源和抓取量。",
+    },
+    unresolvedItems: [{
+      key: "catalog.lifecycle-scope", description: "等待确认型号生命周期范围。", owner: "user",
+    }],
     resolvedUnresolvedKeys: [],
   };
 }
 
-function taskOutput(taskCandidate: CaptureTaskContent): CategoryInterviewRuntimeOutput {
+function taskOutput(taskCandidate: RuntimeTaskCandidate): CategoryInterviewRuntimeOutput {
+  return { assistantText: "已更新抓取任务草稿。", taskCandidate, unresolvedItems: [], resolvedUnresolvedKeys: [] };
+}
+
+function taskContent(code: string, label: string, decisionId?: string): RuntimeTaskCandidate {
   return {
-    assistantText: "已更新抓取任务草稿。",
-    taskCandidate,
-    unresolvedItems: [],
-    resolvedUnresolvedKeys: [],
+    originalRequest: `抓${label}`,
+    category: { code, label },
+    marketScope: "中国大陆当前在售新机",
+    generalTopics: ["品牌、型号、商品详情和参数"],
+    categoryTopics: ["品类关键参数"],
+    jd: { applicable: true, disposition: "pending", scope: [], rationale: "由平台默认策略补全。" },
+    sourceCandidates: [{
+      id: `jd-${code}`, name: `京东${label}频道`, publisher: "京东",
+      entryUrl: "https://www.jd.com/", sourceKind: "retailer",
+      expectedContents: ["在售商品与参数"], observedFormats: ["网页"],
+      accessState: "public", observedAt: "2026-08-19",
+    }],
+    excludedContent: [],
+    decisionIds: decisionId ? [decisionId] : [],
   };
 }
 
-function taskContent(decisionId: string, urls: string[]): CaptureTaskContent {
+function brandSource(): RuntimeTaskCandidate["sourceCandidates"][number] {
   return {
-    originalRequest: "抓冰箱",
-    category: { code: "refrigerator", label: "冰箱" },
-    marketScope: "中国大陆普通消费者可以买到的家用冰箱",
-    generalTopics: ["品牌、型号、商品详情和原始参数"],
-    categoryTopics: ["能效、容量、制冷方式和核心部件"],
-    jd: { applicable: true, disposition: "included", scope: ["product_details"], rationale: "已确认仅商品资料。" },
-    sourceCandidates: urls.map((entryUrl, index) => ({
-      id: `source-${index + 1}`,
-      name: index === 0 ? "京东冰箱频道" : "海尔冰箱官网",
-      publisher: index === 0 ? "京东" : "海尔",
-      entryUrl,
-      sourceKind: index === 0 ? "retailer" : "brand_official",
-      expectedContents: ["冰箱商品资料"],
-      observedFormats: ["HTML"],
-      accessState: "public",
-      observedAt: "2026-08-18T10:00:00+08:00",
-    })),
-    excludedContent: ["评论与评分"],
-    unresolvedItems: [],
-    decisionIds: [decisionId],
+    id: "brand-site", name: "品牌官网", publisher: "品牌方",
+    entryUrl: "https://example.com/products", sourceKind: "brand_official",
+    expectedContents: ["官方型号与规格"], observedFormats: ["网页"],
+    accessState: "public", observedAt: "2026-08-19",
   };
+}
+
+async function taskCount(db: WorkbenchDb, currentSessionId: string) {
+  return (await db.select({ id: captureTasks.id }).from(captureTasks)
+    .innerJoin(captureTaskDraftVersions, eq(captureTaskDraftVersions.taskId, captureTasks.id))
+    .where(eq(captureTaskDraftVersions.sessionId, currentSessionId))).length;
 }
 
 async function collect<T>(events: AsyncIterable<T>) {
@@ -317,14 +236,13 @@ async function collect<T>(events: AsyncIterable<T>) {
 
 async function removeSession(db: WorkbenchDb, currentSessionId: string) {
   const drafts = await db.select({ taskId: captureTaskDraftVersions.taskId })
-    .from(captureTaskDraftVersions)
-    .where(eq(captureTaskDraftVersions.sessionId, currentSessionId));
+    .from(captureTaskDraftVersions).where(eq(captureTaskDraftVersions.sessionId, currentSessionId));
   await db.delete(categoryInterviewDecisions).where(eq(categoryInterviewDecisions.sessionId, currentSessionId));
   await db.delete(categoryInterviewUnresolvedItems).where(eq(categoryInterviewUnresolvedItems.sessionId, currentSessionId));
   await db.delete(captureTaskDraftVersions).where(eq(captureTaskDraftVersions.sessionId, currentSessionId));
   await db.delete(categoryInterviewMessages).where(eq(categoryInterviewMessages.sessionId, currentSessionId));
   await db.delete(categoryInterviewSessions).where(eq(categoryInterviewSessions.id, currentSessionId));
-  for (const taskId of new Set(drafts.map((draft) => draft.taskId).filter(Boolean))) {
+  for (const taskId of new Set(drafts.map((item) => item.taskId).filter(Boolean))) {
     await db.delete(captureTasks).where(eq(captureTasks.id, taskId!));
   }
 }

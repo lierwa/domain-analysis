@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { captureTaskContentSchema, captureTaskDraftVersionSchema } from "./capture-task";
+import {
+  captureTaskContentSchema,
+  captureTaskDraftVersionSchema,
+  sourceCandidateSchema,
+} from "./capture-task";
 
 const idSchema = z.string().min(1).max(240);
 const isoDateSchema = z.string().datetime({ offset: true });
@@ -52,11 +56,6 @@ const decisionOptionSchema = z.object({
   recommended: z.boolean(),
 }).strict();
 
-export const interviewDecisionConfirmationSchema = z.object({
-  expectedRevision: revisionSchema,
-  selection: z.string().trim().min(1).max(2000),
-}).strict();
-
 export const interviewDecisionSchema = z.object({
   id: idSchema,
   sessionId: idSchema,
@@ -92,12 +91,12 @@ export const categoryInterviewViewSchema = z.object({
   taskDrafts: z.array(captureTaskDraftVersionSchema),
 }).strict();
 
-export const interviewTurnRequestSchema = z.discriminatedUnion("trigger", [
-  z.object({ trigger: z.literal("user_message"), expectedRevision: revisionSchema,
-    text: z.string().min(1).max(20_000), retryMessageId: idSchema.optional() }).strict(),
-  z.object({ trigger: z.literal("decision_confirmed"), expectedRevision: revisionSchema,
-    decisionId: idSchema }).strict(),
-]);
+export const interviewTurnRequestSchema = z.object({
+  trigger: z.literal("user_message"),
+  expectedRevision: revisionSchema,
+  text: z.string().min(1).max(20_000),
+  retryMessageId: idSchema.optional(),
+}).strict();
 
 const proposedDecisionSchema = z.object({
   key: z.string().regex(/^[a-z][a-z0-9_.-]+$/),
@@ -106,25 +105,50 @@ const proposedDecisionSchema = z.object({
   selection: z.string().min(1).max(2000),
   rationale: z.string().min(1).max(4000),
 }).strict().superRefine((decision, context) => {
-  if (decision.options.filter((option) => option.recommended).length !== 1) {
+  const recommended = decision.options.filter((option) => option.recommended);
+  if (recommended.length !== 1) {
     context.addIssue({ code: "custom", path: ["options"], message: "每个问题必须且只能有一个推荐选项" });
+  }
+  const labels = decision.options.map((option) => option.label.trim());
+  if (new Set(labels).size !== labels.length) {
+    context.addIssue({ code: "custom", path: ["options"], message: "问题选项标签不能重复" });
+  }
+  const recommendedOption = recommended[0];
+  if (recommendedOption && decision.selection.trim() !== recommendedOption.label.trim()) {
+    context.addIssue({ code: "custom", path: ["selection"], message: "推荐选择必须等于唯一推荐选项的标签" });
   }
 });
 
-const ownerQuestionSchema = z.object({
-  key: z.string().regex(/^[a-z][a-z0-9_.-]+$/),
-  text: z.string().min(1).max(1000),
-  options: z.array(decisionOptionSchema).min(2).max(3),
+const decisionResolutionSchema = z.object({
+  decisionId: idSchema,
+  selection: z.string().min(1).max(2000),
   rationale: z.string().min(1).max(4000),
-}).strict().superRefine((question, context) => {
-  if (question.options.filter((option) => option.recommended).length !== 1) {
-    context.addIssue({ code: "custom", path: ["options"], message: "每个问题必须且只能有一个推荐选项" });
-  }
+}).strict();
+
+const decisionWithdrawalSchema = z.object({
+  decisionId: idSchema,
+  rationale: z.string().min(1).max(4000),
+}).strict();
+
+const runtimeSourceCandidateSchema = sourceCandidateSchema.omit({ observedAt: true }).extend({
+  // WHY：观察时间属于 Workbench 提交事实；兼容模型返回的日期字符串，但不把它当成权威时间。
+  observedAt: z.string().max(100).optional(),
+}).transform(({ observedAt: _ignored, ...candidate }) => ({
+  ...candidate,
+  observedAt: "1970-01-01T00:00:00.000Z",
+}));
+
+const runtimeTaskCandidateSchema = captureTaskContentSchema.omit({
+  sourceCandidates: true,
+  unresolvedItems: true,
+}).extend({
+  sourceCandidates: z.array(runtimeSourceCandidateSchema),
 });
 
 export const categoryInterviewRuntimeOutputSchema = z.object({
   assistantText: z.string().min(1).max(40_000),
-  question: ownerQuestionSchema.nullable().optional().transform((value) => value ?? undefined),
+  decisionResolution: decisionResolutionSchema.nullable().optional().transform((value) => value ?? undefined),
+  decisionWithdrawal: decisionWithdrawalSchema.nullable().optional().transform((value) => value ?? undefined),
   proposedDecision: proposedDecisionSchema.nullable().optional().transform((value) => value ?? undefined),
   unresolvedItems: z.array(z.object({
     key: z.string().regex(/^[a-z][a-z0-9_.-]+$/),
@@ -132,11 +156,40 @@ export const categoryInterviewRuntimeOutputSchema = z.object({
     owner: z.enum(["system", "user"]),
   }).strict()).nullable().default([]).transform((value) => value ?? []),
   resolvedUnresolvedKeys: z.array(z.string().min(1)).nullable().default([]).transform((value) => value ?? []),
-  taskCandidate: captureTaskContentSchema.nullable().optional().transform((value) => value ?? undefined),
+  taskCandidate: runtimeTaskCandidateSchema.nullable().optional().transform((value) => value ?? undefined),
 }).strict().superRefine((output, context) => {
-  const hasPendingOwnerDecision = Boolean(output.question || output.proposedDecision)
-    || output.unresolvedItems.some((item) => item.owner === "user")
-    || output.taskCandidate?.unresolvedItems.some((item) => item.owner === "user");
+  if (output.decisionResolution && output.decisionWithdrawal) {
+    context.addIssue({
+      code: "custom",
+      path: ["decisionWithdrawal"],
+      message: "同一问题不能同时确认和撤回",
+    });
+  }
+  if (output.proposedDecision && describesSourceOwnerChoice(output.proposedDecision)) {
+    context.addIssue({
+      code: "custom",
+      path: ["proposedDecision", "key"],
+      message: "来源平台、网站与渠道属于系统调查事实，不能作为负责人问题",
+    });
+  }
+  for (const [index, item] of output.unresolvedItems.entries()) {
+    if (item.owner === "user" && output.proposedDecision?.key !== item.key) {
+      context.addIssue({
+        code: "custom",
+        path: ["unresolvedItems", index, "key"],
+        message: "owner=user 未决项必须由同 key 的唯一 proposedDecision 表达",
+      });
+    }
+    if (item.owner === "user" && isSourceOwnerChoice(item.key, item.description)) {
+      context.addIssue({
+        code: "custom",
+        path: ["unresolvedItems", index, "key"],
+        message: "来源平台、网站与渠道应由系统调查，不能交给负责人处理",
+      });
+    }
+  }
+  const hasPendingOwnerDecision = Boolean(output.proposedDecision)
+    || output.unresolvedItems.some((item) => item.owner === "user");
   if (output.taskCandidate && hasPendingOwnerDecision) {
     context.addIssue({
       code: "custom",
@@ -145,6 +198,27 @@ export const categoryInterviewRuntimeOutputSchema = z.object({
     });
   }
 });
+
+function describesSourceOwnerChoice(decision: z.infer<typeof proposedDecisionSchema>) {
+  return isSourceOwnerChoice(
+    decision.key,
+    [decision.question, decision.selection, ...decision.options.map((option) => option.label)].join(" "),
+  );
+}
+
+function isSourceOwnerChoice(key: string, visibleChoice: string) {
+  if (/(^|[._-])(source|platform|channel|marketplace|website|site|retailer|vendor)([._-]|$)/i.test(key)) {
+    return true;
+  }
+  return mentionsSourcePlatform(visibleChoice)
+    || /(?:来源|平台|渠道|网站|官网|电商).{0,10}(?:作为数据源|作为来源|抓取|采集|是否使用|要不要|选哪个)|(?:选择|使用|采用|抓取|采集|是否用|要不要用).{0,10}(?:来源|平台|渠道|网站|官网|电商)/u
+      .test(visibleChoice);
+}
+
+function mentionsSourcePlatform(value: string) {
+  return /京东|淘宝|天猫|拼多多|苏宁|唯品会|亚马逊|小红书|抖音|快手|jingdong|taobao|tmall|pinduoduo|amazon|xiaohongshu/i.test(value)
+    || /(^|[^a-z0-9])jd([^a-z0-9]|$)/i.test(value);
+}
 
 const eventBase = { sessionId: idSchema, turnId: idSchema };
 export const interviewTimelineEventSchema = z.discriminatedUnion("type", [
@@ -165,7 +239,6 @@ export type InterviewSession = z.infer<typeof interviewSessionSchema>;
 export type NormalizedInterviewMessage = z.infer<typeof normalizedInterviewMessageSchema>;
 export type InterviewMessageTimelinePart = z.infer<typeof interviewMessageTimelinePartSchema>;
 export type InterviewDecision = z.infer<typeof interviewDecisionSchema>;
-export type InterviewDecisionConfirmation = z.infer<typeof interviewDecisionConfirmationSchema>;
 export type InterviewUnresolvedItem = z.infer<typeof interviewUnresolvedItemSchema>;
 export type InterviewTurnActivity = z.infer<typeof interviewTurnActivitySchema>;
 export type CategoryInterviewView = z.infer<typeof categoryInterviewViewSchema>;

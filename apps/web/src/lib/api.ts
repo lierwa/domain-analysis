@@ -1,12 +1,19 @@
 import {
   captureTaskSchema,
   categoryInterviewViewSchema,
+  confirmCrawlPlanSchema,
+  crawlPlanningEventSchema,
+  crawlPlanningRunRequestSchema,
+  crawlPlanningViewSchema,
   interviewTimelineEventSchema,
   interviewTurnRequestSchema,
   sourceCollectionRunSchema,
   sourceDatasetRunViewSchema,
   type CaptureTask,
   type CategoryInterviewView,
+  type CrawlPlanningEvent,
+  type CrawlPlanningRunRequest,
+  type CrawlPlanningView,
   type InterviewSession,
   type InterviewTimelineEvent,
   type InterviewTurnRequest,
@@ -39,19 +46,6 @@ export async function fetchCategoryInterview(sessionId: string): Promise<Categor
 
 export async function deleteCategoryInterview(sessionId: string) {
   await request<void>(`/api/category-interviews/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
-}
-
-export async function confirmInterviewDecision(
-  sessionId: string,
-  decisionId: string,
-  selection: string,
-  expectedRevision: number,
-) {
-  const data = await request<{ item: unknown }>(
-    `/api/category-interviews/${sessionId}/decisions/${decisionId}/confirm`,
-    { method: "POST", body: JSON.stringify({ expectedRevision, selection }) },
-  );
-  return categoryInterviewViewSchema.parse(data.item);
 }
 
 export async function fetchCaptureTaskInterview(taskId: string): Promise<CategoryInterviewView> {
@@ -114,6 +108,52 @@ export async function fetchCaptureTask(taskId: string): Promise<CaptureTask> {
 
 export async function deleteCaptureTask(taskId: string) {
   await request<void>(`/api/capture-tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+}
+
+export async function fetchCrawlPlanning(taskId: string): Promise<CrawlPlanningView> {
+  const data = await request<{ item: unknown }>(
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-planning`,
+  );
+  return crawlPlanningViewSchema.parse(data.item);
+}
+
+export async function streamCrawlPlanningRun(
+  taskId: string,
+  input: CrawlPlanningRunRequest,
+  onEvent: (event: CrawlPlanningEvent) => void,
+  signal?: AbortSignal,
+) {
+  const response = await fetch(`/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-planning/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(crawlPlanningRunRequestSchema.parse(input)),
+    signal,
+  });
+  if (!response.ok || !response.body) throw await apiErrorFromResponse(response);
+  const parser = createParser({
+    onEvent: (event) => onEvent(crawlPlanningEventSchema.parse(JSON.parse(event.data))),
+  });
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    parser.feed(decoder.decode(value, { stream: true }));
+  }
+  parser.feed(decoder.decode());
+}
+
+export async function confirmCrawlPlan(
+  taskId: string,
+  planId: string,
+  expectedTaskRevision: number,
+) {
+  const body = confirmCrawlPlanSchema.parse({ expectedTaskRevision });
+  const data = await request<{ item: unknown }>(
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-plans/${encodeURIComponent(planId)}/confirm`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+  return crawlPlanningViewSchema.parse(data.item);
 }
 
 export async function fetchSourceCollectionRuns(taskId: string): Promise<SourceCollectionRun[]> {

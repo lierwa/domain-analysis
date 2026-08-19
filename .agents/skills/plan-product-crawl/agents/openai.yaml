@@ -1,0 +1,4 @@
+interface:
+  display_name: "标准商品抓取计划"
+  short_description: "调查具体来源并明确每个来源抓什么、抓多少"
+  default_prompt: "使用 $plan-product-crawl 为已确认的 Capture Task 制定可审核的抓取计划；只规划，不执行抓取。"

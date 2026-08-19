@@ -121,7 +121,7 @@
 - 文件路径使用 `path.join` / `path.resolve` 或等价跨平台接口，不手写平台分隔符。
 - 涉及原生模块、预编译包或 optionalDependencies 时，至少验证开发机平台与目标 Linux Runtime 的安装行为；若产品声明支持 Windows，再补 Windows 验证。
 - 新增依赖后必须更新 lockfile，并执行当前环境的安装、类型检查、测试和构建；无法完成的目标平台验证必须明确标注。
-- Cookie、登录凭证、浏览器 Profile、未脱敏临时来源内容和受限证据不得进入 Git、日志、知识包或远程上传链路。
+- Cookie、登录凭证、浏览器 Profile、未脱敏临时来源内容不得进入 Git、日志、Codex 输入、导出或远程上传链路。
 
 ## MUST NOT
 
@@ -157,17 +157,19 @@
 
 - 产品资料是需求和验收输入，不是详细架构；工程架构必须在现有 `domain-analysis` 仓库上设计，并明确复用、重构、淘汰和新增范围。
 - 权威阅读顺序遵守 `docs/development/README.md`。
-- 新品类必须先通过 Workbench Chat Timeline 采访形成经用户确认的版本化 Category Research Brief，再进入来源访问；现有 ProductProjectForm 只作为任务书/项目草稿的检查修改面，不得保留第二套从零创建事实源。
-- 品类采访只向用户询问必须由负责人决定的取舍；品牌、型号、参数、部件、原理和来源等可调查事实由系统主动调查，不得要求用户先行枚举。
-- 专用品类采访 Skill 只定义采访行为；Workbench 拥有消息、Interview Decision、未决项、confirmed brief 和全部继续上下文，Codex 只做无状态 ephemeral 单轮执行，不拥有产品 thread 或事实源。
-- 阶段 0I 的 Chat Timeline 与 Codex 交互运行时分别以 R-028/R-029 为技术证据；当前生产接受 `assistant-ui` ExternalStoreRuntime 与锁定版本的 App Server `stdio`，每轮只使用 `thread/start(ephemeral:true)`，拒绝持久 App Server/SDK thread、resume 和第二套产品会话事实源。commentary 使用官方 `item/agentMessage/delta`，最终 JSON 由本地 Zod 校验。MVP 不引入 Pi Agent、agent registry、多 Provider 或自动 fallback，采访 modelId/reasoning 不能自动继承批次知识加工参数。
-- Provider 只负责来源能力、页面状态识别和围绕证据请求交付来源观察/待选证据，不负责形成最终知识，也不得把站点 DOM 规则冒充跨品类知识模型。
-- 数据搜集板块表达 Provider、已确认范围和更新策略的组合，不能与 Provider 混为一个对象。
-- 永久资料必须是围绕已确认知识需求保存的最小不可变证据，并能定位、审核和重跑其所支持的候选加工；不要求也不得默认保存整页 HTML、全页截图或完整无关文件。新证据不得覆盖历史证据。
-- 知识加工必须区分确定性转换、模型候选、人工决定、冲突和不确定状态；模型输出不能直接成为已发布事实。
-- Workbench 控制库、最小证据区和知识包必须物理分离；Runtime 不能依赖生产数据库、浏览器、模型或加工 Worker。
-- Runtime 通用 interface 不得出现京东、冰箱、商品、SKU、价格等领域固定假设；领域能力由知识包声明。
-- 同一事实必须有单一权威来源；UI、HTTP adapter、Worker 和 Runtime 只能读取、投影或适配，不得各自重新推导状态。
+- 当前产品只服务能够通过品牌、型号、规格、分类或标准稳定识别的标准商品；手工制品、孤品、定制品等非标准商品不在范围内。
+- 标准商品必须先通过 Workbench Chat Timeline 采访形成经用户确认的版本化 Capture Task Draft，再生成 Capture Task；确认任务不等于开始抓取。
+- 品类采访只向用户询问会实质改变抓取结果、必须由负责人决定的真实取舍；标准、品牌、型号、参数、部件、原理和来源等可调查事实由系统主动调查，不得要求用户先行枚举。
+- 专用品类采访 Skill 参考 `grill-with-docs` 的一次一问和推荐纪律：必须解释背景、给出有依据的专业推荐和主要代价，不得为了凑互斥选项制造问题。Workbench 拥有消息、Interview Decision、未决项、Capture Task Draft 和全部继续上下文，Codex 只做无状态 ephemeral 单轮执行。
+- 平台覆盖属于系统主动调查和规划的数据资源。对冰箱等家电，京东是必须覆盖的核心平台，淘宝是后续多平台来源；不得把“是否纳入京东”写成默认负责人问题。必须覆盖不等于已获准访问，真实执行仍受 Crawl Plan、许可、登录、验证码、风控和频控停止门约束。
+- Chat Timeline 与 Codex 交互运行时分别以 R-028/R-029 为技术证据；当前生产接受 `assistant-ui` ExternalStoreRuntime 与锁定版本的 App Server `stdio`，每轮只使用 `thread/start(ephemeral:true)`，拒绝持久 App Server/SDK thread、resume 和第二套产品会话事实源。commentary 使用官方 `item/agentMessage/delta`，最终 JSON 由本地 Zod 校验。MVP 不引入 Pi Agent、agent registry、多模型 Provider 或自动 fallback。
+- Provider 只负责执行已确认 Crawl Plan、识别页面/接口状态并返回源站原始内容；不负责决定抓取目标、不清洗数据，也不得把站点 DOM 规则冒充跨品类数据模型。
+- 来源计划表达 Capture Task、来源入口、Provider、捕获单元、覆盖分母、数量、频控、恢复和停止条件的组合，不能与 Provider 混为一个对象。
+- 阶段 1 按来源真实格式保存不可变原始快照和附件；新观察追加新快照，不覆盖历史，不提前标准化或套统一参数模板。
+- 阶段 2 只消费阶段 1 的不可变原始数据，必须在阶段 1 全部验收后重新访谈、调研和设计；不得恢复旧 Evidence、Knowledge Factory、知识包或 Runtime 代码链。
+- Workbench 结构化控制库与原始附件区必须分离；Cookie、Profile、认证 Header、验证码材料和未脱敏临时内容不得进入 Git、日志、Codex 输入或导出。
+- 通用 Crawl Plan、Provider 和 Source Dataset interface 不得出现冰箱、电视、京东、淘宝、SKU 或价格等来源/品类固定假设；具体品类和来源差异由已确认任务、计划和 adapter 数据表达。
+- 同一事实必须有单一权威来源；UI、HTTP adapter、Provider 和 Worker 只能读取、投影或适配，不得各自重新推导状态。
 - 跨模块状态和事件必须使用已校验的 typed contract；`unknown`、metadata、字符串协议只能停留在外部 seam 并立即校验收窄。
 - Pipeline 阶段、生命周期状态、人工介入和任务尝试必须分开建模，不得继续使用一个组合枚举承载所有含义。
 
@@ -176,8 +178,8 @@
 - 不得把旧 Reddit/X 的 DTO、表、报告或文案直接改名冒充新领域模型。
 - 不得把预留字段、placeholder、测试 fake 或未接线代码描述为已完成能力。
 - 不得使用 UI 文案、错误字符串或轮询结果反推领域状态。
-- 不得把来源选择器、登录逻辑写进知识加工模块；不得为未知官网预建逐站 DOM projector。
-- 不得让 Runtime 直接读取 Workbench 数据库或证据目录。
+- 不得把来源选择器、登录逻辑写进 Interview 或 Capture Task 模块；不得为未知官网预建逐站 DOM projector。
+- 不得让 Web、Provider 或后续清洗模块绕过 Workbench/Capture Task/Source Dataset 的事实源。
 - 不得在真实纵向验证前建设万能 Provider 插件系统、通用工作流平台或大规模 UI。
 
 ---
@@ -246,7 +248,7 @@
 ## MUST
 
 - 每个非平凡任务开始前必须先指出它服务于 `ROADMAP.md` 的哪个阶段、`ARCHITECTURE.md` 的哪个目标模块或通过门；无法建立关系的工作不得实施，避免按局部问题堆补丁。
-- 修改共享 seam、公共 interface、跨模块 contract、工作流、数据模型、知识包或 Runtime 前，必须先阅读：
+- 修改共享 seam、公共 interface、跨模块 contract、工作流、数据模型、Capture Task、Crawl Plan 或 Source Dataset 前，必须先阅读：
   - `docs/development/README.md`
   - `docs/development/ARCHITECTURE.md`
   - `docs/development/ROADMAP.md`

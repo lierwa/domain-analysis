@@ -1,7 +1,7 @@
 import type { CaptureTask, InterviewSession } from "@domain-analysis/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Database, MessageSquareText, PencilLine, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   deleteCaptureTask,
@@ -16,10 +16,11 @@ import {
   CategoryInterviewTimeline,
 } from "./CategoryInterviewTimeline";
 import { CaptureTaskContentView } from "./CaptureTaskContentView";
+import { CrawlPlanningPanel } from "./CrawlPlanningPanel";
 import { SourceDatasetPanel } from "./SourceDatasetPanel";
 
 type WorkspaceMode = "tasks" | "new";
-type TaskSection = "scope" | "data";
+type TaskSection = "scope" | "plan" | "data";
 
 export function CaptureTaskWorkspacePage() {
   const queryClient = useQueryClient();
@@ -70,6 +71,13 @@ export function CaptureTaskWorkspacePage() {
     setEditingSessionId(undefined);
     showTask(task.id);
   }
+
+  const handleInterviewChanged = useCallback((session: InterviewSession) => {
+    queryClient.setQueryData<InterviewSession[]>(["category-interviews"], (current = []) => [
+      session,
+      ...current.filter((item) => item.id !== session.id),
+    ]);
+  }, [queryClient]);
 
   function startNewTask() {
     window.localStorage.removeItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY);
@@ -158,6 +166,7 @@ export function CaptureTaskWorkspacePage() {
             instanceKey={`${newTaskKey}-${editingSessionId ?? "new"}`}
             sessionId={editingSessionId}
             onTaskCreated={handleTaskCreated}
+            onSessionChanged={handleInterviewChanged}
           />
         ) : detail.data ? (
           <TaskWorkspace
@@ -182,10 +191,12 @@ function InterviewWorkspace({
   instanceKey,
   sessionId,
   onTaskCreated,
+  onSessionChanged,
 }: {
   instanceKey: string;
   sessionId?: string;
   onTaskCreated: (task: CaptureTask) => void;
+  onSessionChanged: (session: InterviewSession) => void;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -200,6 +211,7 @@ function InterviewWorkspace({
         key={instanceKey}
         initialSessionId={sessionId}
         onTaskCreated={onTaskCreated}
+        onSessionChanged={onSessionChanged}
       />
     </div>
   );
@@ -347,6 +359,7 @@ function TaskWorkspace({
         </div>
         <nav className="mt-6 flex gap-5" aria-label="抓取任务内容">
           <Tab active={section === "scope"} onClick={() => onSectionChange("scope")} label="抓取范围" />
+          <Tab active={section === "plan"} onClick={() => onSectionChange("plan")} label="抓取计划" />
           <Tab active={section === "data"} onClick={() => onSectionChange("data")} label="原始数据" />
         </nav>
       </header>
@@ -357,7 +370,7 @@ function TaskWorkspace({
           isRevising={isRevising}
           revisionError={revisionError}
         />
-      ) : <SourceDatasetPanel taskId={task.id} />}</div>
+      ) : section === "plan" ? <CrawlPlanningPanel task={task} /> : <SourceDatasetPanel taskId={task.id} />}</div>
     </div>
   );
 }

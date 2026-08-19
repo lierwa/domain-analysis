@@ -1,11 +1,13 @@
-import { execa } from "execa";
-import ndjson from "ndjson";
 import { z } from "zod";
 
 import {
-  extractCodexWebSearchProjection,
-  sanitizeCodexDisplayDetail,
-} from "./codexActivityProjection";
+  mapCodexAppServerNotification,
+  normalizedCodexEventType,
+} from "./codexAppServerNotification";
+import {
+  startCodexAppServerTransport,
+  type CodexAppServerTransport,
+} from "./codexAppServerTransport";
 
 const responseSchema = z.object({
   id: z.union([z.string(), z.number()]),
@@ -26,50 +28,6 @@ const turnStartResultSchema = z.object({
   turn: z.object({ id: z.string() }).passthrough(),
 }).passthrough();
 
-const threadItemSchema = z.object({
-  id: z.string(),
-  type: z.string(),
-  status: z.string().optional(),
-  text: z.string().optional(),
-  phase: z.enum(["commentary", "final_answer"]).nullable().optional(),
-  query: z.string().optional(),
-  command: z.string().optional(),
-  cwd: z.string().optional(),
-  aggregatedOutput: z.string().optional(),
-  exitCode: z.number().int().nullable().optional(),
-  durationMs: z.number().nonnegative().nullable().optional(),
-  server: z.string().optional(),
-  tool: z.string().optional(),
-  action: z.object({
-    type: z.string(),
-    query: z.string().nullable().optional(),
-    queries: z.array(z.string()).nullable().optional(),
-    url: z.string().nullable().optional(),
-  }).passthrough().nullable().optional(),
-  results: z.array(z.unknown()).nullable().optional(),
-}).passthrough();
-
-const itemNotificationSchema = z.object({ item: threadItemSchema }).passthrough();
-const deltaNotificationSchema = z.object({
-  itemId: z.string(),
-  delta: z.string().min(1),
-}).passthrough();
-const rawResponseItemCompletedSchema = z.object({
-  item: z.object({
-    type: z.literal("web_search_call"),
-    action: z.object({
-      type: z.string(),
-      url: z.string().nullable().optional(),
-    }).passthrough().nullable().optional(),
-  }).passthrough(),
-}).passthrough();
-const turnCompletedSchema = z.object({
-  turn: z.object({
-    status: z.enum(["completed", "interrupted", "failed", "inProgress"]),
-    error: z.unknown().nullable().optional(),
-    items: z.array(threadItemSchema).default([]),
-  }).passthrough(),
-}).passthrough();
 
 export interface CodexAppServerClientOptions {
   cwd: string;
@@ -114,97 +72,195 @@ export class CodexAppServerError extends Error {
   }
 }
 
+export interface CodexAppServerClient {
+  run(prompt: string, signal?: AbortSignal): AsyncIterable<CodexAppServerStreamItem>;
+  close(): Promise<void>;
+}
+
+export function createCodexAppServerClient(options: CodexAppServerClientOptions): CodexAppServerClient {
+  return new ReusableCodexAppServerClient(options);
+}
+
 export async function* streamCodexAppServer(
   options: CodexAppServerClientOptions,
   prompt: string,
   signal?: AbortSignal,
 ): AsyncIterable<CodexAppServerStreamItem> {
-  const observedEvents = new Set<string>();
-  const observedItemTypes = new Set<string>();
-  const observedErrors = new Set<string>();
-  const messagePhases = new Map<string, "commentary" | "final_answer" | null>();
-  const streamedCommentaryItems = new Set<string>();
-  let threadId: string | undefined;
-  let turnId: string | undefined;
-  let finalOutputText: string | undefined;
-  let turnStatus: "completed" | "interrupted" | "failed" | undefined;
-
-  const subprocess = startAppServer(options);
-  if (!subprocess.stdin || !subprocess.stdout) throw new Error("Codex app-server stdio 未建立管道");
-  const eventStream = subprocess.stdout.pipe(ndjson.parse());
-  const interrupt = () => subprocess.kill("SIGTERM");
-  signal?.addEventListener("abort", interrupt, { once: true });
-  if (signal?.aborted) interrupt();
-  writeRequest(subprocess.stdin, "initialize", 1, initializeParams());
-
+  const client = createCodexAppServerClient(options);
   try {
-    for await (const raw of eventStream) {
-      const response = responseSchema.safeParse(raw);
-      if (response.success) {
+    for await (const item of client.run(prompt, signal)) yield item;
+  } finally {
+    await client.close();
+  }
+}
+
+class ReusableCodexAppServerClient implements CodexAppServerClient {
+  private transport?: CodexAppServerTransport;
+  private requestSequence = 0;
+  private active = false;
+
+  constructor(private readonly options: CodexAppServerClientOptions) {}
+
+  async *run(prompt: string, signal?: AbortSignal): AsyncIterable<CodexAppServerStreamItem> {
+    if (this.active) {
+      throw new CodexAppServerError(
+        "execution_failed",
+        "已有 Codex 任务正在运行，请等待当前任务结束后重试。",
+        "reusable app-server client is busy",
+      );
+    }
+    if (signal?.aborted) {
+      yield resultItem(true, new Set(), new Set());
+      return;
+    }
+    this.active = true;
+    try {
+      const transport = await this.ensureTransport();
+      yield* this.runTurn(transport, prompt, signal);
+    } finally {
+      this.active = false;
+    }
+  }
+
+  async close() {
+    const transport = this.transport;
+    this.transport = undefined;
+    if (transport) await transport.close();
+  }
+
+  private async ensureTransport() {
+    if (this.transport) return this.transport;
+    const transport = startCodexAppServerTransport(this.options);
+    this.transport = transport;
+    const initializeId = ++this.requestSequence;
+    transport.send("initialize", initializeId, initializeParams());
+    try {
+      for (;;) {
+        const raw = await this.nextRaw(transport, new Set(), new Set());
+        const response = responseSchema.safeParse(raw);
+        if (!response.success || response.data.id !== initializeId) continue;
         if (response.data.error) {
+          throw failedAppServerError(undefined, "", new Set(), new Set([JSON.stringify(response.data.error)]));
+        }
+        transport.notify("initialized");
+        return transport;
+      }
+    } catch (error) {
+      if (this.transport === transport) this.transport = undefined;
+      await transport.close();
+      throw error;
+    }
+  }
+
+  private async *runTurn(
+    transport: CodexAppServerTransport,
+    prompt: string,
+    signal?: AbortSignal,
+  ): AsyncIterable<CodexAppServerStreamItem> {
+    const observedEvents = new Set<string>();
+    const observedItemTypes = new Set<string>();
+    const observedErrors = new Set<string>();
+    const messagePhases = new Map<string, "commentary" | "final_answer" | null>();
+    const streamedCommentaryItems = new Set<string>();
+    let threadId: string | undefined;
+    let turnId: string | undefined;
+    let finalOutputText: string | undefined;
+    let turnStatus: "completed" | "interrupted" | "failed" | undefined;
+    const threadRequestId = ++this.requestSequence;
+    const turnRequestId = ++this.requestSequence;
+    let interruptRequestId: number | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    const interrupt = () => {
+      if (threadId && turnId && interruptRequestId === undefined) {
+        interruptRequestId = ++this.requestSequence;
+        transport.send("turn/interrupt", interruptRequestId, { threadId, turnId });
+      }
+      killTimer ??= setTimeout(() => transport.kill(), 2_000);
+    };
+    signal?.addEventListener("abort", interrupt, { once: true });
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      interrupt();
+    }, this.options.timeoutMs ?? 180_000);
+    transport.send("thread/start", threadRequestId, threadStartParams(this.options));
+
+    try {
+      for (;;) {
+        const raw = await this.nextRaw(transport, observedEvents, observedErrors, signal?.aborted === true);
+        const response = responseSchema.safeParse(raw);
+        if (response.success && response.data.error) {
           observedErrors.add(JSON.stringify(response.data.error));
           throw failedAppServerError(undefined, "", observedEvents, observedErrors);
         }
-        const nextRequest = handleResponse(response.data, options, prompt);
-        if (nextRequest?.kind === "thread") {
-          writeNotification(subprocess.stdin, "initialized");
-          writeRequest(subprocess.stdin, "thread/start", 2, nextRequest.params);
+        if (response.success && response.data.id === threadRequestId) {
+          const parsed = threadStartResultSchema.safeParse(response.data.result);
+          if (!parsed.success) throw protocolError("thread/start 没有返回 ephemeral thread", parsed.error.message);
+          threadId = parsed.data.thread.id;
+          transport.send("turn/start", turnRequestId, turnStartParams(this.options, threadId, prompt));
         }
-        if (nextRequest?.kind === "turn") {
-          threadId = nextRequest.threadId;
-          writeRequest(subprocess.stdin, "turn/start", 3, nextRequest.params);
+        if (response.success && response.data.id === turnRequestId) {
+          const parsed = turnStartResultSchema.safeParse(response.data.result);
+          if (!parsed.success) throw protocolError("turn/start 没有返回 turn", parsed.error.message);
+          turnId = parsed.data.turn.id;
+          if (signal?.aborted) interrupt();
         }
-        if (nextRequest?.kind === "turn_started") turnId = nextRequest.turnId;
-        continue;
-      }
+        if (response.success) continue;
 
-      const notification = notificationSchema.safeParse(raw);
-      if (!notification.success) continue;
-      observedEvents.add(normalizedEventType(notification.data.method));
-      const mapped = mapNotification(notification.data.method, notification.data.params);
-      if (mapped?.kind === "item") {
-        observedItemTypes.add(mapped.itemType);
-        if (mapped.rawType === "agentMessage") messagePhases.set(mapped.itemId, mapped.phase);
-        yield mapped.event;
-      }
-      if (mapped?.kind === "delta") {
-        const phase = messagePhases.get(mapped.itemId);
-        if (phase === "commentary") {
+        const notification = notificationSchema.safeParse(raw);
+        if (!notification.success) continue;
+        observedEvents.add(normalizedCodexEventType(notification.data.method));
+        const mapped = mapCodexAppServerNotification(notification.data.method, notification.data.params);
+        if (mapped?.kind === "item") {
+          // WHY：started/failed 仍是必须展示的真实活动，但只有 completed 才能证明调查动作实际完成。
+          if (mapped.event.itemStatus === "completed") observedItemTypes.add(mapped.itemType);
+          if (mapped.rawType === "agentMessage") messagePhases.set(mapped.itemId, mapped.phase);
+          yield mapped.event;
+        }
+        if (mapped?.kind === "delta" && messagePhases.get(mapped.itemId) === "commentary") {
           const separator = streamedCommentaryItems.has(mapped.itemId)
-            ? ""
-            : streamedCommentaryItems.size > 0 ? "\n\n" : "";
+            ? "" : streamedCommentaryItems.size > 0 ? "\n\n" : "";
           streamedCommentaryItems.add(mapped.itemId);
           yield { type: "text_delta", delta: separator + mapped.delta };
         }
-      }
-      if (mapped?.kind === "final_message") finalOutputText = mapped.text;
-      if (mapped?.kind === "turn_completed") {
+        if (mapped?.kind === "final_message") finalOutputText = mapped.text;
+        if (mapped?.kind === "turn_completed" && timedOut) {
+          throw new CodexAppServerError(
+            "execution_failed", "Codex 本轮执行超时，本轮未保存，请重试。",
+            `timeoutMs=${this.options.timeoutMs ?? 180_000}`,
+          );
+        }
+        if (mapped?.kind === "event") yield mapped.event;
+        if (mapped?.kind !== "turn_completed") continue;
         turnStatus = mapped.status === "inProgress" ? "failed" : mapped.status;
         finalOutputText = mapped.outputText ?? finalOutputText;
         if (mapped.error) observedErrors.add(mapped.error);
         yield { type: "event", eventType: "turn.completed" };
-        subprocess.stdin.end();
+        yield completedResult({
+          aborted: signal?.aborted === true, processSignal: undefined, exitCode: 0, stderr: "",
+          turnStatus, threadId, turnId, finalOutputText, observedEvents, observedItemTypes, observedErrors,
+        });
+        return;
       }
-      if (mapped?.kind === "event") yield mapped.event;
+    } finally {
+      signal?.removeEventListener("abort", interrupt);
+      clearTimeout(timeoutTimer);
+      if (killTimer) clearTimeout(killTimer);
     }
+  }
 
-    const result = await subprocess;
-    yield completedResult({
-      aborted: signal?.aborted === true,
-      processSignal: result.signal,
-      exitCode: result.exitCode,
-      stderr: result.stderr,
-      turnStatus,
-      threadId,
-      turnId,
-      finalOutputText,
-      observedEvents,
-      observedItemTypes,
-      observedErrors,
-    });
-  } finally {
-    signal?.removeEventListener("abort", interrupt);
-    subprocess.kill("SIGTERM");
+  private async nextRaw(
+    transport: CodexAppServerTransport,
+    observedEvents: Set<string>,
+    observedErrors: Set<string>,
+    aborted = false,
+  ) {
+    const next = await transport.next();
+    if (!next.done) return next.value;
+    const result = await transport.result();
+    if (this.transport === transport) this.transport = undefined;
+    if (aborted) return { method: "turn/completed", params: { turn: { status: "interrupted", items: [] } } };
+    throw failedAppServerError(result.exitCode, result.stderr, observedEvents, observedErrors);
   }
 }
 
@@ -242,32 +298,6 @@ function completedResult(input: {
   } };
 }
 
-function startAppServer(options: CodexAppServerClientOptions) {
-  const args = [
-    "app-server", "--stdio",
-    "--disable", "plugins",
-    "--disable", "hooks",
-    "--disable", "memories",
-    "--disable", "shell_tool",
-    "--disable", "unified_exec",
-  ];
-  const executable = options.executable ?? "npm";
-  const executableArgs = options.executable
-    ? args
-    : ["--prefix", options.packageRoot ?? options.cwd, "exec", "--", "codex", ...args];
-  // WHY：app-server 是官方提供 token delta 的产品集成协议；execa 只承担跨平台进程生命周期，不自行实现进程管理。
-  return execa(executable, executableArgs, {
-    cwd: options.cwd,
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-    reject: false,
-    cleanup: true,
-    timeout: options.timeoutMs ?? 180_000,
-    forceKillAfterDelay: 2_000,
-  });
-}
-
 function initializeParams() {
   return {
     clientInfo: { name: "domain-analysis-workbench", title: "Data Collection Workbench", version: "0.1.0" },
@@ -275,127 +305,29 @@ function initializeParams() {
   };
 }
 
-function handleResponse(
-  response: z.infer<typeof responseSchema>,
-  options: CodexAppServerClientOptions,
-  prompt: string,
-) {
-  if (response.error) return undefined;
-  if (response.id === 1) {
-    return {
-      kind: "thread" as const,
-      params: {
-        model: options.model,
-        cwd: options.cwd,
-        approvalPolicy: "never",
-        sandbox: "read-only",
-        ephemeral: true,
-        config: {
-          model_reasoning_effort: options.reasoningEffort,
-          ...(options.webSearch ? { web_search: "live" } : {}),
-        },
-      },
-    };
-  }
-  if (response.id === 2) {
-    const parsed = threadStartResultSchema.safeParse(response.result);
-    if (!parsed.success) throw protocolError("thread/start 没有返回 ephemeral thread", parsed.error.message);
-    const threadId = parsed.data.thread.id;
-    return {
-      kind: "turn" as const,
-      threadId,
-      params: {
-        threadId,
-        input: [
-          { type: "text", text: prompt, text_elements: [] },
-          ...(options.skill ? [{ type: "skill", name: options.skill.name, path: options.skill.path }] : []),
-        ],
-        effort: options.reasoningEffort,
-      },
-    };
-  }
-  if (response.id === 3) {
-    const parsed = turnStartResultSchema.safeParse(response.result);
-    if (!parsed.success) throw protocolError("turn/start 没有返回 turn", parsed.error.message);
-    return { kind: "turn_started" as const, turnId: parsed.data.turn.id };
-  }
-  return undefined;
+function threadStartParams(options: CodexAppServerClientOptions) {
+  return {
+    model: options.model,
+    cwd: options.cwd,
+    approvalPolicy: "never",
+    sandbox: "read-only",
+    ephemeral: true,
+    config: {
+      model_reasoning_effort: options.reasoningEffort,
+      ...(options.webSearch ? { web_search: "live" } : {}),
+    },
+  };
 }
 
-function mapNotification(method: string, params: unknown) {
-  if (method === "item/agentMessage/delta") {
-    const parsed = deltaNotificationSchema.safeParse(params);
-    return parsed.success
-      ? { kind: "delta" as const, itemId: parsed.data.itemId, delta: parsed.data.delta }
-      : undefined;
-  }
-  if (method === "item/started" || method === "item/completed") {
-    const parsed = itemNotificationSchema.safeParse(params);
-    if (!parsed.success) return undefined;
-    const item = parsed.data.item;
-    if (method === "item/completed" && item.type === "agentMessage" && item.phase !== "commentary" && item.text) {
-      return { kind: "final_message" as const, text: item.text };
-    }
-    return {
-      kind: "item" as const,
-      rawType: item.type,
-      itemType: normalizedItemType(item.type),
-      itemId: boundedId(item.id),
-      phase: item.phase ?? null,
-      event: {
-        type: "event" as const,
-        eventType: normalizedEventType(method),
-        itemType: normalizedItemType(item.type),
-        itemId: boundedId(item.id),
-        itemStatus: itemStatusOf(method, item.status),
-        ...displayDetailOf(item),
-      },
-    };
-  }
-  if (method === "rawResponseItem/completed") {
-    const parsed = rawResponseItemCompletedSchema.safeParse(params);
-    const url = parsed.success
-      ? extractCodexWebSearchProjection({ action: parsed.data.item.action }).urls[0]
-      : undefined;
-    if (!url) return undefined;
-    // WHY：Responses API 的 open_page/find_in_page 只出现在官方 raw 通知；在 adapter 内收窄为既有 web_search activity，避免泄漏底层协议。
-    return {
-      kind: "item" as const,
-      rawType: "webSearch",
-      itemType: "web_search",
-      itemId: "web-search-pages",
-      phase: null,
-      event: {
-        type: "event" as const,
-        eventType: "item.completed",
-        itemType: "web_search",
-        itemId: "web-search-pages",
-        itemStatus: "completed" as const,
-        urls: [url],
-      },
-    };
-  }
-  if (method === "turn/completed") {
-    const parsed = turnCompletedSchema.safeParse(params);
-    if (!parsed.success) return undefined;
-    return {
-      kind: "turn_completed" as const,
-      status: parsed.data.turn.status,
-      outputText: finalMessageOf(parsed.data.turn.items),
-      error: parsed.data.turn.error ? JSON.stringify(parsed.data.turn.error) : undefined,
-    };
-  }
-  if (method === "error") return undefined;
-  if (method === "thread/started" || method === "turn/started") {
-    return { kind: "event" as const, event: { type: "event" as const, eventType: normalizedEventType(method) } };
-  }
-  return undefined;
-}
-
-function finalMessageOf(items: z.infer<typeof threadItemSchema>[]) {
-  const final = [...items].reverse().find((item) => item.type === "agentMessage"
-    && item.phase !== "commentary" && item.text);
-  return final?.text;
+function turnStartParams(options: CodexAppServerClientOptions, threadId: string, prompt: string) {
+  return {
+    threadId,
+    input: [
+      { type: "text", text: prompt, text_elements: [] },
+      ...(options.skill ? [{ type: "skill", name: options.skill.name, path: options.skill.path }] : []),
+    ],
+    effort: options.reasoningEffort,
+  };
 }
 
 function resultItem(
@@ -408,44 +340,6 @@ function resultItem(
     observedEvents: [...events],
     observedItemTypes: [...itemTypes],
   } };
-}
-
-function writeRequest(stream: NodeJS.WritableStream, method: string, id: number, params: object) {
-  stream.write(`${JSON.stringify({ method, id, params })}\n`);
-}
-
-function writeNotification(stream: NodeJS.WritableStream, method: string) {
-  stream.write(`${JSON.stringify({ method })}\n`);
-}
-
-function normalizedEventType(method: string) {
-  return method.replaceAll("/", ".");
-}
-
-function normalizedItemType(type: string) {
-  return type.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-}
-
-function itemStatusOf(method: string, status?: string): "running" | "completed" | "failed" {
-  if (status && /fail|error|cancel|declin/i.test(status)) return "failed";
-  if (status && /complete|success/i.test(status)) return "completed";
-  return method === "item/completed" ? "completed" : "running";
-}
-
-function displayDetailOf(item: z.infer<typeof threadItemSchema>) {
-  let raw: string | undefined;
-  let urls: string[] = [];
-  if (item.type === "webSearch") {
-    const projection = extractCodexWebSearchProjection(item);
-    raw = projection.detail;
-    urls = projection.urls;
-  }
-  if (item.type === "mcpToolCall") raw = [item.server, item.tool].filter(Boolean).join(" / ") || undefined;
-  const detail = raw ? sanitizeCodexDisplayDetail(raw) : undefined;
-  return {
-    ...(detail ? { detail } : {}),
-    ...(urls.length > 0 ? { urls } : {}),
-  };
 }
 
 function failedAppServerError(
@@ -484,8 +378,4 @@ function protocolError(message: string, diagnostic: string) {
 
 function compactDiagnostic(value: string) {
   return value.replace(/[\r\n]+/g, " ").trim().slice(-4_000);
-}
-
-function boundedId(value: string) {
-  return value.trim().slice(0, 240);
 }

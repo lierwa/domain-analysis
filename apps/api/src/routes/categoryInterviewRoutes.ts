@@ -1,5 +1,4 @@
 import {
-  interviewDecisionConfirmationSchema,
   interviewTimelineEventSchema,
   interviewTurnRequestSchema,
 } from "@domain-analysis/shared";
@@ -11,7 +10,6 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 const sessionParamsSchema = z.object({ sessionId: z.string().min(1) }).strict();
-const decisionParamsSchema = sessionParamsSchema.extend({ decisionId: z.string().min(1) }).strict();
 const draftParamsSchema = sessionParamsSchema.extend({ draftId: z.string().min(1) }).strict();
 const taskParamsSchema = z.object({ taskId: z.string().min(1) }).strict();
 const revisionSchema = z.object({ expectedRevision: z.number().int().positive() }).strict();
@@ -61,12 +59,6 @@ export async function registerCategoryInterviewRoutes(
       () => request.socket.off("close", abort),
       (error) => app.log.error({ err: error }, "category interview stream failed"),
     ));
-  });
-
-  app.post("/api/category-interviews/:sessionId/decisions/:decisionId/confirm", async (request) => {
-    const { sessionId, decisionId } = decisionParamsSchema.parse(request.params);
-    const { expectedRevision, selection } = interviewDecisionConfirmationSchema.parse(request.body);
-    return { item: await interviews.confirmDecision({ sessionId, decisionId, expectedRevision, selection }) };
   });
 
   app.post("/api/category-interviews/:sessionId/task-drafts/:draftId/confirm", async (request) => {

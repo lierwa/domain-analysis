@@ -1,12 +1,14 @@
 import type {
   CaptureTaskContent,
   CaptureTaskDraftVersion,
+  CrawlPlanContent,
   InterviewMessageTimelinePart,
   RawSourceObservation,
   RawSourcePayload,
   SourceAccessPolicy,
   SourceCollectionPlanContent,
 } from "@domain-analysis/shared";
+import { sql } from "drizzle-orm";
 import { index, integer, jsonb, pgSchema, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const workbenchSchemaName = "workbench";
@@ -90,15 +92,34 @@ export const captureTaskDraftVersions = workbenchSchema.table("capture_task_draf
   index("capture_task_draft_status_idx").on(table.sessionId, table.status),
 ]);
 
+export const crawlPlanningRuns = workbenchSchema.table("crawl_planning_runs", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull().references(() => captureTasks.id),
+  taskRevision: integer("task_revision").notNull(),
+  instruction: text("instruction"),
+  status: text("status", { enum: ["running", "completed", "interrupted", "failed"] }).notNull(),
+  timelineParts: jsonb("timeline_parts_json").$type<InterviewMessageTimelinePart[]>().notNull(),
+  error: text("error"),
+  startedAt: timestamp("started_at", { mode: "string", withTimezone: true }).notNull(),
+  finishedAt: timestamp("finished_at", { mode: "string", withTimezone: true }),
+}, (table) => [index("crawl_planning_run_task_time_idx").on(table.taskId, table.startedAt)]);
+
 export const sourceCollectionPlans = workbenchSchema.table("source_collection_plans", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull().references(() => captureTasks.id),
   taskRevision: integer("task_revision").notNull(),
+  planningRunId: text("planning_run_id").references(() => crawlPlanningRuns.id),
+  version: integer("version").notNull().default(1),
+  status: text("status", { enum: ["draft", "confirmed", "superseded"] }).notNull().default("draft"),
   contentHash: text("content_hash").notNull(),
-  content: jsonb("content_json").$type<SourceCollectionPlanContent>().notNull(),
+  content: jsonb("content_json").$type<SourceCollectionPlanContent | CrawlPlanContent>().notNull(),
   createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+  confirmedAt: timestamp("confirmed_at", { mode: "string", withTimezone: true }),
 }, (table) => [
   uniqueIndex("source_collection_plan_task_hash_uq").on(table.taskId, table.contentHash),
+  // WHY：旧来源计划没有 planning run；partial unique 只约束新计划版本，不伪造或破坏历史行。
+  uniqueIndex("source_collection_plan_task_version_uq").on(table.taskId, table.version)
+    .where(sql`${table.planningRunId} is not null`),
   index("source_collection_plan_task_time_idx").on(table.taskId, table.createdAt),
 ]);
 

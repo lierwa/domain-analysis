@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   createCodexCategoryInterviewRuntime,
+  createCodexCrawlPlanningRuntime,
   openDataCollectionWorkbench,
 } from "@domain-analysis/workbench";
 
@@ -13,6 +14,11 @@ const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const workbench = await openDataCollectionWorkbench({
   databaseUrl: config.postgresDatabaseUrl,
   categoryInterviewRuntime: createCodexCategoryInterviewRuntime({
+    repositoryRoot,
+    model: config.interviewModelId,
+    reasoningEffort: config.interviewReasoningEffort,
+  }),
+  crawlPlanningRuntime: createCodexCrawlPlanningRuntime({
     repositoryRoot,
     model: config.interviewModelId,
     reasoningEffort: config.interviewReasoningEffort,

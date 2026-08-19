@@ -151,6 +151,12 @@ export function reconcilePersistedMessages(
   return [...restored, ...unpersistedFailures].sort((left, right) => left.sequence - right.sequence);
 }
 
+export function isActionErrorAlreadyVisible(messages: InterviewUiMessage[], error: string) {
+  return messages.some((message) => message.role === "assistant"
+    && message.deliveryStatus === "failed"
+    && message.error === error);
+}
+
 function pendingUserMessage(
   current: InterviewUiMessage[],
   input: { sessionId: string; userId?: string; userText?: string; createdAt: string },
