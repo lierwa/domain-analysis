@@ -545,7 +545,8 @@ Patch Disposition:
 
 ## 9. Git 状态
 
-- 仓库：`D:\work\domain-analysis`
-- 分支：`master`
-- 本轮起始 HEAD：`0afa6c12fff7e06b2406154286179e6352dcd8c2`；当前与 `origin/master` SHA 一致。
-- 当前工作区包含本轮 PostgreSQL 幂等启动脚本、采访 Markdown/确认后结构化 contract、0014 migration、Workbench/Web/Skill/测试和权威文档修改；未 commit、未 push，仅本机可继续。
+- 工作树：`C:\Users\30553\.codex\worktrees\ac3d\domain-analysis`
+- 分支：`codex/executable-category-crawl`
+- 本轮起始 HEAD：`0afa6c12fff7e06b2406154286179e6352dcd8c2`。
+- 实现提交：`6e571f4597d7218f70e59933a0027a2696c7af32`；已推送至 `origin/codex/executable-category-crawl`，并通过 `git ls-remote` 验证本地与远程 SHA 一致。
+- PostgreSQL 幂等启动、采访 Markdown/确认后结构化 contract、可执行 Crawl Plan、0014/0015 migration、JD Provider、Source Execution、Source Dataset、Workbench/Web/Skill/测试和权威文档已形成跨电脑接续点。本地数据库、JD CDP Profile、Cookie 和真实原始来源内容没有提交。
