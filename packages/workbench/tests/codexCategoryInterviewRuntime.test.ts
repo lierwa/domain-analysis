@@ -36,10 +36,31 @@ describe("Codex 采访运行时事件边界", () => {
       itemStatus: "running",
       detail: "冰箱 中国市场 主流品牌 官方网站",
     });
+    expect(remaining).toContainEqual({
+      type: "event",
+      eventType: "item.completed",
+      itemType: "web_search",
+      itemId: "search-1",
+      itemStatus: "completed",
+      detail: "冰箱 中国市场 主流品牌 官方网站",
+      urls: [
+        "https://www.jd.com/",
+        "https://www.haier.com/refrigerators/",
+        "https://example.com/private",
+      ],
+    });
+    expect(remaining).toContainEqual({
+      type: "event",
+      eventType: "item.completed",
+      itemType: "web_search",
+      itemId: "web-search-pages",
+      itemStatus: "completed",
+      urls: ["https://www.midea.cn/"],
+    });
     expect(remaining.at(-1)).toMatchObject({ type: "result", result: { interrupted: false } });
   });
 
-  it("把真实 commentary delta 和工具调用同时映射给 Workbench", async () => {
+  it("把真实 commentary 和网页搜索映射给 Workbench，但不暴露内部本地命令", async () => {
     const runtime = createCodexCategoryInterviewRuntime({
       repositoryRoot: process.cwd(),
       model: "gpt-5.6-terra",
@@ -64,20 +85,21 @@ describe("Codex 采访运行时事件边界", () => {
         id: "turn-lifecycle", kind: "analysis", label: "分析需求与当前抓取范围", status: "running",
       } },
       { type: "activity", activity: {
-        id: "command-1", kind: "tool", label: "执行本地只读命令",
-        detail: "读取采访规则、开发基准与 Git 状态", status: "running",
-      } },
-      { type: "activity", activity: {
-        id: "command-1", kind: "tool", label: "执行本地只读命令",
-        detail: "读取采访规则、开发基准与 Git 状态；未成功完成（退出码 1）", status: "failed",
-      } },
-      { type: "activity", activity: {
         id: "search-1", kind: "web_search", label: "搜索网页",
         detail: "冰箱 中国市场 主流品牌 官方网站", status: "running",
       } },
       { type: "activity", activity: {
         id: "search-1", kind: "web_search", label: "搜索网页",
-        detail: "冰箱 中国市场 主流品牌 官方网站", status: "completed",
+        detail: "冰箱 中国市场 主流品牌 官方网站",
+        urls: [
+          "https://www.jd.com/",
+          "https://www.haier.com/refrigerators/",
+          "https://example.com/private",
+        ], status: "completed",
+      } },
+      { type: "activity", activity: {
+        id: "web-search-pages", kind: "web_search", label: "搜索网页",
+        urls: ["https://www.midea.cn/"], status: "completed",
       } },
       { type: "activity", activity: {
         id: "turn-finalizing", kind: "finalizing", label: "整理并校验本轮结果", status: "running",
@@ -173,9 +195,11 @@ function successSource() {
     resolvedUnresolvedKeys: [],
   });
   return fakeServerPrelude() + `
+let productInterviewThread = false;
+let productInterviewCwd = "";
 async function handle(message) {
   if (process.argv.includes("--output-schema")) process.exit(4);
-  for (const feature of ["plugins", "hooks", "memories"]) {
+  for (const feature of ["plugins", "hooks", "memories", "shell_tool", "unified_exec"]) {
     if (!process.argv.includes(feature)) process.exit(6);
   }
   if (message.method === "initialize") {
@@ -184,11 +208,27 @@ async function handle(message) {
   }
   if (message.method === "thread/start") {
     if (message.params.ephemeral !== true) process.exit(5);
+    productInterviewCwd = String(message.params.cwd);
+    productInterviewThread = productInterviewCwd.endsWith("domain-analysis-category-interview");
     emit({ id: message.id, result: { thread: { id: "thread-1", ephemeral: true } } });
     emit({ method: "thread/started", params: { thread: { id: "thread-1", ephemeral: true } } });
     return;
   }
   if (message.method !== "turn/start") return;
+  const isProductInterview = message.params.input.some((item) => item.type === "text"
+    && item.text.includes("$interview-product-category"));
+  if (isProductInterview && !productInterviewThread) process.exit(8);
+  if (isProductInterview) {
+    const prompt = message.params.input.find((item) => item.type === "text")?.text ?? "";
+    if (!prompt.includes("不要通过本地命令查找或读取 Skill、AGENTS.md、开发文档或 Git 状态")) process.exit(9);
+    if (!prompt.includes("不得把默认采集内容改写成采集深度问题")) process.exit(10);
+    const skill = message.params.input.find((item) => item.type === "skill");
+    if (skill?.name !== "interview-product-category"
+      || !String(skill.path).startsWith(productInterviewCwd)
+      || !String(skill.path).endsWith(".agents/skills/interview-product-category/SKILL.md")) {
+      process.exit(7);
+    }
+  }
   emit({ id: message.id, result: { turn: { id: "turn-1" } } });
   emit({ method: "turn/started", params: { threadId: "thread-1", turn: { id: "turn-1" } } });
   emit({ method: "item/started", params: { item: {
@@ -213,8 +253,21 @@ async function handle(message) {
     id: "search-1", type: "webSearch", query: "冰箱 中国市场 主流品牌 官方网站"
   } } });
   emit({ method: "item/completed", params: { item: {
-    id: "search-1", type: "webSearch", query: "冰箱 中国市场 主流品牌 官方网站"
+    id: "search-1", type: "webSearch", query: "冰箱 中国市场 主流品牌 官方网站",
+    action: { type: "openPage", url: "https://www.jd.com/", query: null, queries: null },
+    results: [
+      { title: "京东", url: "https://www.jd.com/" },
+      { title: "海尔冰箱", metadata: { href: "https://www.haier.com/refrigerators/" } },
+      { title: "带凭据 URL", url: "https://user:secret@example.com/private" },
+      { title: "无效协议", link: "javascript:alert(1)" }
+    ]
   } } });
+  emit({ method: "rawResponseItem/completed", params: {
+    threadId: "thread-1", turnId: "turn-1", item: {
+      type: "web_search_call", id: "raw-search-1", status: "completed",
+      action: { type: "open_page", url: "https://www.midea.cn/" }
+    }
+  } });
   const finalItem = { id: "message-2", type: "agentMessage", text: ${JSON.stringify(output)}, phase: "final_answer" };
   emit({ method: "item/started", params: { item: {
     id: "message-2", type: "agentMessage", text: "", phase: "final_answer"

@@ -1,9 +1,16 @@
-import type { CaptureTask } from "@domain-analysis/shared";
+import type { CaptureTask, InterviewSession } from "@domain-analysis/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Database, MessageSquareText, PencilLine, Plus, RefreshCw } from "lucide-react";
+import { ChevronRight, Database, MessageSquareText, PencilLine, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { fetchCaptureTask, fetchCaptureTaskInterview, fetchCaptureTasks } from "../lib/api";
+import {
+  deleteCaptureTask,
+  deleteCategoryInterview,
+  fetchCaptureTask,
+  fetchCaptureTaskInterview,
+  fetchCaptureTasks,
+  fetchCategoryInterviews,
+} from "../lib/api";
 import {
   ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY,
   CategoryInterviewTimeline,
@@ -16,14 +23,19 @@ type TaskSection = "scope" | "data";
 
 export function CaptureTaskWorkspacePage() {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<WorkspaceMode>("tasks");
+  const [initialSessionId] = useState(() => window.localStorage
+    .getItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY) ?? undefined);
+  const [mode, setMode] = useState<WorkspaceMode>(() => initialSessionId ? "new" : "tasks");
   const [section, setSection] = useState<TaskSection>("scope");
   const [selectedId, setSelectedId] = useState<string>();
   const [newTaskKey, setNewTaskKey] = useState(0);
-  const [editingSessionId, setEditingSessionId] = useState<string>();
+  const [editingSessionId, setEditingSessionId] = useState<string | undefined>(initialSessionId);
   const [revisionError, setRevisionError] = useState<string>();
   const [revisingTaskId, setRevisingTaskId] = useState<string>();
+  const [deletingRecordId, setDeletingRecordId] = useState<string>();
+  const [deleteError, setDeleteError] = useState<string>();
   const tasks = useQuery({ queryKey: ["capture-tasks"], queryFn: fetchCaptureTasks });
+  const interviews = useQuery({ queryKey: ["category-interviews"], queryFn: fetchCategoryInterviews });
   const detail = useQuery({
     queryKey: ["capture-task", selectedId],
     queryFn: () => fetchCaptureTask(selectedId!),
@@ -35,24 +47,74 @@ export function CaptureTaskWorkspacePage() {
   }, [selectedId, tasks.data]);
 
   function showTask(taskId: string) {
+    window.localStorage.removeItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY);
+    setEditingSessionId(undefined);
     setSelectedId(taskId);
     setMode("tasks");
     setSection("scope");
   }
 
+  function showInterview(sessionId: string) {
+    window.localStorage.setItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY, sessionId);
+    setEditingSessionId(sessionId);
+    setRevisionError(undefined);
+    setNewTaskKey((value) => value + 1);
+    setMode("new");
+  }
+
   function handleTaskCreated(task: CaptureTask) {
+    window.localStorage.removeItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY);
     queryClient.setQueryData(["capture-task", task.id], task);
     void queryClient.invalidateQueries({ queryKey: ["capture-tasks"] });
+    void queryClient.invalidateQueries({ queryKey: ["category-interviews"] });
     setEditingSessionId(undefined);
     showTask(task.id);
   }
 
   function startNewTask() {
     window.localStorage.removeItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY);
+    void queryClient.invalidateQueries({ queryKey: ["category-interviews"] });
     setEditingSessionId(undefined);
     setRevisionError(undefined);
     setNewTaskKey((value) => value + 1);
     setMode("new");
+  }
+
+  async function removeInterview(session: InterviewSession) {
+    if (!window.confirm(`删除未完成对话“${session.initialRequest}”？删除后无法恢复。`)) return;
+    setDeleteError(undefined);
+    setDeletingRecordId(session.id);
+    try {
+      await deleteCategoryInterview(session.id);
+      queryClient.setQueryData<InterviewSession[]>(["category-interviews"], (current = []) =>
+        current.filter((item) => item.id !== session.id));
+      if (editingSessionId === session.id) {
+        window.localStorage.removeItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY);
+        setEditingSessionId(undefined);
+        setMode("tasks");
+      }
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "未完成对话删除失败");
+    } finally {
+      setDeletingRecordId(undefined);
+    }
+  }
+
+  async function removeTask(task: CaptureTask) {
+    if (!window.confirm(`从任务记录中删除“${task.name}”？任务历史和原始数据会保留。`)) return;
+    setDeleteError(undefined);
+    setDeletingRecordId(task.id);
+    try {
+      await deleteCaptureTask(task.id);
+      queryClient.setQueryData<CaptureTask[]>(["capture-tasks"], (current = []) =>
+        current.filter((item) => item.id !== task.id));
+      queryClient.removeQueries({ queryKey: ["capture-task", task.id], exact: true });
+      if (selectedId === task.id) setSelectedId(undefined);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "任务记录删除失败");
+    } finally {
+      setDeletingRecordId(undefined);
+    }
   }
 
   async function reviseTask(task: CaptureTask) {
@@ -75,12 +137,19 @@ export function CaptureTaskWorkspacePage() {
     <div className="mx-auto grid min-h-0 w-full max-w-[1440px] min-w-0 flex-1 self-stretch gap-6 lg:grid-cols-[288px_minmax(0,1fr)] lg:overflow-hidden">
       <CaptureTaskSidebar
         tasks={tasks.data ?? []}
+        interviews={interviews.data ?? []}
         selectedId={selectedId}
+        selectedSessionId={editingSessionId}
         mode={mode}
-        isError={tasks.isError}
-        onRetry={() => void tasks.refetch()}
+        isError={tasks.isError || interviews.isError}
+        deleteError={deleteError}
+        deletingRecordId={deletingRecordId}
+        onRetry={() => void Promise.all([tasks.refetch(), interviews.refetch()])}
         onNew={startNewTask}
         onSelect={showTask}
+        onSelectInterview={showInterview}
+        onDeleteTask={(task) => void removeTask(task)}
+        onDeleteInterview={(session) => void removeInterview(session)}
       />
 
       <main className={`flex min-h-0 min-w-0 flex-col ${mode === "new" ? "lg:overflow-hidden" : "lg:overflow-y-auto"}`}>
@@ -121,10 +190,10 @@ function InterviewWorkspace({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="mb-5 shrink-0">
-        <p className="text-xs font-medium text-muted">{sessionId ? "修订已确认抓取任务" : "第一步：确定抓取任务"}</p>
+        <p className="text-xs font-medium text-muted">{sessionId ? "继续抓取任务对话" : "第一步：确定抓取任务"}</p>
         <h2 className="mt-1 text-2xl font-semibold tracking-tight">{sessionId ? "继续完善抓取范围" : "你要抓什么？"}</h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">{sessionId
-          ? "直接说明要增加、删除或调整的内容。确认后生成新版本，已经确认的历史版本不会被覆盖。"
+          ? "未完成对话已恢复。可以继续回答；如果这是已确认任务的修订，重新确认后会生成新版本，历史版本不会被覆盖。"
           : "直接输入商品门类。系统负责调查内容范围和候选来源，只把必须由你决定的取舍交给你。"}</p>
       </header>
       <CategoryInterviewTimeline
@@ -138,20 +207,34 @@ function InterviewWorkspace({
 
 function CaptureTaskSidebar({
   tasks,
+  interviews,
   selectedId,
+  selectedSessionId,
   mode,
   isError,
+  deleteError,
+  deletingRecordId,
   onRetry,
   onNew,
   onSelect,
+  onSelectInterview,
+  onDeleteTask,
+  onDeleteInterview,
 }: {
   tasks: CaptureTask[];
+  interviews: InterviewSession[];
   selectedId?: string;
+  selectedSessionId?: string;
   mode: WorkspaceMode;
   isError: boolean;
+  deleteError?: string;
+  deletingRecordId?: string;
   onRetry: () => void;
   onNew: () => void;
   onSelect: (taskId: string) => void;
+  onSelectInterview: (sessionId: string) => void;
+  onDeleteTask: (task: CaptureTask) => void;
+  onDeleteInterview: (session: InterviewSession) => void;
 }) {
   return (
     <aside aria-label="抓取任务导航" className="rounded-xl border border-line bg-panel p-3 lg:sticky lg:top-0 lg:self-start lg:overflow-y-auto">
@@ -165,21 +248,78 @@ function CaptureTaskSidebar({
       </button>
       <div className="my-3 border-t border-line" />
       <div className="mb-2 flex items-center justify-between px-2 text-xs font-semibold text-muted">
-        <span>任务记录</span><span>{tasks.length}</span>
+        <span>任务记录</span><span>{tasks.length + interviews.length}</span>
       </div>
       {isError && <ErrorPanel label="任务列表加载失败" onRetry={onRetry} />}
+      {deleteError && <p className="mb-2 px-2 text-xs leading-5 text-danger" role="alert">{deleteError}</p>}
       <div className="space-y-1">
+        {interviews.map((session) => (
+          <TaskRecordRow
+            key={session.id}
+            title={session.initialRequest}
+            meta={interviewStatus(session)}
+            selected={mode === "new" && selectedSessionId === session.id}
+            deleting={deletingRecordId === session.id}
+            onSelect={() => onSelectInterview(session.id)}
+            onDelete={() => onDeleteInterview(session)}
+          />
+        ))}
         {tasks.map((task) => (
-          <button key={task.id} type="button" onClick={() => onSelect(task.id)}
-            className={`flex min-h-12 w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left ${mode === "tasks" && selectedId === task.id ? "bg-ink text-surface" : "hover:bg-surface"}`}>
-            <span className="min-w-0"><span className="block truncate text-sm font-medium">{task.name}</span>
-              <span className={`mt-0.5 block text-xs ${mode === "tasks" && selectedId === task.id ? "text-surface/70" : "text-muted"}`}>{task.status === "ready" ? "已确认" : "需重新确认"} · v{task.revision}</span></span>
-            <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />
-          </button>
+          <TaskRecordRow
+            key={task.id}
+            title={task.name}
+            meta={`${task.status === "ready" ? "已确认" : "需重新确认"} · v${task.revision}`}
+            selected={mode === "tasks" && selectedId === task.id}
+            deleting={deletingRecordId === task.id}
+            onSelect={() => onSelect(task.id)}
+            onDelete={() => onDeleteTask(task)}
+          />
         ))}
       </div>
     </aside>
   );
+}
+
+function TaskRecordRow({
+  title,
+  meta,
+  selected,
+  deleting,
+  onSelect,
+  onDelete,
+}: {
+  title: string;
+  meta: string;
+  selected: boolean;
+  deleting: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className={`group flex min-h-12 w-full items-center rounded-lg ${selected ? "bg-ink text-surface" : "hover:bg-surface"}`}>
+      <button type="button" onClick={onSelect}
+        className="flex min-w-0 flex-1 items-center justify-between gap-3 self-stretch px-3 py-2 text-left">
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-medium">{title}</span>
+          <span className={`mt-0.5 block text-xs ${selected ? "text-surface/70" : "text-muted"}`}>{meta}</span>
+        </span>
+      </button>
+      <button type="button" onClick={onDelete} disabled={deleting}
+        className={`mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-md disabled:cursor-wait disabled:opacity-50 ${selected ? "text-surface/70 hover:bg-surface/15 hover:text-surface" : "text-muted hover:bg-danger/10 hover:text-danger"}`}
+        aria-label={`删除${title}`} title="删除记录">
+        {deleting
+          ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
+          : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+      </button>
+    </div>
+  );
+}
+
+function interviewStatus(session: InterviewSession) {
+  if (session.turnState === "running") return "正在生成";
+  if (session.turnState === "failed") return "上次执行失败 · 可继续";
+  if (session.turnState === "interrupted") return "已停止 · 可继续";
+  return session.phase === "task_ready" ? "草稿待确认" : "对话未完成";
 }
 
 function TaskWorkspace({

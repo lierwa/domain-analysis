@@ -1,19 +1,25 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  appendInterviewTimelineActivity,
+  appendInterviewTimelineText,
   captureTaskDraftVersionSchema,
   categoryInterviewRuntimeOutputSchema,
   categoryInterviewViewSchema,
+  completeInterviewTimeline,
+  failInterviewTimeline,
   interviewDecisionConfirmationSchema,
   interviewDecisionSchema,
   interviewSessionSchema,
   interviewTimelineEventSchema,
+  interviewUnresolvedItemSchema,
   normalizedInterviewMessageSchema,
   type CaptureTask,
   type CaptureTaskDraftVersion,
   type CategoryInterviewRuntimeOutput,
   type CategoryInterviewView,
   type InterviewDecision,
+  type InterviewMessageTimelinePart,
   type InterviewSession,
   type InterviewTimelineEvent,
   type InterviewTurnActivity,
@@ -31,7 +37,14 @@ import {
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 
 import { buildConfirmedCaptureTask } from "./captureTaskModule";
+import {
+  CategoryInterviewError,
+  listStandaloneInterviewSessions,
+  removeStandaloneInterviewSession,
+} from "./categoryInterviewRecords";
 import { contentHash } from "./contentHash";
+
+export { CategoryInterviewError } from "./categoryInterviewRecords";
 
 export type CategoryInterviewRuntimeEvent =
   | { type: "activity"; activity: InterviewTurnActivity }
@@ -54,6 +67,7 @@ export interface CategoryInterviewModule {
   start(input: { initialRequest: string }): Promise<CategoryInterviewView>;
   get(sessionId: string): Promise<CategoryInterviewView | null>;
   getByTaskId(taskId: string): Promise<CategoryInterviewView | null>;
+  remove(sessionId: string): Promise<void>;
   runTurn(input: InterviewTurnRequest & { sessionId: string; signal?: AbortSignal }): AsyncIterable<InterviewTimelineEvent>;
   confirmDecision(input: {
     sessionId: string;
@@ -68,16 +82,6 @@ export interface CategoryInterviewModule {
   }>;
 }
 
-export class CategoryInterviewError extends Error {
-  constructor(
-    readonly code: "not_found" | "revision_conflict" | "invalid_state" | "runtime_failed",
-    message: string,
-  ) {
-    super(message);
-    this.name = "CategoryInterviewError";
-  }
-}
-
 export function createCategoryInterviewModule(
   db: WorkbenchDb,
   runtime: CategoryInterviewRuntime,
@@ -86,19 +90,19 @@ export function createCategoryInterviewModule(
   const now = options.now ?? (() => new Date());
   const createId = options.createId ?? ((kind) => `${kind}-${randomUUID()}`);
   return {
-    list: () => listSessions(db),
+    list: async () => {
+      const sessions = await listStandaloneInterviewSessions(db);
+      const views = await Promise.all(sessions.map((session) => loadView(db, session.id)));
+      return views.flatMap((view) => view ? [view.session] : []);
+    },
     start: (input) => start(db, input.initialRequest, now, createId),
     get: (sessionId) => loadView(db, sessionId),
     getByTaskId: (taskId) => loadViewByTaskId(db, taskId),
+    remove: (sessionId) => removeStandaloneInterviewSession(db, sessionId),
     runTurn: (input) => runTurn(db, runtime, input, now, createId),
     confirmDecision: (input) => confirmDecision(db, input, now, createId),
     confirmTaskDraft: (input) => confirmTaskDraft(db, input, now, createId),
   };
-}
-
-async function listSessions(db: WorkbenchDb) {
-  const rows = await db.select().from(categoryInterviewSessions).orderBy(desc(categoryInterviewSessions.updatedAt));
-  return rows.map((row) => normalizeSession(row));
 }
 
 async function start(
@@ -140,6 +144,7 @@ async function* runTurn(
   yield parseEvent({ type: "turn.started", sessionId: input.sessionId, turnId });
   const runtimeView = await requireView(db, input.sessionId);
   let partialText = "";
+  let timelineParts: InterviewMessageTimelinePart[] = [];
   try {
     for await (const event of runtime.run({
       session: runtimeView,
@@ -149,20 +154,24 @@ async function* runTurn(
       signal: input.signal,
     })) {
       if (event.type === "activity") {
+        timelineParts = appendInterviewTimelineActivity(timelineParts, event.activity);
         yield parseEvent({ type: "turn.activity", sessionId: input.sessionId, turnId, activity: event.activity });
         continue;
       }
       if (event.type === "text_delta") {
         partialText += event.delta;
+        timelineParts = appendInterviewTimelineText(timelineParts, event.delta);
         yield parseEvent({ type: "assistant.delta", sessionId: input.sessionId, turnId, delta: event.delta });
         continue;
       }
       if (event.type === "interrupted") {
-        await finishAbnormal(db, runtimeView, partialText, "interrupted", undefined, now, createId);
+        await finishAbnormal(db, runtimeView, partialText, "interrupted", undefined,
+          failInterviewTimeline(timelineParts), now, createId);
         yield parseEvent({ type: "turn.interrupted", sessionId: input.sessionId, turnId });
         return;
       }
-      const completed = await finishTurn(db, runtimeView, event.output, now, createId);
+      const completed = await finishTurn(db, runtimeView, event.output,
+        completeInterviewTimeline(timelineParts, event.output.assistantText), now, createId);
       yield parseEvent({ type: "assistant.message.completed", sessionId: input.sessionId, turnId, message: completed.message });
       yield parseEvent({ type: "interview.state.changed", sessionId: input.sessionId, turnId,
         revision: completed.view.session.revision, phase: completed.view.session.phase,
@@ -173,7 +182,8 @@ async function* runTurn(
     throw new Error("采访运行时未返回完成事件");
   } catch (error) {
     const message = boundedError(error);
-    await finishAbnormal(db, runtimeView, partialText, "failed", message, now, createId);
+    await finishAbnormal(db, runtimeView, partialText, "failed", message,
+      failInterviewTimeline(timelineParts), now, createId);
     yield parseEvent({ type: "turn.failed", sessionId: input.sessionId, turnId, error: message });
   }
 }
@@ -212,6 +222,7 @@ async function finishTurn(
   db: WorkbenchDb,
   view: CategoryInterviewView,
   rawOutput: CategoryInterviewRuntimeOutput,
+  timelineParts: InterviewMessageTimelinePart[],
   now: () => Date,
   createId: (kind: string) => string,
 ) {
@@ -221,12 +232,13 @@ async function finishTurn(
   const message = normalizedInterviewMessageSchema.parse({
     id: createId("interview-message"), sessionId: view.session.id,
     sequence: current.messages.length + 1, role: "assistant", text: output.assistantText,
-    deliveryStatus: "completed", createdAt: timestamp,
+    deliveryStatus: "completed", timelineParts, createdAt: timestamp,
   });
   const rawDrafts = await db.select().from(captureTaskDraftVersions)
     .where(eq(captureTaskDraftVersions.sessionId, view.session.id));
-  const nextPhase = output.taskCandidate ? "task_ready" : current.session.phase;
   const proposedDecision = proposedDecisionOf(output);
+  requireTaskCandidateReady(current, output, proposedDecision);
+  const nextPhase = output.taskCandidate ? "task_ready" : current.session.phase;
 
   await db.transaction(async (transaction) => {
     await transaction.insert(categoryInterviewMessages).values(message);
@@ -283,6 +295,30 @@ function proposedDecisionOf(output: CategoryInterviewRuntimeOutput) {
     selection: recommended.label,
     rationale: output.question.rationale,
   };
+}
+
+function requireTaskCandidateReady(
+  view: CategoryInterviewView,
+  output: CategoryInterviewRuntimeOutput,
+  proposedDecision: ReturnType<typeof proposedDecisionOf>,
+) {
+  if (!output.taskCandidate) return;
+  const resolvedKeys = new Set(output.resolvedUnresolvedKeys);
+  const hasOpenOwnerDecision = Boolean(proposedDecision)
+    || view.decisions.some((item) => item.status === "proposed")
+    || view.unresolvedItems.some((item) => item.owner === "user"
+      && item.status === "open"
+      && !resolvedKeys.has(item.key))
+    || output.unresolvedItems.some((item) => item.owner === "user")
+    || output.taskCandidate.unresolvedItems.some((item) => item.owner === "user");
+  if (hasOpenOwnerDecision) throw invalidState("负责人取舍尚未确认，不能生成抓取任务草稿");
+
+  const confirmedIds = new Set(view.decisions
+    .filter((item) => item.status === "confirmed")
+    .map((item) => item.id));
+  if (output.taskCandidate.decisionIds.some((id) => !confirmedIds.has(id))) {
+    throw invalidState("抓取任务草稿引用了尚未确认的负责人取舍");
+  }
 }
 
 async function confirmDecision(
@@ -390,6 +426,7 @@ async function finishAbnormal(
   text: string,
   status: "interrupted" | "failed",
   error: string | undefined,
+  timelineParts: InterviewMessageTimelinePart[],
   now: () => Date,
   createId: (kind: string) => string,
 ) {
@@ -399,7 +436,7 @@ async function finishAbnormal(
     if (text) await transaction.insert(categoryInterviewMessages).values({
       id: createId("interview-message"), sessionId: view.session.id,
       sequence: current.messages.length + 1, role: "assistant", text,
-      deliveryStatus: status, error, createdAt: timestamp,
+      deliveryStatus: status, error, timelineParts, createdAt: timestamp,
     });
     await transaction.update(categoryInterviewSessions).set({
       turnState: status, revision: current.session.revision + 1, updatedAt: timestamp,
@@ -425,11 +462,15 @@ async function loadView(db: WorkbenchDb, sessionId: string): Promise<CategoryInt
     const parsed = captureTaskDraftVersionSchema.safeParse(omitNulls(normalizeTimestamps(row)));
     return parsed.success ? [parsed.data] : [];
   });
+  const normalizedDecisions = decisions.map(normalizeDecision);
+  const normalizedUnresolvedItems = unresolvedItems.map((item) => interviewUnresolvedItemSchema.parse(
+    omitNulls(normalizeTimestamps(item)),
+  ));
   return categoryInterviewViewSchema.parse({
-    session: normalizeSession(session, taskDrafts),
+    session: normalizeSession(session, taskDrafts, normalizedDecisions, normalizedUnresolvedItems),
     messages: messages.map((item) => normalizedInterviewMessageSchema.parse(omitNulls(normalizeTimestamps(item)))),
-    decisions: decisions.map(normalizeDecision),
-    unresolvedItems: unresolvedItems.map((item) => omitNulls(normalizeTimestamps(item))),
+    decisions: normalizedDecisions,
+    unresolvedItems: normalizedUnresolvedItems,
     taskDrafts,
   });
 }
@@ -441,19 +482,26 @@ async function loadViewByTaskId(db: WorkbenchDb, taskId: string) {
   });
   return draft ? loadView(db, draft.sessionId) : null;
 }
-
 async function requireView(db: WorkbenchDb, sessionId: string) {
   const view = await loadView(db, sessionId);
   if (!view) throw new CategoryInterviewError("not_found", `抓取任务对话不存在：${sessionId}`);
   return view;
 }
-
-function normalizeSession(row: typeof categoryInterviewSessions.$inferSelect, drafts: CaptureTaskDraftVersion[] = []) {
+function normalizeSession(
+  row: typeof categoryInterviewSessions.$inferSelect,
+  drafts: CaptureTaskDraftVersion[] = [],
+  decisions: CategoryInterviewView["decisions"] = [],
+  unresolvedItems: CategoryInterviewView["unresolvedItems"] = [],
+) {
   const rawPhase = row.phase as string;
-  const phase = rawPhase === "confirmed" ? "confirmed" : drafts.some((item) => item.status === "draft") ? "task_ready" : "active";
+  const confirmedIds = new Set(decisions.filter((item) => item.status === "confirmed").map((item) => item.id));
+  const hasOpenOwnerDecision = decisions.some((item) => item.status === "proposed")
+    || unresolvedItems.some((item) => item.owner === "user" && item.status === "open");
+  const hasConfirmableDraft = !hasOpenOwnerDecision && drafts.some((item) => item.status === "draft"
+    && item.content.decisionIds.every((id) => confirmedIds.has(id)));
+  const phase = rawPhase === "confirmed" ? "confirmed" : hasConfirmableDraft ? "task_ready" : "active";
   return interviewSessionSchema.parse({ ...normalizeTimestamps(row), phase });
 }
-
 function normalizeDecision(row: typeof categoryInterviewDecisions.$inferSelect) {
   const options = row.options && row.options.length >= 2 ? row.options : [
     { label: row.selection, description: row.rationale, recommended: true },
@@ -461,7 +509,6 @@ function normalizeDecision(row: typeof categoryInterviewDecisions.$inferSelect) 
   ];
   return interviewDecisionSchema.parse(omitNulls(normalizeTimestamps({ ...row, options })));
 }
-
 function normalizeTimestamps<T extends Record<string, unknown>>(value: T): Record<string, unknown> {
   const result: Record<string, unknown> = { ...value };
   for (const key of ["createdAt", "updatedAt", "confirmedAt", "resolvedAt"] as const) {

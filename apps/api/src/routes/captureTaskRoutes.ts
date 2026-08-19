@@ -7,6 +7,11 @@ const paramsSchema = z.object({ taskId: z.string().min(1) }).strict();
 
 export async function registerCaptureTaskRoutes(app: FastifyInstance, tasks: CaptureTaskModule) {
   app.get("/api/capture-tasks", async () => ({ items: await tasks.list() }));
+  app.delete("/api/capture-tasks/:taskId", async (request, reply) => {
+    const { taskId } = paramsSchema.parse(request.params);
+    await tasks.archive(taskId);
+    return reply.status(204).send();
+  });
   app.get("/api/capture-tasks/:taskId", async (request) => {
     const { taskId } = paramsSchema.parse(request.params);
     const item = await tasks.get(taskId);

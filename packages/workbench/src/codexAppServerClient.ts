@@ -2,6 +2,11 @@ import { execa } from "execa";
 import ndjson from "ndjson";
 import { z } from "zod";
 
+import {
+  extractCodexWebSearchProjection,
+  sanitizeCodexDisplayDetail,
+} from "./codexActivityProjection";
+
 const responseSchema = z.object({
   id: z.union([z.string(), z.number()]),
   result: z.unknown().optional(),
@@ -37,16 +42,26 @@ const threadItemSchema = z.object({
   tool: z.string().optional(),
   action: z.object({
     type: z.string(),
-    query: z.string().optional(),
-    queries: z.array(z.string()).optional(),
-    url: z.string().optional(),
+    query: z.string().nullable().optional(),
+    queries: z.array(z.string()).nullable().optional(),
+    url: z.string().nullable().optional(),
   }).passthrough().nullable().optional(),
+  results: z.array(z.unknown()).nullable().optional(),
 }).passthrough();
 
 const itemNotificationSchema = z.object({ item: threadItemSchema }).passthrough();
 const deltaNotificationSchema = z.object({
   itemId: z.string(),
   delta: z.string().min(1),
+}).passthrough();
+const rawResponseItemCompletedSchema = z.object({
+  item: z.object({
+    type: z.literal("web_search_call"),
+    action: z.object({
+      type: z.string(),
+      url: z.string().nullable().optional(),
+    }).passthrough().nullable().optional(),
+  }).passthrough(),
 }).passthrough();
 const turnCompletedSchema = z.object({
   turn: z.object({
@@ -64,6 +79,7 @@ export interface CodexAppServerClientOptions {
   timeoutMs?: number;
   webSearch?: boolean;
   packageRoot?: string;
+  skill?: { name: string; path: string };
 }
 
 export interface CodexAppServerResult {
@@ -82,6 +98,7 @@ export type CodexAppServerStreamItem =
     itemStatus?: "running" | "completed" | "failed";
     phase?: "commentary" | "final_answer" | null;
     detail?: string;
+    urls?: string[];
   }
   | { type: "text_delta"; delta: string }
   | { type: "result"; result: CodexAppServerResult };
@@ -231,6 +248,8 @@ function startAppServer(options: CodexAppServerClientOptions) {
     "--disable", "plugins",
     "--disable", "hooks",
     "--disable", "memories",
+    "--disable", "shell_tool",
+    "--disable", "unified_exec",
   ];
   const executable = options.executable ?? "npm";
   const executableArgs = options.executable
@@ -287,7 +306,10 @@ function handleResponse(
       threadId,
       params: {
         threadId,
-        input: [{ type: "text", text: prompt, text_elements: [] }],
+        input: [
+          { type: "text", text: prompt, text_elements: [] },
+          ...(options.skill ? [{ type: "skill", name: options.skill.name, path: options.skill.path }] : []),
+        ],
         effort: options.reasoningEffort,
       },
     };
@@ -327,6 +349,29 @@ function mapNotification(method: string, params: unknown) {
         itemId: boundedId(item.id),
         itemStatus: itemStatusOf(method, item.status),
         ...displayDetailOf(item),
+      },
+    };
+  }
+  if (method === "rawResponseItem/completed") {
+    const parsed = rawResponseItemCompletedSchema.safeParse(params);
+    const url = parsed.success
+      ? extractCodexWebSearchProjection({ action: parsed.data.item.action }).urls[0]
+      : undefined;
+    if (!url) return undefined;
+    // WHY：Responses API 的 open_page/find_in_page 只出现在官方 raw 通知；在 adapter 内收窄为既有 web_search activity，避免泄漏底层协议。
+    return {
+      kind: "item" as const,
+      rawType: "webSearch",
+      itemType: "web_search",
+      itemId: "web-search-pages",
+      phase: null,
+      event: {
+        type: "event" as const,
+        eventType: "item.completed",
+        itemType: "web_search",
+        itemId: "web-search-pages",
+        itemStatus: "completed" as const,
+        urls: [url],
       },
     };
   }
@@ -389,28 +434,18 @@ function itemStatusOf(method: string, status?: string): "running" | "completed" 
 
 function displayDetailOf(item: z.infer<typeof threadItemSchema>) {
   let raw: string | undefined;
+  let urls: string[] = [];
   if (item.type === "webSearch") {
-    raw = item.query ?? item.action?.query ?? item.action?.queries?.join("；") ?? item.action?.url;
-  }
-  if (item.type === "commandExecution") {
-    const purpose = commandPurposeOf(item.command);
-    // WHY：完整命令和输出属于本机执行细节；产品表面只说明这次只读检查的目的与安全退出码。
-    raw = itemStatusOf("item/completed", item.status) === "failed"
-      ? item.exitCode === undefined || item.exitCode === null
-        ? `${purpose}；未成功完成`
-        : `${purpose}；未成功完成（退出码 ${item.exitCode}）`
-      : purpose;
+    const projection = extractCodexWebSearchProjection(item);
+    raw = projection.detail;
+    urls = projection.urls;
   }
   if (item.type === "mcpToolCall") raw = [item.server, item.tool].filter(Boolean).join(" / ") || undefined;
-  const detail = raw ? sanitizeDisplayDetail(raw) : undefined;
-  return detail ? { detail } : {};
-}
-
-function commandPurposeOf(command?: string) {
-  if (command && /(interview-product-category|AGENT-SCORECARD|docs[\\/]development|git status)/i.test(command)) {
-    return "读取采访规则、开发基准与 Git 状态";
-  }
-  return "执行 Agent 所需的本地只读检查";
+  const detail = raw ? sanitizeCodexDisplayDetail(raw) : undefined;
+  return {
+    ...(detail ? { detail } : {}),
+    ...(urls.length > 0 ? { urls } : {}),
+  };
 }
 
 function failedAppServerError(
@@ -449,16 +484,6 @@ function protocolError(message: string, diagnostic: string) {
 
 function compactDiagnostic(value: string) {
   return value.replace(/[\r\n]+/g, " ").trim().slice(-4_000);
-}
-
-function sanitizeDisplayDetail(value: string) {
-  return value
-    .replace(/\u001b\[[0-9;]*m/g, "")
-    .replace(/\b(authorization|cookie|password|secret|token|api[_-]?key)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[已隐藏]")
-    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[已隐藏]@")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 1000);
 }
 
 function boundedId(value: string) {

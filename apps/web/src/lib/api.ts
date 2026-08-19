@@ -37,6 +37,10 @@ export async function fetchCategoryInterview(sessionId: string): Promise<Categor
   return categoryInterviewViewSchema.parse(data.item);
 }
 
+export async function deleteCategoryInterview(sessionId: string) {
+  await request<void>(`/api/category-interviews/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+}
+
 export async function confirmInterviewDecision(
   sessionId: string,
   decisionId: string,
@@ -106,6 +110,10 @@ export async function fetchCaptureTasks(): Promise<CaptureTask[]> {
 export async function fetchCaptureTask(taskId: string): Promise<CaptureTask> {
   const data = await request<{ item: unknown }>(`/api/capture-tasks/${encodeURIComponent(taskId)}`);
   return captureTaskSchema.parse(data.item);
+}
+
+export async function deleteCaptureTask(taskId: string) {
+  await request<void>(`/api/capture-tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
 }
 
 export async function fetchSourceCollectionRuns(taskId: string): Promise<SourceCollectionRun[]> {

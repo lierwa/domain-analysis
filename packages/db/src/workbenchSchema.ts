@@ -1,6 +1,7 @@
 import type {
   CaptureTaskContent,
   CaptureTaskDraftVersion,
+  InterviewMessageTimelinePart,
   RawSourceObservation,
   RawSourcePayload,
   SourceAccessPolicy,
@@ -43,6 +44,7 @@ export const categoryInterviewMessages = workbenchSchema.table("category_intervi
   text: text("text").notNull(),
   deliveryStatus: text("delivery_status", { enum: ["completed", "interrupted", "failed"] }).notNull(),
   error: text("error"),
+  timelineParts: jsonb("timeline_parts_json").$type<InterviewMessageTimelinePart[]>(),
   createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
 }, (table) => [uniqueIndex("category_interview_message_sequence_uq").on(table.sessionId, table.sequence)]);
 

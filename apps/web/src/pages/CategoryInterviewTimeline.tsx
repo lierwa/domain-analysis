@@ -51,7 +51,15 @@ export function CategoryInterviewTimeline({
     onTaskCreated,
   });
   const proposed = currentProposedDecision(view);
-  const draftTask = [...(view?.taskDrafts ?? [])].reverse().find((draft) => draft.status === "draft");
+  const confirmedDecisionIds = new Set(view?.decisions
+    .filter((decision) => decision.status === "confirmed")
+    .map((decision) => decision.id));
+  const hasOpenOwnerDecision = Boolean(proposed)
+    || Boolean(view?.unresolvedItems.some((item) => item.owner === "user" && item.status === "open"));
+  // WHY：历史坏数据可能同时含未确认问题和草稿；页面必须以真实 Decision 状态为准，不能继续展示可确认草稿。
+  const draftTask = hasOpenOwnerDecision ? undefined : [...(view?.taskDrafts ?? [])].reverse()
+    .find((draft) => draft.status === "draft"
+      && draft.content.decisionIds.every((id) => confirmedDecisionIds.has(id)));
 
   async function handleNew(message: AppendMessage) {
     const text = textOf(message).trim();

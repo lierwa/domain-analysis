@@ -485,6 +485,20 @@ Workbench 拥有 Interview Session、规范化 Message、append-only Interview D
 - 修复不新增 Timeline 状态机。连接、`thread.started` 与 `turn.started` 复用同一个 lifecycle ID 原位推进；工具 activity 按既有 `kind` 投影为与普通状态行不同的紧凑边框块，`webSearch.query/action` 和安全命令目的直接显示；text/tool part 交界只去除多余首尾空行，段内换行保持不变。
 - 官方 App Server 文档确认 `agentMessage.phase` 使用 `commentary | final_answer`，且所有 item 都有 `item/started`/`item/completed` 生命周期。Workbench 因而在 `final_answer` 的 `item/started` 到达时显示“整理并校验本轮结果”，同 ID 完成时原位收口；这使用现有协议字段，不通过计时器猜测模型状态：https://learn.chatgpt.com/docs/app-server
 
+#### 2026-08-19 Web Search 折叠与 URL 保留纠错
+
+- 用户真实截图否定了上一节“每个 `webSearch` 都显示独立边框块并直接展示 query”的交互：多次搜索属于同一轮 Web Search，应默认折叠为一条网页计数，展开后才显示实际 URL；所有状态行、搜索行和工具标题的 icon/text 必须垂直居中。
+- 本机锁定的 `@openai/codex@0.147.0` 用官方 `codex app-server generate-json-schema --experimental` / `generate-ts --experimental` 生成的协议确认：高层 `WebSearchThreadItem` 含 `action` 与可空 `results`；`results` 被官方明确标为可演进的 opaque JSON；`rawResponseItem/completed` 还会交付 Responses API `web_search_call.action`，其中 `open_page` / `find_in_page` 才携带部分实际 URL。仅消费 `query` 或只看高层 `action.url` 都会丢页面。
+- 接受的薄 adapter 同时读取高层 `action/results` 和官方 raw web-search action，只在外部 seam 有界遍历 opaque results，最多保留 50 个去重的 http(s) URL、移除 URL credentials，并立即收窄进既有 typed activity；不从最终助手文案、站点名或搜索 query 反推 URL，不新增 parser 库、Provider、fallback 或第二事实源。
+- Web 继续复用 assistant-ui ordered parts 和原生 `<details>`：同一 assistant turn 的多个 `web_search` part 聚合到首次出现的位置，闭合摘要只显示唯一网页数，展开显示完整 URL。真实“抓烤箱”运行得到 41 个唯一 URL；闭合时 `open=false` 且链接不可见，展开后 41/41 可见并去重，搜索行和 finalizing 行的 icon/text 中心线实测差值均为 0px。
+
+#### 2026-08-19 刷新恢复与任务记录生命周期纠错
+
+- 用户真实刷新证明 PostgreSQL 中的未完成 Interview Session 和消息仍完整，但顶层工作区固定初始化为正式任务模式，导致读取 localStorage 导航指针的 `CategoryInterviewTimeline` 根本没有挂载；这属于生产恢复入口不可达，不是 assistant-ui 或消息持久化失败。
+- 继续复用 Workbench/PostgreSQL 事实源和 React Query。顶层只从 localStorage 读取可丢弃的当前会话指针来决定初始投影；`GET /api/category-interviews` 直接列出尚未关联正式 Capture Task 的未完成采访，指针丢失时仍可从任务记录继续。已确认任务的修订会话由 Capture Task 入口代表，避免同一任务重复显示。
+- 删除未完成采访使用 PostgreSQL 事务按外键顺序清理该会话私有的 Decision、Unresolved Item、Draft 和 Message；运行中或已关联正式任务的采访失败关闭。正式任务复用已有 `archived` 状态，`DELETE /api/capture-tasks/:id` 只归档并从活动 list/get 隐藏，不物理删除版本历史或 Source Dataset。该实现只使用现有 Drizzle、Fastify 和浏览器原生确认框，不新增删除框架、恢复协议或第二事实源。
+- 定向红灯原先稳定得到“刷新仍显示任务列表”和两个 DELETE 404；修复后页面刷新恢复电视机的 2 条规范化消息及负责人问题，任务记录显示 4 个未完成采访和 1 个正式任务，新增任务行的选择/箭头/删除图标中心线差均为 0px，console error/warn 为 0。真实临时未完成采访 DELETE 返回 204、再次读取为 404；临时正式任务 DELETE 返回 204、底层状态为 `archived`、活动读取为 404，随后精确清理测试记录。
+
 #### 2026-08-16 PC Workbench 信息架构复核
 
 问题：首版项目页把新品类采访、项目概览、市场总体和证据面纵向叠在同一页面，视觉上会把采访误解成冰箱项目的一部分，也无法表达用户当前是在“创建品类”还是“推进既有项目”。
@@ -623,12 +637,13 @@ Browser
 - 用户指出“Codex 不可能不支持流式”是正确的。旧结论把三个事实混在了一起：`codex exec --json` 提供的是 JSONL 生命周期事件；`--output-schema` 约束最终助手消息；旧 adapter 又主动丢弃 `agent_message` 并等待 `--output-last-message` 文件。因此页面只能看到活动，不能看到文字 token delta。
 - 重新核对官方 App Server 文档与本机锁定的 `@openai/codex@0.147.0` 生成协议：稳定 schema 同时包含 `ThreadStartParams.ephemeral`、`item/agentMessage/delta`、`MessagePhase = commentary | final_answer`。此前“只有 thread/fork 支持 ephemeral”的结论来自不完整文档阅读，现已推翻。协议只生成到两个 `/tmp` 目录，核对后删除，没有把生成物写回仓库：https://developers.openai.com/codex/app-server
 - 真实协议探针证明：设置 `turn/start.outputSchema` 时，commentary 也会被模型约束成 JSON token；去掉该参数后，commentary 是正常中文 delta，final_answer 仍可按提示只返回 JSON。正式 adapter 因而不再设置 `outputSchema`，而是在 prompt 中附最终 JSON Schema，并对完整 final_answer 执行既有 Zod 校验。失败即公开报错，不做宽松 parser、修复模型或自动重试。
-- 当前接受边界为：每轮启动官方 App Server `stdio`，`thread/start` 强制 `ephemeral:true`、`path:null`、只读 sandbox、never approval；只把 `phase=commentary` 的 delta 投影为 `assistant.delta`，把 `phase=final_answer` 留在服务端解析。Workbench/PostgreSQL 仍拥有全部消息、决定、未决项和任务草稿，进程退出后没有可 resume 的产品 thread。
-- 为避免本机通用插件、hooks 和 memories 介入产品采访，启动参数显式关闭这三项稳定 feature；项目仓库内专用品类 Skill 仍从工作目录加载。用户 MCP 启动失败可能写入本机 stderr，但不会再使已完成 turn 失败，也不会进入浏览器；工具详情仍只投影实际 item 且经过脱敏。
+- 当前接受边界为：每轮启动官方 App Server `stdio`，`thread/start` 强制 `ephemeral:true`、只读 sandbox、never approval，并使用不继承工程仓库 `AGENTS.md` 的隔离空目录；只把 `phase=commentary` 的 delta 投影为 `assistant.delta`，把 `phase=final_answer` 留在服务端解析。Workbench/PostgreSQL 仍拥有全部消息、决定、未决项和任务草稿，进程退出后没有可 resume 的产品 thread。
+- 为避免本机工程规则、通用插件、hooks 和 memories 介入产品采访，启动参数显式关闭后三项稳定 feature。每轮由 Workbench 把仓库内权威 Skill 覆盖同步到隔离 cwd 的标准 `.agents/skills/interview-product-category/SKILL.md`，再按官方推荐在 `turn/start.input` 同时提供 `$interview-product-category` 与该绝对路径 `skill` item；模型不需要也不能执行本地命令寻找文件。官方配置参考同时确认 `features.shell_tool` 和 `features.unified_exec` 都可关闭；采访 App Server 进程因此直接 `--disable` 两项能力，只保留 web search，adapter 对异常/旧 `commandExecution` 继续不投影：https://developers.openai.com/codex/app-server 、https://developers.openai.com/codex/config-reference
 - 真实 `gpt-5.6-terra + medium` 运行同时观察到中文逐 token commentary、多次 `web_search` item 和最终通过 `categoryInterviewRuntimeOutputSchema` 的京东负责人问题。真实 Workbench 页面在运行中先出现中文增量，再追加搜索活动，结束后用已持久化的最终 assistant message 替换临时气泡，浏览器 console 无 error。
 - App Server 命令在 0.147.0 CLI 帮助中仍标记 experimental，因此 adapter 必须继续锁版本、保持单文件薄边界并由 fake 协议回归保护；不引入动态 tools、SDK thread、Pi、第二 Provider 或自动 fallback。若未来版本移除 `thread/start.ephemeral` 或 message phase，直接失败并重新进入调研门，不退回假流式。
-- 官方 App Server 协议声明 `commandExecution` 完成项可带 `status / aggregatedOutput / exitCode / durationMs`，且 `item/completed` 是该 item 的权威最终状态。旧 adapter 只投影 `status` 和完整 `command`，丢弃了退出码/输出：因此 2026-08-19 截图只能证明该 item 被标记为 failed，不能事后恢复精确 stderr。当前同一命令复跑 exit 0、四个文件和 PowerShell 路径均存在；实现已改为不显示原始命令，只在失败时投影安全退出码。未来如需精确诊断必须从当次完成 item 在服务端受控记录，不能从 UI 猜测：https://learn.chatgpt.com/docs/app-server
-- 截图中的命令内容表明该次 `commandExecution` 在读取品类采访 Skill、开发基准、进度/积分账本并核对 Git 状态；这是仓库约束要求的只读上下文加载，不是抓取商品数据。当前 adapter 只把这一已知目的归类为“读取采访规则、开发基准与 Git 状态”，不把绝对路径、完整命令或输出发送给 Web；无法识别的命令只显示通用只读检查说明。
+- 官方 App Server 协议声明 `commandExecution` 完成项可带 `status / aggregatedOutput / exitCode / durationMs`，且 `item/completed` 是该 item 的权威最终状态。旧 adapter 先后显示过完整命令和“安全目的摘要”，但两种投影都把工程 Agent 的内部执行误当成抓取产品活动；当前删除整个 `commandExecution` 产品投影，不再显示命令、退出码或目的文案。未来工程诊断只能留在服务端受控边界，不能进入采访 Timeline：https://learn.chatgpt.com/docs/app-server
+- 截图中的命令内容证明旧运行时继承了仓库工程约束，读取采访 Skill、开发基准、进度/积分账本并核对 Git 状态；这不是商品来源调查，也不该成为用户可见步骤。当前运行时把 Skill 同步进隔离 cwd 后显式注入，关闭 shell/unified exec 能力，并在产品 prompt 中禁止寻找 Skill、`AGENTS.md`、开发文档或 Git 状态。首轮/首轮重试在服务端额外要求观察到真实 `web_search` item，否则失败关闭，不接受未调查就提问或生成草稿。
+- 旧 assistant 消息只保存最终 `text`，运行中的 ordered parts 只存在于 React 内存；因此完整刷新必然丢失搜索和工具历史，旧 Web 测试却把刷新后的“服务端消息”错误地复用了同一份 live parts。当前 `category_interview_messages.timeline_parts_json` 保存有序文字/活动 union，Workbench 与 Web 复用同一组 append/complete/fail 规则，刷新直接重放数据库事实；没有 timeline 的历史消息继续只显示最终文本，不伪造旧工具调用。
 
 ### R-030 商品底层知识来源与质量门
 

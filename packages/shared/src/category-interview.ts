@@ -19,6 +19,21 @@ export const interviewSessionSchema = z.object({
   updatedAt: isoDateSchema,
 }).strict();
 
+export const interviewActivityKinds = ["agent", "analysis", "web_search", "tool", "finalizing"] as const;
+export const interviewTurnActivitySchema = z.object({
+  id: idSchema,
+  kind: z.enum(interviewActivityKinds),
+  label: z.string().min(1).max(200),
+  detail: z.string().min(1).max(1000).optional(),
+  // WHY：单个 App Server 搜索项最多提取 50 个网址，但同一轮会聚合多个搜索项；这里覆盖完整有序时间线的理论上限，避免聚合后整条记录校验失败并消失。
+  urls: z.array(z.string().url().max(2048)).max(10_000).optional(),
+  status: z.enum(["running", "completed", "failed"]),
+}).strict();
+export const interviewMessageTimelinePartSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("text"), text: z.string().min(1).max(40_000) }).strict(),
+  z.object({ type: z.literal("activity"), activity: interviewTurnActivitySchema }).strict(),
+]);
+
 export const normalizedInterviewMessageSchema = z.object({
   id: idSchema,
   sessionId: idSchema,
@@ -27,6 +42,7 @@ export const normalizedInterviewMessageSchema = z.object({
   text: z.string().min(1).max(40_000),
   deliveryStatus: z.enum(["completed", "interrupted", "failed"]),
   error: z.string().min(1).max(2000).optional(),
+  timelineParts: z.array(interviewMessageTimelinePartSchema).max(200).optional(),
   createdAt: isoDateSchema,
 }).strict();
 
@@ -117,17 +133,20 @@ export const categoryInterviewRuntimeOutputSchema = z.object({
   }).strict()).nullable().default([]).transform((value) => value ?? []),
   resolvedUnresolvedKeys: z.array(z.string().min(1)).nullable().default([]).transform((value) => value ?? []),
   taskCandidate: captureTaskContentSchema.nullable().optional().transform((value) => value ?? undefined),
-}).strict();
+}).strict().superRefine((output, context) => {
+  const hasPendingOwnerDecision = Boolean(output.question || output.proposedDecision)
+    || output.unresolvedItems.some((item) => item.owner === "user")
+    || output.taskCandidate?.unresolvedItems.some((item) => item.owner === "user");
+  if (output.taskCandidate && hasPendingOwnerDecision) {
+    context.addIssue({
+      code: "custom",
+      path: ["taskCandidate"],
+      message: "存在待负责人确认的问题时不能生成抓取任务草稿",
+    });
+  }
+});
 
 const eventBase = { sessionId: idSchema, turnId: idSchema };
-export const interviewActivityKinds = ["agent", "analysis", "web_search", "tool", "finalizing"] as const;
-export const interviewTurnActivitySchema = z.object({
-  id: idSchema,
-  kind: z.enum(interviewActivityKinds),
-  label: z.string().min(1).max(200),
-  detail: z.string().min(1).max(1000).optional(),
-  status: z.enum(["running", "completed", "failed"]),
-}).strict();
 export const interviewTimelineEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("turn.started"), ...eventBase }).strict(),
   z.object({ type: z.literal("turn.activity"), ...eventBase,
@@ -144,6 +163,7 @@ export const interviewTimelineEventSchema = z.discriminatedUnion("type", [
 
 export type InterviewSession = z.infer<typeof interviewSessionSchema>;
 export type NormalizedInterviewMessage = z.infer<typeof normalizedInterviewMessageSchema>;
+export type InterviewMessageTimelinePart = z.infer<typeof interviewMessageTimelinePartSchema>;
 export type InterviewDecision = z.infer<typeof interviewDecisionSchema>;
 export type InterviewDecisionConfirmation = z.infer<typeof interviewDecisionConfirmationSchema>;
 export type InterviewUnresolvedItem = z.infer<typeof interviewUnresolvedItemSchema>;
@@ -152,3 +172,89 @@ export type CategoryInterviewView = z.infer<typeof categoryInterviewViewSchema>;
 export type InterviewTurnRequest = z.infer<typeof interviewTurnRequestSchema>;
 export type CategoryInterviewRuntimeOutput = z.infer<typeof categoryInterviewRuntimeOutputSchema>;
 export type InterviewTimelineEvent = z.infer<typeof interviewTimelineEventSchema>;
+
+export function appendInterviewTimelineActivity(
+  parts: InterviewMessageTimelinePart[],
+  activity: InterviewTurnActivity,
+) {
+  const settled = settleLifecycleActivities(trimTrailingTextBoundary(parts), activity.id);
+  const existingIndex = settled.findIndex((part) => part.type === "activity"
+    && part.activity.id === activity.id);
+  if (existingIndex < 0) return [...settled, { type: "activity" as const, activity }];
+  return settled.map((part, index) => index === existingIndex && part.type === "activity"
+    ? { type: "activity" as const, activity: mergeActivity(part.activity, activity) }
+    : part);
+}
+
+export function appendInterviewTimelineText(parts: InterviewMessageTimelinePart[], delta: string) {
+  const settled = settleLifecycleActivities(parts);
+  const last = settled.at(-1);
+  const visibleDelta = last?.type === "text" ? delta : trimLeadingBlankLines(delta);
+  if (!visibleDelta) return settled;
+  return last?.type === "text"
+    ? settled.map((part, index) => index === settled.length - 1 && part.type === "text"
+      ? { type: "text" as const, text: part.text + visibleDelta }
+      : part)
+    : [...settled, { type: "text" as const, text: visibleDelta }];
+}
+
+export function completeInterviewTimeline(parts: InterviewMessageTimelinePart[], finalText: string) {
+  const completed = trimTrailingTextBoundary(settleAllActivities(parts));
+  const streamed = completed.filter((part) => part.type === "text").map((part) => part.text).join("");
+  if (streamed.trim() === finalText.trim() || streamed.includes(finalText)) return completed;
+  const suffix = finalText.startsWith(streamed) ? finalText.slice(streamed.length) : finalText;
+  const visibleSuffix = trimLeadingBlankLines(suffix).replace(/(?:\r?\n[ \t]*)+$/, "");
+  return visibleSuffix.trim() ? [...completed, { type: "text" as const, text: visibleSuffix }] : completed;
+}
+
+export function failInterviewTimeline(parts: InterviewMessageTimelinePart[]) {
+  let runningIndex = -1;
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (part?.type === "activity" && part.activity.status === "running") {
+      runningIndex = index;
+      break;
+    }
+  }
+  return parts.map((part, index) => index === runningIndex && part.type === "activity"
+    ? { type: "activity" as const, activity: { ...part.activity, status: "failed" as const } }
+    : part);
+}
+
+function mergeActivity(previous: InterviewTurnActivity, current: InterviewTurnActivity): InterviewTurnActivity {
+  const urls = [...new Set([...(previous.urls ?? []), ...(current.urls ?? [])])];
+  return {
+    ...previous,
+    ...current,
+    detail: current.detail ?? previous.detail,
+    ...(urls.length > 0 ? { urls } : {}),
+  };
+}
+
+function settleLifecycleActivities(parts: InterviewMessageTimelinePart[], currentId?: string) {
+  return parts.map((part) => part.type === "activity"
+    && part.activity.id !== currentId
+    && part.activity.status === "running"
+    && ["agent", "analysis", "finalizing"].includes(part.activity.kind)
+    ? { type: "activity" as const, activity: { ...part.activity, status: "completed" as const } }
+    : part);
+}
+
+function settleAllActivities(parts: InterviewMessageTimelinePart[]) {
+  return parts.map((part) => part.type === "activity" && part.activity.status === "running"
+    ? { type: "activity" as const, activity: { ...part.activity, status: "completed" as const } }
+    : part);
+}
+
+function trimLeadingBlankLines(value: string) {
+  return value.replace(/^(?:[ \t]*\r?\n)+/, "");
+}
+
+function trimTrailingTextBoundary(parts: InterviewMessageTimelinePart[]) {
+  const last = parts.at(-1);
+  if (last?.type !== "text") return parts;
+  // WHY：事件顺序本身提供视觉分隔，边界空行不应被持久化成刷新后的大块留白。
+  const text = last.text.replace(/(?:\r?\n[ \t]*)+$/, "");
+  if (!text) return parts.slice(0, -1);
+  return parts.map((part, index) => index === parts.length - 1 ? { type: "text" as const, text } : part);
+}

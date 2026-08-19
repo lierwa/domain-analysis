@@ -6,6 +6,8 @@
 
 用户新建一个“抓取任务”，直接输入“抓冰箱”之类的需求。系统先像专业爬虫顾问一样调查这个门类应该关注什么、有哪些真实来源，只把必须由用户决定的取舍拿出来问。对话结束后得到一份可读的抓取任务草稿；用户确认后才成为正式抓取任务。范围不够时，无论草稿是否已经确认，都可以回到同一段对话继续补充；再次确认会形成同一任务的新版本，旧版本不被覆盖。
 
+未完成对话会保存在任务记录中，刷新页面后继续原会话。未关联正式任务的对话可以确认后删除；正式任务的“删除”只归档并移出活动列表，历史版本和已经形成的原始数据不会被物理抹掉。
+
 下一步，系统会根据不同来源决定原始捕获单元：网页可能保存 HTML 或源站 JSON，文档保存 PDF，表格保存 CSV/XLSX，图片和其他媒体保存原文件。阶段 1 不判断哪些字段最终有用，也不把所有来源硬塞进同一个参数模板。
 
 用户当前只需要验收两件事：对话产出的任务是否正确，以及后续抓回来的原始数据是否真实、持久、可查看、可导出。清洗、Evidence、知识加工和知识包不在当前实现里。
@@ -34,7 +36,7 @@
 ```text
 用户首句
   -> Category Interview Module
-  -> 本地 Codex App Server ephemeral 单轮调查/提问
+  -> 隔离产品工作目录中的 Codex App Server ephemeral 单轮调查/提问
   -> 版本化抓取任务草稿
   -> 用户确认
   -> Capture Task
@@ -52,7 +54,7 @@
 
 | 事实 | 唯一拥有者 | 其他模块职责 |
 | --- | --- | --- |
-| 对话消息、当前状态、未决项 | Category Interview Module / PostgreSQL | UI 展示；Codex 每轮读取快照 |
+| 对话消息、消息内有序文字/活动时间线、当前状态、未决项 | Category Interview Module / PostgreSQL | UI 展示并在刷新后重放；Codex 每轮读取快照 |
 | 用户确认的取舍 | Interview Decision | Skill 提建议；UI 通过同一 Composer 提交负责人原文回答 |
 | 准备抓什么、从哪里抓 | 版本化抓取任务草稿 | 用户确认前不能执行；历史版本不可变 |
 | 当前已确认抓取范围 | Capture Task | 指向最新确认版本；Crawl Planner 只读指定版本 |
@@ -60,7 +62,7 @@
 | 一次访问发生了什么 | Raw Source Observation | UI 与导出读取 |
 | 来源当时返回的原始内容 | Source Snapshot / Source Asset | 后续清洗只读，不覆盖 |
 
-Codex 不拥有产品 thread、任务或来源数据。每轮只创建 `ephemeral: true` 的内存 thread；Workbench 重放 PostgreSQL 中的 typed state。运行中的 commentary 通过官方 delta 协议展示，最终机器 JSON 只在进程边界由 Zod 校验，不作为用户配置面板。
+Codex 不拥有产品 thread、任务或来源数据。每轮先把仓库内权威采访 Skill 同步到不继承工程 `AGENTS.md` 的隔离目录标准 `.agents/skills/` 位置，再创建 `ephemeral: true` 内存 thread，并通过官方 `skill` input 显式注入该副本；该产品运行时关闭官方 `shell_tool` 和 `unified_exec` feature，只保留采访所需的网页搜索。Workbench 重放 PostgreSQL 中的 typed state。运行中的 commentary 通过官方 delta 协议展示，最终机器 JSON 只在进程边界由 Zod 校验，不作为用户配置面板。新品类首轮没有真实 `web_search` item 时失败关闭，不能先提问或生成草稿。
 
 ## 5. 当前模块
 
@@ -68,14 +70,16 @@ Codex 不拥有产品 thread、任务或来源数据。每轮只创建 `ephemera
 
 - 接受用户首句，不重复确认已经明确的门类；
 - 保存消息、带 2–3 个建议和唯一推荐项的负责人问题、决定和未决项；
+- assistant 消息同时保存按到达顺序组成的文字/活动时间线；Web 刷新只重放该事实，不从浏览器内存或最终文本猜测工具历史；
 - 将结构化问题统一保存为 proposed Decision，但在 Timeline 中投影为普通助手消息；用户通过 Composer 发送建议项或自定义方案就是显式回答，不再增加独立题板或第二个“确认”动作；
 - confirmed Decision 保存负责人回答原文并指向对应用户消息；建议项仍只是 proposal 上下文，不限制输入；
 - 接受 Codex 的 `taskCandidate`，形成版本化任务草稿；
-- 只在用户显式确认后生成 Capture Task；确认后仍接受增量消息并形成后续草稿版本。
+- 只在用户显式确认后生成 Capture Task；确认后仍接受增量消息并形成后续草稿版本；
+- 列出尚未关联正式任务的未完成采访，支持刷新恢复和继续；运行中的采访不能删除，已关联正式任务的采访不能脱离任务单独删除。
 
 ### 5.2 Capture Task Module
 
-保存和读取已确认任务的当前版本：原始需求、门类、市场口径、内容范围、京东意向、候选来源、排除项和未决项。首次确认创建任务；后续确认保持任务 ID 不变并推进 revision，历史确认内容仍由不可变草稿版本保留。它不保存参数 schema、知识层或证据规则。
+保存和读取已确认任务的当前版本：原始需求、门类、市场口径、内容范围、京东意向、候选来源、排除项和未决项。首次确认创建任务；后续确认保持任务 ID 不变并推进 revision，历史确认内容仍由不可变草稿版本保留。删除活动任务记录时只把状态改为 `archived` 并从活动读取接口隐藏，不级联删除采访、草稿版本或 Source Dataset。它不保存参数 schema、知识层或证据规则。
 
 ### 5.3 Source Dataset Module
 
@@ -127,9 +131,10 @@ Web 不推导任务状态；API 只适配 Workbench；Worker 不拥有任务事�
 2. 系统主动调查品牌、型号、内容范围和候选来源；
 3. 家电出现一次京东意向问题，提供 2–3 个选项和推荐项；
 4. 草稿可读地展示范围和真实候选来源，不出现参数编辑器、Evidence 或知识加工；
-5. 每个 assistant turn 按 SSE 到达顺序交错追加 commentary 与经过脱敏的搜索/工具活动；同一活动的 started/completed 只原位更新，后到文字不得插到既有活动之前；连接、thread 启动和 turn 启动只推进同一条生命周期状态，搜索/工具调用使用独立紧凑样式并直接显示安全 query/目的摘要，`final_answer` 生成期间必须显示可理解的整理校验状态；
+5. 每个 assistant turn 按 SSE 到达顺序交错追加 commentary 与经过脱敏的搜索/产品工具活动，并把相同有序时间线随 assistant 消息持久化；同一活动的 started/completed 只原位更新，后到文字不得插到既有活动之前；连接、thread 启动和 turn 启动只推进同一条生命周期状态；同轮 `web_search` 默认折叠为一条“搜索了 N 个网页”，展开才显示 App Server 实际交付并去重的 http(s) URL；采访运行时禁用 shell 能力，adapter 对异常/旧 `commandExecution` 仍失败关闭且不投影；`final_answer` 生成期间必须显示可理解的整理校验状态；
 6. 负责人问题作为普通消息展示建议，Composer 可发送建议项或自定义回答；发送即确认该回答并继续，不出现独立题板或第二个“显式确认”；
 7. ScrollToBottom 只在用户离开 live edge 阅读历史时出现；回到底部后由 assistant-ui 恢复自动跟随，按钮不得覆盖消息或草稿卡；
 8. 用户确认后生成正式 Capture Task，但不自动抓取；已确认任务可以继续原对话并生成同一任务的新版本。
+9. 未完成采访显示在任务记录中；刷新恢复当前会话、规范化消息及消息内搜索/工具时间线；删除未完成采访和归档正式任务均需用户确认，且不能误删正式任务历史或原始数据。
 
 未通过本门前，不实现 Crawl Plan 或真实 Provider。

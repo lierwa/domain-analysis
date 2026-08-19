@@ -35,6 +35,12 @@ export async function registerCategoryInterviewRoutes(
     return { item };
   });
 
+  app.delete("/api/category-interviews/:sessionId", async (request, reply) => {
+    const { sessionId } = sessionParamsSchema.parse(request.params);
+    await interviews.remove(sessionId);
+    return reply.status(204).send();
+  });
+
   app.get("/api/capture-tasks/:taskId/interview", async (request) => {
     const { taskId } = taskParamsSchema.parse(request.params);
     const item = await interviews.getByTaskId(taskId);

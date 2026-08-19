@@ -3,11 +3,12 @@ import { randomUUID } from "node:crypto";
 import { captureTaskSchema, type CaptureTask, type CaptureTaskContent } from "@domain-analysis/shared";
 import type { WorkbenchDb } from "@domain-analysis/db";
 import { captureTasks } from "@domain-analysis/db";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 
 export interface CaptureTaskModule {
   list(): Promise<CaptureTask[]>;
   get(taskId: string): Promise<CaptureTask | null>;
+  archive(taskId: string): Promise<void>;
 }
 
 export class CaptureTaskError extends Error {
@@ -19,11 +20,23 @@ export class CaptureTaskError extends Error {
 
 export function createCaptureTaskModule(db: WorkbenchDb): CaptureTaskModule {
   return {
-    list: async () => (await db.select().from(captureTasks).orderBy(desc(captureTasks.updatedAt)))
+    list: async () => (await db.select().from(captureTasks)
+      .where(ne(captureTasks.status, "archived"))
+      .orderBy(desc(captureTasks.updatedAt)))
       .map(normalizeTask),
     get: async (taskId) => {
-      const row = await db.query.captureTasks.findFirst({ where: eq(captureTasks.id, taskId) });
+      const row = await db.query.captureTasks.findFirst({
+        where: and(eq(captureTasks.id, taskId), ne(captureTasks.status, "archived")),
+      });
       return row ? normalizeTask(row) : null;
+    },
+    archive: async (taskId) => {
+      const rows = await db.update(captureTasks).set({
+        // WHY：正式任务可能已经关联版本历史和原始数据；“删除记录”只移出活动工作区，不能物理抹掉审计事实。
+        status: "archived",
+        updatedAt: new Date().toISOString(),
+      }).where(eq(captureTasks.id, taskId)).returning({ id: captureTasks.id });
+      if (rows.length === 0) throw new CaptureTaskError("not_found", `抓取任务不存在：${taskId}`);
     },
   };
 }

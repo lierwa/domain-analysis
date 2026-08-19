@@ -153,6 +153,83 @@ describeWithPostgres("抓取任务确认与修订", () => {
       supersedesDecisionId: proposed.id,
     });
   });
+
+  it("将已展示的网页搜索与说明按顺序持久化，重新读取会话仍完整保留", async () => {
+    await migrateWorkbenchDatabase(databaseUrl!);
+    db = createWorkbenchDb(databaseUrl!);
+    const prefix = `timeline-${randomUUID()}`;
+    let idSequence = 0;
+    const interviews = createCategoryInterviewModule(db, new TimelineRuntime(), {
+      createId: (kind) => `${prefix}-${kind}-${++idSequence}`,
+    });
+    const started = await interviews.start({ initialRequest: "抓电视机" });
+    sessionId = started.session.id;
+
+    await collect(interviews.runTurn({
+      sessionId,
+      trigger: "user_message",
+      text: "抓电视机",
+      expectedRevision: started.session.revision,
+    }));
+
+    const reloaded = await interviews.get(sessionId);
+    expect(reloaded?.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      timelineParts: [
+        { type: "activity", activity: {
+          id: "search-1",
+          kind: "web_search",
+          status: "completed",
+          urls: ["https://www.jd.com/", "https://www.tcl.com/cn/zh/tvs"],
+        } },
+        { type: "text", text: "正在核对电视机来源。" },
+        { type: "text", text: "请选择京东抓取范围。" },
+      ],
+    });
+  });
+
+  it("拒绝把待确认负责人问题和任务草稿写进同一轮", async () => {
+    await migrateWorkbenchDatabase(databaseUrl!);
+    db = createWorkbenchDb(databaseUrl!);
+    const runtime = new QueueRuntime();
+    const prefix = `invalid-draft-${randomUUID()}`;
+    let idSequence = 0;
+    const interviews = createCategoryInterviewModule(db, runtime, {
+      createId: (kind) => `${prefix}-${kind}-${++idSequence}`,
+    });
+    const started = await interviews.start({ initialRequest: "抓电视机" });
+    sessionId = started.session.id;
+    runtime.push({
+      ...decisionOutput(),
+      proposedDecision: {
+        key: "television.initial-data-scope",
+        question: "首期电视机数据应采集到什么深度？",
+        options: decisionOutput().question!.options,
+        selection: "完整京东范围",
+        rationale: "需要负责人决定。",
+      },
+      unresolvedItems: [{
+        key: "television.initial-data-scope",
+        description: "等待负责人确认首期范围。",
+        owner: "user",
+      }],
+      taskCandidate: taskContent("television.initial-data-scope", ["https://example.com/tv"]),
+    });
+
+    const events = await collect(interviews.runTurn({
+      sessionId,
+      trigger: "user_message",
+      text: "抓电视机",
+      expectedRevision: started.session.revision,
+    }));
+    const reloaded = await interviews.get(sessionId);
+
+    expect(events).toContainEqual(expect.objectContaining({ type: "turn.failed" }));
+    expect(reloaded?.session).toMatchObject({ phase: "active", turnState: "failed" });
+    expect(reloaded?.taskDrafts).toHaveLength(0);
+    expect(reloaded?.decisions).toHaveLength(0);
+    expect(reloaded?.unresolvedItems).toHaveLength(0);
+  });
 });
 
 class QueueRuntime implements CategoryInterviewRuntime {
@@ -166,6 +243,21 @@ class QueueRuntime implements CategoryInterviewRuntime {
     const output = this.outputs.shift();
     if (!output) throw new Error("测试没有准备采访输出");
     yield { type: "completed", output };
+  }
+}
+
+class TimelineRuntime implements CategoryInterviewRuntime {
+  async *run(): AsyncIterable<CategoryInterviewRuntimeEvent> {
+    yield { type: "activity", activity: {
+      id: "search-1", kind: "web_search", label: "搜索网页",
+      urls: ["https://www.jd.com/"], status: "running",
+    } };
+    yield { type: "text_delta", delta: "正在核对电视机来源。" };
+    yield { type: "activity", activity: {
+      id: "search-1", kind: "web_search", label: "搜索网页",
+      urls: ["https://www.tcl.com/cn/zh/tvs"], status: "completed",
+    } };
+    yield { type: "completed", output: decisionOutput() };
   }
 }
 

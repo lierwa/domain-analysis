@@ -18,6 +18,7 @@ import {
   ArrowDown,
   ArrowUp,
   CheckCircle2,
+  ChevronDown,
   Circle,
   LoaderCircle,
   Search,
@@ -27,7 +28,10 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
-import type { InterviewUiMessage } from "./interviewTimelineModel";
+import {
+  collapseWebSearchActivities,
+  type InterviewUiMessage,
+} from "./interviewTimelineModel";
 
 export function InterviewThread({
   messages,
@@ -105,7 +109,7 @@ export function InterviewThread({
 }
 
 function toThreadMessage(message: InterviewUiMessage): ThreadMessageLike {
-  const content = message.timelineParts?.map((part) => part.type === "text"
+  const content = (message.timelineParts ? collapseWebSearchActivities(message.timelineParts) : undefined)?.map((part) => part.type === "text"
     ? { type: "text" as const, text: part.text }
     : { type: "data-interview-activity" as const, data: part.activity })
     ?? [{ type: "text" as const, text: message.text }];
@@ -166,27 +170,77 @@ function AssistantMessage() {
 }
 
 function InterviewActivity({ activity }: { activity: InterviewTurnActivity }) {
-  if (activity.kind === "web_search" || activity.kind === "tool") {
+  if (activity.kind === "web_search") return <WebSearchActivity activity={activity} />;
+  if (activity.kind === "tool") {
     return <ToolActivity activity={activity} />;
   }
   return (
-    <div className="flex items-start gap-2 text-xs text-muted" data-activity-id={activity.id}>
+    <div className="flex items-center gap-2 text-xs text-muted" data-activity-id={activity.id}>
       <ActivityStatusIcon status={activity.status} />
       <span className="min-w-0 flex-1 font-medium">{activity.label}</span>
     </div>
   );
 }
 
+function WebSearchActivity({ activity }: { activity: InterviewTurnActivity }) {
+  const urls = activity.urls ?? [];
+  const label = activity.status === "running"
+    ? urls.length > 0 ? `已搜索 ${urls.length} 个网页，继续搜索中` : "正在搜索网页"
+    : activity.status === "failed"
+      ? urls.length > 0 ? `搜索了 ${urls.length} 个网页，本轮未完成` : "网页搜索未完成"
+      : `搜索了 ${urls.length} 个网页`;
+  const summary = (
+    <>
+      <Search className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span className="font-medium">{label}</span>
+      {urls.length > 0
+        ? <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" />
+        : <ActivityStatusIcon status={activity.status} />}
+    </>
+  );
+
+  if (urls.length === 0) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted" data-activity-id={activity.id}>
+        {summary}
+      </div>
+    );
+  }
+  return (
+    <details
+      className="group text-xs text-muted"
+      data-activity-id={activity.id}
+      data-activity-kind="web-search"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-md py-1 outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-ink/30 [&::-webkit-details-marker]:hidden">
+        {summary}
+      </summary>
+      <div className="ml-1.5 mt-1.5 space-y-1 border-l border-line pl-5">
+        {urls.map((url) => (
+          <a
+            key={url}
+            className="block break-all leading-5 text-ink underline decoration-line underline-offset-2 hover:decoration-ink"
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {url}
+          </a>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function ToolActivity({ activity }: { activity: InterviewTurnActivity }) {
-  const ToolIcon = activity.kind === "web_search" ? Search : Terminal;
   return (
     <div
-      className="flex items-start gap-3 rounded-lg border border-line bg-surface px-3 py-2.5 text-xs"
+      className="flex items-center gap-3 rounded-lg border border-line bg-surface px-3 py-2.5 text-xs"
       data-activity-id={activity.id}
       data-activity-kind="tool"
     >
-      <span className="mt-0.5 rounded-md border border-line bg-panel p-1 text-muted">
-        <ToolIcon className="h-3.5 w-3.5" aria-hidden="true" />
+      <span className="flex shrink-0 items-center justify-center rounded-md border border-line bg-panel p-1 text-muted">
+        <Terminal className="h-3.5 w-3.5" aria-hidden="true" />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 font-medium text-ink">
@@ -203,13 +257,13 @@ function ToolActivity({ activity }: { activity: InterviewTurnActivity }) {
 
 function ActivityStatusIcon({ status }: { status: InterviewTurnActivity["status"] }) {
   if (status === "running") {
-    return <LoaderCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" aria-label="进行中" />;
+    return <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" aria-label="进行中" />;
   }
   if (status === "failed") {
-    return <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger" aria-label="未完成" />;
+    return <XCircle className="h-3.5 w-3.5 shrink-0 text-danger" aria-label="未完成" />;
   }
   if (status === "completed") {
-    return <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-label="已完成" />;
+    return <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-label="已完成" />;
   }
-  return <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />;
+  return <Circle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />;
 }
