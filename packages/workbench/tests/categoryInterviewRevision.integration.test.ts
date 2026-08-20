@@ -41,13 +41,12 @@ describeWithPostgres("采访草案与正式抓取任务的阶段边界", () => {
     const proposed = view.decisions.find((item) => item.status === "proposed")!;
     const answer = "1，另外不包含二手商品";
     harness.runtime.push({
+      ...draftOutput("# 冰箱采访范围\n\n- 仅当前在售型号\n- 排除二手商品"),
       assistantText: "已采用当前在售型号，并排除二手商品。",
       decisionResolution: {
         decisionId: proposed.id, selection: "仅当前在售型号",
         rationale: "序号回答与补充排除条件已一并理解。",
       },
-      draftMarkdown: "# 冰箱采访范围\n\n- 仅当前在售型号\n- 排除二手商品",
-      unresolvedItems: [],
       resolvedUnresolvedKeys: ["catalog.lifecycle-scope"],
     });
     await run(harness, answer, view.session.revision);
@@ -80,9 +79,50 @@ describeWithPostgres("采访草案与正式抓取任务的阶段边界", () => {
     expect(confirmed.task.content.jd.scope).toContain("review_samples");
     expect(confirmed.task.content.sourceCandidates[0]?.observedAt).toBe("2026-08-19T14:00:00.000Z");
   });
+
+  it("确认草案时拒绝只有品牌官网、缺平台标准和技术原理的任务", async () => {
+    const harness = await createHarness("抓电视");
+    ({ db } = harness);
+    sessionId = harness.view.session.id;
+    const view = await createDraft(harness, "# 电视采访范围\n\n只列出两个品牌官网。", "电视");
+    const draft = view.taskDrafts.find((item) => item.status === "draft")!;
+    const incomplete = taskMaterialization("television", "电视");
+    incomplete.jd = { applicable: false, disposition: "excluded", scope: [], rationale: "旧草案仅写适用时" };
+    incomplete.sourceCandidates = incomplete.sourceCandidates.filter((item) => item.sourceKind === "brand_official");
+    harness.runtime.pushMaterialization(incomplete);
+
+    await expect(harness.interviews.confirmTaskDraft({
+      sessionId, draftId: draft.id, expectedRevision: view.session.revision,
+    })).rejects.toThrow("核心零售/市场平台、国家标准或监管来源、权威技术原理来源");
+    expect(await taskCount(db!, sessionId)).toBe(0);
+  });
 });
 
 describeWithPostgres("Markdown 草案版本历史", () => {
+  it("未经过四类来源证据门的历史待确认草案保留文本但降回继续采访", async () => {
+    const harness = await createHarness("抓微波炉");
+    ({ db } = harness);
+    sessionId = harness.view.session.id;
+    const draftId = `legacy-draft-${randomUUID()}`;
+    await db!.update(categoryInterviewSessions).set({ phase: "task_ready" })
+      .where(eq(categoryInterviewSessions.id, sessionId));
+    await db!.insert(captureTaskDraftVersions).values({
+      id: draftId, sessionId, version: 1, status: "draft", contentHash: "0".repeat(64),
+      briefMarkdown: "# 微波炉采访范围\n\n只有京东和两个品牌官网。",
+      createdAt: "2026-08-19T14:00:00.000Z",
+    });
+
+    const view = (await harness.interviews.get(sessionId))!;
+
+    expect(view.session.phase).toBe("active");
+    expect(view.taskDrafts).toContainEqual(expect.objectContaining({
+      id: draftId, status: "superseded", markdown: expect.stringContaining("只有京东和两个品牌官网"),
+    }));
+    await expect(harness.interviews.confirmTaskDraft({
+      sessionId, draftId, expectedRevision: view.session.revision,
+    })).rejects.toThrow("只有当前待确认草稿可以生成抓取任务");
+  });
+
   it("修订保留历史，并在再次确认后更新同一 Capture Task", async () => {
     const harness = await createHarness("抓冰箱");
     ({ db } = harness);
@@ -98,7 +138,7 @@ describeWithPostgres("Markdown 草案版本历史", () => {
     await run(harness, "补充品牌官网", first.interview.session.revision);
     view = (await harness.interviews.get(sessionId))!;
     expect(view.taskDrafts.find((item) => item.id === firstDraft.id)).toMatchObject({
-      status: "confirmed", markdown: "# 冰箱范围 v1",
+      status: "confirmed", markdown: expect.stringContaining("# 冰箱范围 v1"),
     });
     const latest = view.taskDrafts.find((item) => item.status === "draft")!;
     expect(latest.markdown).toContain("品牌官网");
@@ -110,7 +150,7 @@ describeWithPostgres("Markdown 草案版本历史", () => {
       sessionId, draftId: latest.id, expectedRevision: view.session.revision,
     });
     expect(revised.task).toMatchObject({ id: first.task.id, revision: 2 });
-    expect(revised.task.content.sourceCandidates).toHaveLength(2);
+    expect(revised.task.content.sourceCandidates).toHaveLength(6);
     expect(revised.interview.taskDrafts.filter((item) => item.status === "confirmed")).toHaveLength(2);
   });
 
@@ -145,6 +185,9 @@ class RecordingRuntime implements CategoryInterviewRuntime {
     this.inputs.push(input);
     const output = this.outputs.shift();
     if (!output) throw new Error("测试没有准备采访输出");
+    if (output.draftCoverage) {
+      yield { type: "activity", activity: completedCoverageSearch(output.draftCoverage) };
+    }
     yield { type: "completed", output };
   }
 
@@ -198,7 +241,14 @@ function decisionOutput(): CategoryInterviewRuntimeOutput {
 }
 
 function draftOutput(draftMarkdown: string): CategoryInterviewRuntimeOutput {
-  return { assistantText: "已更新采访范围草案。", draftMarkdown, unresolvedItems: [], resolvedUnresolvedKeys: [] };
+  const draftCoverage = completeCoverage();
+  return {
+    assistantText: "已更新采访范围草案。",
+    draftMarkdown: `${draftMarkdown}\n\n${coverageMarkdown(draftCoverage)}`,
+    draftCoverage,
+    unresolvedItems: [],
+    resolvedUnresolvedKeys: [],
+  };
 }
 
 function taskMaterialization(code: string, label: string): CaptureTaskMaterialization {
@@ -213,8 +263,47 @@ function taskMaterialization(code: string, label: string): CaptureTaskMaterializ
       id: `jd-${code}`, name: `京东${label}频道`, publisher: "京东",
       entryUrl: "https://www.jd.com/", sourceKind: "retailer",
       expectedContents: ["在售商品与参数"], observedFormats: ["网页"], accessState: "public",
+    }, {
+      id: `brand-${code}`, name: `${label}品牌官网`, publisher: "品牌方",
+      entryUrl: "https://brand.example.com/products", sourceKind: "brand_official",
+      expectedContents: ["官方型号、配置参数与说明书"], observedFormats: ["网页"], accessState: "public",
+    }, {
+      id: `brand-secondary-${code}`, name: `第二${label}品牌官网`, publisher: "第二品牌方",
+      entryUrl: "https://second-brand.example.com/products", sourceKind: "brand_official",
+      expectedContents: ["第二品牌型号、配置参数与说明书"], observedFormats: ["网页"], accessState: "public",
+    }, {
+      id: `standard-${code}`, name: `${label}国家标准`, publisher: "标准机构",
+      entryUrl: "https://standard.example.com/document", sourceKind: "standards_body",
+      expectedContents: ["标准、能效与认证"], observedFormats: ["网页"], accessState: "public",
+    }, {
+      id: `technical-${code}`, name: `${label}技术原理资料`, publisher: "专业技术机构",
+      entryUrl: "https://technical.example.com/principles", sourceKind: "technical_publisher",
+      expectedContents: ["关键部件与底层工作原理"], observedFormats: ["网页"], accessState: "public",
     }],
     excludedContent: [],
+  };
+}
+
+function completeCoverage() {
+  return {
+    retailMarketUrls: ["https://www.jd.com/category"],
+    brandOfficialUrls: ["https://brand.example.com/products", "https://second-brand.example.com/products"],
+    standardsRegulationUrls: ["https://standard.example.com/document"],
+    technicalPrincipleUrls: ["https://technical.example.com/principles"],
+  };
+}
+
+function coverageMarkdown(coverage: ReturnType<typeof completeCoverage>) {
+  return [
+    "## 已调查来源",
+    ...Object.values(coverage).flat().map((url) => `- ${url}`),
+  ].join("\n");
+}
+
+function completedCoverageSearch(coverage: ReturnType<typeof completeCoverage>) {
+  return {
+    id: "search-professional-coverage", kind: "web_search" as const,
+    label: "搜索专业导购四类来源", urls: Object.values(coverage).flat(), status: "completed" as const,
   };
 }
 

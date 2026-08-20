@@ -1,9 +1,9 @@
 # 技术调研登记
 
-> 2026-08-18 当前边界：项目只实施阶段 1 数据抓取。本文保留历史候选和淘汰依据，但其中 Evidence、Knowledge Factory、知识包、Runtime、Market Universe 及具体来源 Provider 均已退出当前生产组合根，不得按历史“接受”状态继续实现。当前继续复用的成熟组件只有 PostgreSQL/Drizzle、Fastify、assistant-ui、Codex CLI、Crawlee、p-queue 与 cockatiel；后续新增 Crawl Plan 或 Provider 必须在用户验收 1A 后重新进入调研和真实原型门。
+> 2026-08-20 当前边界：项目只实施阶段 1 数据抓取。本文保留历史候选和淘汰依据，但其中 Evidence、Knowledge Factory、知识包、Runtime、Market Universe 及旧具体来源 Provider 均已退出当前生产组合根，不得按历史“接受”状态继续实现。当前组合除 PostgreSQL/Drizzle、Fastify、assistant-ui、Codex App Server、Crawlee、p-queue 与 cockatiel 外，已按 R-036/R-037 接受 Playwright CDP、Got、robots-parser、Cheerio 与 cacache；后续新增来源机制仍须重新进入调研和真实原型门。
 
 状态：持续维护
-更新日期：2026-08-19
+更新日期：2026-08-20
 
 本文件只记录技术问题、成熟候选、官方依据、原型结果、接受/拒绝/替代状态和退出成本。阶段进度看 `PROGRESS.md`，模块边界看 `ARCHITECTURE.md`，已删除 POC 的历史结论只通过本文件、ADR 与 Git 历史追溯。
 
@@ -18,6 +18,7 @@
 | R-028 | 本地 Chat Timeline | 接受 `assistant-ui` ExternalStoreRuntime；单回合有序 parts、普通问题文案、Composer 自定义回答和刷新恢复已验证 |
 | R-029 | Codex 交互运行时与 Pi 边界 | 接受：锁定官方 `codex app-server` `stdio`，每轮 `thread/start(ephemeral:true)`；commentary 用官方 delta，最终 JSON 由本地 Zod 校验；MVP 不引入 Pi |
 | R-035 | Crawl Planning Agent 运行与版本化计划 | 接受复用 App Server/Skill/Zod/PostgreSQL；前台可见、断连中止；拒绝为短规划引入后台队列 |
+| R-037 | 完整执行清单、公共原始资源与附件 CAS | 接受 Got＋robots-parser＋Cheerio＋cacache；只允许精确 URL 或一次同源唯一链接，真实多来源 Start 尚未执行 |
 | R-032 | 来源访问限速、取消与熔断 | 当前只保留 `p-queue`＋`cockatiel` 基础；具体 Crawl Plan、持久恢复和京东真实窗口在 1A 后重新验证 |
 | 历史 R-002～R-026、R-030～R-034 | 旧知识生产与 POC | 只保留调研/失败证据；DBOS、Evidence、知识包、Runtime、Market Universe 和旧 Source Dataset contract 均由 ADR-0015 退出当前范围 |
 
@@ -642,7 +643,7 @@ Browser
 - 上述“序号归一化”只修复裸 `1`，没有覆盖采访的真实输入语义。代码复核证明 Web 在存在 proposed Decision 时先调用独立确认接口并提前返回，Codex 看不到本轮原文，因而无法同时理解“1，另外不含二手”、纠正、否定问题前提或追问；随后再启动 `decision_confirmed` 回合还制造了额外状态转换和一次无意义等待。
 - 接受的新边界是 input-first：Workbench 先保存任意 Composer 原文，再把原文、当前 proposal、历史消息/活动、决定、未决项和草稿版本一并交给 ephemeral Codex 回合。Codex final answer 只提交本轮理解增量；明确回答使用 `decisionResolution` 引用当前 proposal，成立的前提否定使用 `decisionWithdrawal` 撤回问题，附加事实同时写入说明和下一版草稿，含糊或追问则不确认。Workbench 校验引用并原子持久化，不再提供独立 Decision confirm HTTP 路径或 `decision_confirmed` trigger。
 - `grill-with-docs` 只组合自然语言 `grilling` 和随会话维护记录的 `domain-modeling`，不定义 JSON 传输。项目 Skill 因此只定义理解、调查、提问和记录纪律；机器字段继续由 runtime schema 独占。最终 JSON 仍是 App Server seam 下本轮 typed delta，因为 Workbench 必须在无状态回合后校验状态变化；它不再同时维护 `question`/`proposedDecision` 两种问题结构，也不要求模型重报完整会话。
-- 平台和网站是系统应调查的来源事实，不是负责人选择题。京东对家电保持默认核心覆盖；淘宝是后续同级平台候选，但当前没有淘宝 crawler/Provider，任何草稿都不能把搜索发现误写成已接入能力。
+- 平台和网站是系统应调查的来源事实，不是负责人选择题。京东对家电保持默认核心覆盖；淘宝是后续同级平台候选，当前只有公共精确入口 Provider，没有淘宝专用 crawler、分页或登录能力，任何草稿都不能把搜索发现误写成完整平台覆盖。
 
 #### 2026-08-20 采访文字记录与确认后结构化纠错
 
@@ -655,6 +656,14 @@ Browser
 - 来源 `observedAt` 不是模型权威字段。Workbench 忽略模型给出的时间，在草稿提交时统一写入当前时间。
 - 用户触发的 retry 不是自动模型修复：只允许重放当前 session 最近一条 failed/interrupted 用户原文，而且该消息之后不能已有 completed assistant 消息。更早历史消息、任意改写文本或正常已完成回合都不能成为 retry target。
 - 本次不引入 dynamic tools、第二次模型抽取、宽松 parser、自动模型重试或新依赖。继续沿用 R-029 已验证的 prompt JSON Schema＋本地 Zod 边界；若该边界仍出现非确定性无效输出，必须用真实失败样本重新进入协议调研，不能把用户原文预先降级成字符串分支作为兜底。
+
+#### 2026-08-20 草案覆盖硬门与最小校验凭证
+
+- 真实微波炉样本证明“观察到一次已完成搜索＋模型没有声明系统未决项”不足以判定调查完成：首轮只给出京东、美的和松下三个入口，就生成了可确认草案，国家标准/监管、技术原理以及多品牌覆盖没有任何机器可核查证据。提示词已经要求主动调查，因此继续叠加提示词不能封闭该失败路径。
+- 不恢复采访阶段的完整 `taskCandidate` / `sourceCandidates` JSON，也不从自由 Markdown 猜来源角色。接受的最小机器凭证仅为 `draftCoverage` 四组 URL：零售/市场至少一个、不同品牌官方站点至少两个、标准/监管至少一个、技术原理至少一个。它不带来源 ID、时间、内容、数量、Provider 或执行字段，不能成为第二份 Capture Task 或 Crawl Plan。
+- Workbench 逐条验证凭证 URL 来自该会话已完成的 `web_search` 活动、原样出现在最新 Markdown，且同一 URL 不跨角色复用；通过结果以 `coverage_verified` 布尔标记随草案版本保存。URL、角色说明和抓取范围的权威内容仍是搜索时间线与 Markdown；布尔值只证明该版本通过了确定性关系校验。
+- 历史 `draft` 默认 `coverage_verified=false`：文本和版本历史原样保留，读取时投影为不可确认版本并把旧 `task_ready` 降回 `active`；已确认历史不回退。新版本只有通过门后才写 `true`。
+- 继续复用已经接受的 Zod、Drizzle/PostgreSQL 和 App Server 搜索事件，不引入 Markdown parser、第二模型、repair、自动 retry、工作流或新依赖。新增代码只承担产品特有的草案完成规则和已有事实之间的薄校验，符合 R-029 的本地 Zod 边界。
 
 ### R-030 商品底层知识来源与质量门
 
@@ -927,7 +936,7 @@ Socrata 候选与边界：
 状态：已接受；真实 Workbench 规划表面已通过，计划内容仍待用户确认
 目标阶段：1B
 
-问题：Capture Task 确认后需要把业务范围转成直接决定来源、内容和数量的 Crawl Plan。规划过程需要网页搜索、可见进度、结构化结果和中断，但不能把 Codex thread、搜索文本或浏览器状态变成计划事实，也不能为了最多三分钟的单轮任务自研后台队列。
+问题：Capture Task 确认后需要把业务范围转成直接决定来源、内容和数量的 Crawl Plan。规划过程需要网页搜索、可见进度、结构化结果和中断，但不能把 Codex thread、搜索文本或浏览器状态变成计划事实，也不能为了最长十分钟的有界单轮任务自研后台队列。
 
 不可取消约束：用户显式启动；Planning Run 不批量抓取；计划必须绑定当前 task revision；只有 Workbench 可以版本化和确认计划；确认不创建 Source Run；正式抓取不得边运行边调用 Codex 无边界搜站。
 
@@ -935,7 +944,7 @@ Socrata 候选与边界：
 
 - 现有 Codex App Server `stdio`：官方把它定位为富客户端集成 interface，提供连接级 `initialize`、可重复的 `thread/start`、`turn/start`、`item/agentMessage/delta`、tool progress、`turn/completed`、`turn/interrupt` 和显式 skill input；当前仓库已经锁版本并验证“一条 runtime 连接、每次运行一个新 ephemeral thread”。接受复用。官方同时说明 App Server command/远程 WebSocket 仍属 experimental，因此继续使用本机锁版本薄 adapter，不扩大到远程服务：https://learn.chatgpt.com/docs/app-server
 - Codex SDK：官方建议自动化 jobs/CI 使用 SDK，但当前生产产品需要显式 skill item、已验证网页搜索活动和同屏 commentary；为同一模型再接第二 transport 会增加协议与测试面，当前拒绝。
-- DBOS TypeScript：MIT、Node >=20、活跃维护，官方提供 PostgreSQL durable workflow/queue 和崩溃恢复，适合真正的长任务后台执行：https://docs.dbos.dev/typescript/tutorials/workflow-tutorial 、https://github.com/dbos-inc/dbos-transact-ts 。当前规划只有单次三分钟上限，断连可安全重试且没有外部写副作用；重新引入 workflow/runtime/schema 的成本大于收益，暂缓而非否定其成熟度。
+- DBOS TypeScript：MIT、Node >=20、活跃维护，官方提供 PostgreSQL durable workflow/queue 和崩溃恢复，适合真正的长任务后台执行：https://docs.dbos.dev/typescript/tutorials/workflow-tutorial 、https://github.com/dbos-inc/dbos-transact-ts 。当前规划只有单次十分钟硬上限，断连可安全重试且没有外部写副作用；重新引入 workflow/runtime/schema 的成本大于收益，暂缓而非否定其成熟度。
 - 手写内存 Promise registry/queue：拒绝。进程重启无恢复、需要自行处理取消和孤儿任务，且重复已有成熟工作流能力。
 
 许可证与维护状态：本轮不新增依赖；继续使用仓库已锁定和接受的 OpenAI Codex、PostgreSQL、Drizzle、Fastify、Zod 与 canonicalize。DBOS 仅作为被暂缓候选，不进入 package/lockfile。
@@ -964,6 +973,43 @@ Node/TypeScript、本地/离线和部署边界：纯 Node 24/TypeScript；App Se
 真实结果（2026-08-20 Windows）：全新冰箱采访完成 19 个网页搜索并生成可读 Markdown；确认后得到 Capture Task v1。Planning v3 以 20 个网页搜索核实入口，冻结 `jd.catalog-product@1.0.0` 与 include/exclude 配置并通过 CDP preflight。两次独立 Source Run 均从正式 Web 显式开始：目录 HTML accessible，详情 SKU `100377318432` 被重定向到 `passport.jd.com`，记录 `login_required` 并停止；每次 2 snapshots、1 accessible、1 failed、0 assets，JSONL 各 2 条。该结果证明目录、写入、查看和导出闭环，详情为 blocked，不证明完整京东访问通过。
 
 退出成本：删除 composition-root 注入与 JD Provider 不改变 Crawl Plan、Source Execution 或 Source Dataset contract；其他来源必须各自通过同一调研和真实门。
+
+### R-037 完整执行清单、公共原始资源访问与附件 CAS
+
+状态：已接受技术组合与公共 seam；真实多来源访问尚未启动，不能描述为来源抓取通过
+目标阶段：阶段 1B～1E（完整 Crawl Plan 与多来源原始数据闭环）
+
+问题：现有实现只把任务 topic 文本挂到任意 target，并只注入京东目录/详情 Provider。它能证明一个技术纵切片，却不能证明采访调查出的品牌官网、标准/监管、底层原理和配置参数来源仍在最终计划中，也不能让 Provider 知道每个 target 实际应访问哪个资源。Source Run 又只按 source 计数，无法回答清单中哪一项完成、失败或根本没有执行。
+
+不可取消约束：Capture Task 的来源候选与 topic 都必须逐项对账；Crawl Plan 是完整且可读的执行清单，不是 Provider 演示样本。Provider 只执行 target 的 typed 配置，不解释自然语言 traversal；公共资源只接受精确 URL，或计划明确列出的“前序 HTML＋完整唯一链接文字”一次同源关系，不自由发现链接、不跟随重定向、不携带 Cookie/认证、不自动重试或反风控。每个 target 必须形成独立运行状态，原始响应不可变；PDF、图片等原文件必须进入本地 CAS 并可从 Source Dataset 下载。任何必需项缺失、Provider 不支持或访问前置条件未满足时，规划失败或保持不可启动历史，不能伪装成可开始。
+
+候选与官方资料：
+
+- `@crawlee/http` / `HttpCrawler` 继续适合 HTML/JSON crawler，但官方维护者明确说明当前没有按响应字节上限中止下载的内建选项；为未知尺寸的 PDF/图片恢复旧通用 HttpCrawler 会留下无界内存风险，因此本轮不采用它承担通用原文件下载：https://crawlee.dev/js/api/http-crawler 、https://github.com/apify/crawlee/discussions/3263
+- `got@14.6.6` 已由当前 Crawlee 间接锁定，但直接使用者必须声明直接依赖。官方提供 stream、`retry.limit=0`、`followRedirect=false`、超时、AbortSignal、自定义 `dnsLookup` 与下载进度；项目薄 adapter 只增加产品特有的 HTTPS/端口/私网拒绝、最大字节和来源状态映射，不自研 transport、retry 或 redirect：https://github.com/sindresorhus/got 、https://github.com/sindresorhus/got/blob/main/documentation/2-options.md
+- `robots-parser@3.0.1` 已由 Crawlee 间接锁定，零运行依赖、内建 TypeScript 声明、MIT；直接声明后只解析同 origin 的 `robots.txt`，不把 robots 许可冒充内容版权：https://github.com/samclarke/robots-parser
+- `cheerio@1.1.2` 为 MIT、活跃维护的 Node/TypeScript HTML parser，官方 `load` 与 selector API 足以解析已保存 HTML 的 anchor 文本和 `href`。本轮只做规范化全文本精确匹配并要求唯一结果；不自研 HTML parser，也不把 CSS selector 暴露给计划：https://cheerio.js.org/docs/basics/loading/ 、https://cheerio.js.org/docs/basics/selecting/ 、https://github.com/cheeriojs/cheerio
+- Node 24 官方 `dns.lookup(..., { all: true })` 使用与应用相同的系统解析设施；`net.BlockList` 提供 CIDR 检查。本轮以自定义 lookup 返回的实际连接地址拒绝 loopback、link-local、private、multicast、documentation 和保留地址，关闭 DNS cache，并拒绝 URL 内凭证、非 443 端口与 Unix socket，防止计划 URL/解析结果触达本机服务：https://nodejs.org/docs/latest-v24.x/api/dns.html 、https://nodejs.org/docs/latest-v24.x/api/net.html
+- `cacache@20.0.4` 是 npm 使用的本地跨平台内容寻址存储，提供 SRI、原子写入、并发/损坏校验、按 digest stream 读取和相同字节去重；ISC，无原生依赖，Node `^20.17 || >=22.9` 与当前 24.12 相容。最新 21.x 要求 Node 24.15，当前不能采用；配套 `@types/cacache@20.0.1` 仅用于开发类型：https://github.com/npm/cacache 、https://raw.githubusercontent.com/npm/cacache/v20.0.4/package.json
+
+候选处置：
+
+| 候选 | 处置 | 原因 |
+| --- | --- | --- |
+| 为每个采访到的网站预建 DOM adapter | 拒绝 | 未知站点规则会进入代码，且把“完整清单”错误理解成万能页面清洗器 |
+| 复原历史 Evidence/Readable/Document Provider | 拒绝 | 会在阶段 1 提前抽正文/章节并恢复已退出的 Evidence 语义，不是原始响应保存 |
+| `HttpCrawler` 直接下载所有资源 | 拒绝 | 官方确认无响应字节硬上限；不适合未知尺寸附件 |
+| `got` stream＋`robots-parser`＋`cheerio` 的有界公开资源 Provider | **接受** | 只访问计划冻结的精确 URL，或从前序原始 HTML 唯一跟进一次同源链接；stream 中硬停最大字节，不形成通用 crawler |
+| 手写文件名哈希目录 | 拒绝 | 原子性、并发、损坏校验、去重和 stream 读取已有成熟实现 |
+| `cacache@20.0.4` | **接受** | 当前 Node 可安装，且只通过 Source Dataset 的 asset interface 暴露，不泄漏库 API |
+
+公共 seam：Crawl Plan source 显式引用 `sourceCandidateIds`，target 使用 Provider-owned typed key/value 配置；当前完整计划写入 checklist contract version 2，旧京东纵切片只读且不能继续启动。公共 target 是单个 `url`，或恰好一对 `from_target/link_text`；后者只能引用前序 target、解析唯一的规范化 anchor 文本并保持同 origin。Provider 产出 `{ targetKey, snapshot, assets }` 和 target completion；Source Execution 校验 target key、生命周期与数量，不允许“Provider 结束了”直接等于“全部 target 完成”。Source Dataset 在一个 source run 下预建逐 target attempt，snapshot 冻结 `targetKey`，附件字节先写 CAS、再在 PostgreSQL 事务中写关系与计数。Web/API 只投影逐项状态和下载入口。
+
+安全、部署、升级与退出：公共 Provider 只允许无凭证的精确 HTTPS 443 URL，拒绝 redirect、私网 DNS、登录/验证/拒绝状态，robots 请求与目标请求都计入冻结预算；正文/附件设明确最大字节，不保存响应 Cookie 或认证 Header。Got、robots-parser 和 cacache 均为纯 Node，macOS/Linux/Windows 可用；当前环境必须验证安装、类型、测试和构建，目标 Linux 安装仍单独报告。移除公共 Provider 只删除 composition-root 注入；移除 cacache 只替换 Source Dataset asset store，Crawl Plan、Provider event 和数据库 asset metadata 不暴露库 API。
+
+验证证据：本机 HTTPS fixture/注入 transport 已证明候选/topic 完整性、入口-only 附件拒绝、H5 说明书的一次同源跟进、PDF/表格附件门、Provider 精确 target、未知/重复 target event 拒绝、逐 target completed/failed/stopped 与 snapshot/asset 对账、超字节、redirect、私网解析、robots 禁止、取消、零重试和 CAS 字节复用。真实 Workbench Planning Run v6 通过相同 contract 与 Provider preflight，形成 7/7 候选、13/13 topic、8 来源、12 target 的 confirmed plan；没有点击 Start，因此海尔、CNIS、SAMR、淘宝和 NIST 的真实访问仍为未测试。
+
+依赖安全：2026-08-20 `npm audit --omit=dev` 报告 1 moderate/4 high。`npm explain` 显示受影响 AJV/fast-uri/Fastify/find-my-way 来自既有 API 链，受影响 `brace-expansion@2.1.0` 来自既有 Crawlee；本轮 cacache 使用的 `brace-expansion@5.0.9` 和新增 Cheerio 不在报告链。Fastify 修复提示破坏性升级，未在本任务中擅自 `audit fix`；该仓库级风险继续由 R-007 处置，不把本轮技术接受写成“无安全公告”。
 
 ### R-007 依赖复现与安全升级
 

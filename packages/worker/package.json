@@ -13,8 +13,11 @@
     "@crawlee/core": "3.18.1",
     "@crawlee/memory-storage": "3.18.1",
     "@domain-analysis/shared": "0.1.0",
+    "cheerio": "^1.1.2",
     "cockatiel": "^4.0.0",
+    "got": "14.6.6",
     "p-queue": "^9.3.3",
-    "playwright-core": "1.62.1"
+    "playwright-core": "1.62.1",
+    "robots-parser": "3.0.1"
   }
 }

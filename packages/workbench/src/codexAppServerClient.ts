@@ -38,6 +38,7 @@ export interface CodexAppServerClientOptions {
   webSearch?: boolean;
   packageRoot?: string;
   skill?: { name: string; path: string };
+  outputSchema?: Record<string, unknown>;
 }
 
 export interface CodexAppServerResult {
@@ -327,6 +328,7 @@ function turnStartParams(options: CodexAppServerClientOptions, threadId: string,
       ...(options.skill ? [{ type: "skill", name: options.skill.name, path: options.skill.path }] : []),
     ],
     effort: options.reasoningEffort,
+    ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
   };
 }
 

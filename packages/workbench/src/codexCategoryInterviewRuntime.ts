@@ -176,7 +176,7 @@ function requireInvestigatedTask(
 
 function interviewPrompt(input: CategoryInterviewRuntimeInput) {
   const initialResearchInstruction = requiresInitialCategoryResearch(input)
-    ? "这是新品类首轮或其重试：必须先调用 web search 主动调查品类范围与真实候选来源，再提出负责人问题或生成草稿；不得先询问 Skill 已定义默认值的市场或品类。"
+    ? "这是新品类首轮或其重试：必须先调用 web search 主动调查品类范围与真实候选来源；调查本身不授权生成草稿，随后必须按范围依据纪律决定提出一个负责人问题或形成草稿。不得先询问 Skill 已定义默认值的市场或品类。"
     : "先完整理解本轮用户原文，再按已持久化的消息、决定、未决项和草稿继续推进；不要把当前问题当成限制输入的表单，也不要丢掉回答之外的纠正、补充事实或追问。";
   return [
     "$interview-product-category 请严格执行该 Skill。Skill 已由 Workbench 通过本轮 skill input 注入；不要通过本地命令查找或读取 Skill、AGENTS.md、开发文档或 Git 状态，也不要声称 Skill 缺失。首条用户消息已经是抓取需求，不要再次确认品类。",
@@ -189,7 +189,9 @@ function interviewPrompt(input: CategoryInterviewRuntimeInput) {
     "decisionResolution 与 decisionWithdrawal 都不是单独回合。处理当前问题后必须在同一个 final_answer 继续推进：仍有下一个真实负责人取舍就提出一个新的 proposedDecision；没有则完成必要调查并形成 draftMarkdown。不要只回复‘已记录’后等待用户再说‘继续’。",
     "需要负责人决定时，assistantText 只写背景，不得抄写问题、选项或编号；只用 proposedDecision 表达唯一问题、2–3 个建议、推荐选择与理由。owner=user 未决项必须与这个 proposal 使用同一个 key，resolvedUnresolvedKeys 只能独立解决系统负责的未决事实。界面会把问题确定性编号后合成为普通对话，用户可以直接输入建议之外的答案。",
     "来源平台、网站与渠道是系统调查事实，不能提出给负责人选择；京东适用时按 Skill 默认覆盖，淘宝等平台只能按当前真实能力记录为后续候选。不得把默认采集内容改写成采集深度问题。若本轮把当前品类切换为另一品类，必须先调用 web search 完成新调查，再提出该品类的负责人问题或形成草案。只要本轮仍有新的 proposedDecision 或 user unresolved item，就必须省略 draftMarkdown；本轮 decisionResolution 已明确解决最后一个旧问题时可以同时形成草案。",
+    "生成 draftMarkdown 前，必须逐项检查会改变纳入商品集合、市场范围或观察时间范围的边界依据。只有用户当前或历史原文、confirmed Interview Decision、Skill 明确批准的系统默认，或不包含负责人选择的客观调查事实，才能直接成为草案边界。其余会改变结果的边界必须选择影响最大的一个形成 proposedDecision，并省略 draftMarkdown；推荐答案只是 proposal，不等于用户确认。这不是最低问题数要求，用户已完整给出必要范围时允许零问题生成草案。",
     "draftMarkdown 是给人审阅的采访范围草案，不是 CaptureTask 数据结构。它只能使用普通 Markdown，总结用户原始要求、已确认范围、纳入/排除项、采访回答和调查事实；来源可以用自然语言和链接记录。严禁在这里输出 JSON、taskCandidate、sourceCandidates、observedAt、decisionIds 或正式 Crawl Plan。",
+    "生成 draftMarkdown 时必须同时返回 draftCoverage：零售/市场入口至少 1 个，品牌官网至少 2 个且属于不同官方站点，标准/监管至少 1 个，技术原理至少 1 个。每个 URL 必须来自本会话时间线里已完成的 web_search，并原样写进 draftMarkdown；一个 URL 不能重复或跨角色复用。draftCoverage 只是 Workbench 校验 Markdown 与搜索记录的四组 URL，不是 Capture Task、来源清单或抓取计划；不生成草案时必须省略它。",
     `Final answer JSON Schema: ${JSON.stringify(codexOutputSchema())}`,
     `Workbench state: ${JSON.stringify(input.session)}`,
     "Current turn 始终是未经预先解释的用户原文，可能同时包含回答、事实补充、纠正、否定或问题；必须逐项承接后再决定本轮状态增量。",
@@ -221,7 +223,7 @@ function materializationPrompt(input: CategoryInterviewMaterializationInput) {
   return [
     "把用户已经确认的 Markdown 采访范围草案忠实转换成正式 Capture Task。",
     "这是确认后的纯结构化步骤：不得调用 web search、不得提出问题、不得补充草案中不存在的事实、不得改变范围。",
-    "sourceCandidates 只能收录草案中已经明确出现且具有有效 http/https URL 的来源；没有精确 URL 就省略该来源。entryUrl 必须是完整有效 URL。",
+    "sourceCandidates 只能收录草案中已经明确出现且具有有效 http/https URL 的来源；没有精确 URL 就省略该来源。entryUrl 必须是完整有效 URL。必须忠实转换草案中的核心零售/市场平台、品牌官方资料、标准/监管和技术原理四类来源；任一类缺失时 Workbench 会拒绝创建任务，不得现场编造补齐。",
     "originalRequest 使用最初用户要求；category.code 使用稳定的小写英文 slug。京东是否适用只按草案事实表达，Workbench 会统一应用默认京东范围策略。",
     "最终只返回符合下方 JSON Schema 的 JSON 对象，不要使用 Markdown 代码块或添加解释。",
     `Final answer JSON Schema: ${JSON.stringify(zodSchemaToCodexJsonSchema(captureTaskMaterializationSchema))}`,

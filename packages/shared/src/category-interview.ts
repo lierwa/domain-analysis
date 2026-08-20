@@ -123,6 +123,16 @@ const decisionWithdrawalSchema = z.object({
   rationale: z.string().min(1).max(4000),
 }).strict();
 
+const draftCoverageUrlSchema = z.string().url().max(2048);
+
+export const categoryInterviewDraftCoverageSchema = z.object({
+  retailMarketUrls: z.array(draftCoverageUrlSchema).min(1).max(100),
+  // WHY：专业导购的横向比较至少要有两个独立品牌入口；固定草案总数没有意义，但单一品牌不能代表市场。
+  brandOfficialUrls: z.array(draftCoverageUrlSchema).min(2).max(100),
+  standardsRegulationUrls: z.array(draftCoverageUrlSchema).min(1).max(100),
+  technicalPrincipleUrls: z.array(draftCoverageUrlSchema).min(1).max(100),
+}).strict();
+
 export const categoryInterviewRuntimeOutputSchema = z.object({
   assistantText: z.string().min(1).max(40_000),
   decisionResolution: decisionResolutionSchema.nullable().optional().transform((value) => value ?? undefined),
@@ -136,6 +146,9 @@ export const categoryInterviewRuntimeOutputSchema = z.object({
   resolvedUnresolvedKeys: z.array(z.string().min(1)).nullable().default([]).transform((value) => value ?? []),
   // WHY：采访只交付可读范围草案；正式业务结构必须晚于用户确认，避免来源字段反向阻断自然语言回答。
   draftMarkdown: z.string().min(1).max(100_000).nullable().optional()
+    .transform((value) => value ?? undefined),
+  // WHY：这只是把草案中的四类入口交给 Workbench 交叉校验的最小凭证，不是提前生成 Capture Task 或来源对象。
+  draftCoverage: categoryInterviewDraftCoverageSchema.nullable().optional()
     .transform((value) => value ?? undefined),
 }).strict().superRefine((output, context) => {
   if (output.decisionResolution && output.decisionWithdrawal) {
@@ -175,6 +188,20 @@ export const categoryInterviewRuntimeOutputSchema = z.object({
       code: "custom",
       path: ["draftMarkdown"],
       message: "存在待负责人确认的问题时不能生成抓取任务草稿",
+    });
+  }
+  if (output.draftMarkdown && !output.draftCoverage) {
+    context.addIssue({
+      code: "custom",
+      path: ["draftCoverage"],
+      message: "生成草案时必须同时返回四类来源覆盖凭证",
+    });
+  }
+  if (!output.draftMarkdown && output.draftCoverage) {
+    context.addIssue({
+      code: "custom",
+      path: ["draftCoverage"],
+      message: "只有生成草案时才能返回来源覆盖凭证",
     });
   }
 });
@@ -223,6 +250,7 @@ export type InterviewUnresolvedItem = z.infer<typeof interviewUnresolvedItemSche
 export type InterviewTurnActivity = z.infer<typeof interviewTurnActivitySchema>;
 export type CategoryInterviewView = z.infer<typeof categoryInterviewViewSchema>;
 export type InterviewTurnRequest = z.infer<typeof interviewTurnRequestSchema>;
+export type CategoryInterviewDraftCoverage = z.infer<typeof categoryInterviewDraftCoverageSchema>;
 export type CategoryInterviewRuntimeOutput = z.infer<typeof categoryInterviewRuntimeOutputSchema>;
 export type InterviewTimelineEvent = z.infer<typeof interviewTimelineEventSchema>;
 

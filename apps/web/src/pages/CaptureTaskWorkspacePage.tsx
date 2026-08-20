@@ -73,10 +73,8 @@ export function CaptureTaskWorkspacePage() {
   }
 
   const handleInterviewChanged = useCallback((session: InterviewSession) => {
-    queryClient.setQueryData<InterviewSession[]>(["category-interviews"], (current = []) => [
-      session,
-      ...current.filter((item) => item.id !== session.id),
-    ]);
+    queryClient.setQueryData<InterviewSession[]>(["category-interviews"], (current = []) =>
+      upsertInterviewPreservingOrder(current, session));
   }, [queryClient]);
 
   function startNewTask() {
@@ -185,6 +183,16 @@ export function CaptureTaskWorkspacePage() {
       </main>
     </div>
   );
+}
+
+export function upsertInterviewPreservingOrder(
+  current: InterviewSession[],
+  changed: InterviewSession,
+): InterviewSession[] {
+  const existingIndex = current.findIndex((item) => item.id === changed.id);
+  if (existingIndex < 0) return [changed, ...current];
+  // WHY：活动更新可以替换记录内容，但“查看哪条”不是排序事实；保留原下标避免选中项跳到顶部。
+  return current.map((item, index) => index === existingIndex ? changed : item);
 }
 
 function InterviewWorkspace({

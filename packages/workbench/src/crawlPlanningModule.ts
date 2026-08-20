@@ -17,15 +17,18 @@ import {
   failInterviewTimeline,
   type CaptureTask,
   type CrawlPlan,
+  type CrawlPlanContent,
   type CrawlPlanningEvent,
   type CrawlPlanningRuntimeOutput,
   type CrawlPlanningView,
   type InterviewMessageTimelinePart,
   type InterviewTurnActivity,
 } from "@domain-analysis/shared";
+import { findCaptureTaskReadinessGaps } from "./captureTaskReadiness";
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 
 import type { CaptureTaskModule } from "./captureTaskModule";
+import { isDirectDocumentEntry } from "./crawlPlanningDocumentPolicy";
 import { contentHash } from "./contentHash";
 
 export type CrawlPlanningRuntimeEvent =
@@ -59,6 +62,15 @@ export interface CrawlPlanningModule {
   }): Promise<CrawlPlanningView>;
 }
 
+type SourceCheck = (source: CrawlPlan["content"]["sources"][number]) => void | Promise<void>;
+
+interface CrawlPlanningModuleOptions {
+  now?: () => Date;
+  createId?: (kind: string) => string;
+  validateSource?: SourceCheck;
+  preflightSource?: SourceCheck;
+}
+
 export class CrawlPlanningError extends Error {
   constructor(
     readonly code: "not_found" | "revision_conflict" | "invalid_state" | "runtime_failed",
@@ -73,7 +85,7 @@ export function createCrawlPlanningModule(
   db: WorkbenchDb,
   captureTasks: CaptureTaskModule,
   runtime: CrawlPlanningRuntime,
-  options: { now?: () => Date; createId?: (kind: string) => string; validateSource?: (source: CrawlPlan["content"]["sources"][number]) => void | Promise<void> } = {},
+  options: CrawlPlanningModuleOptions = {},
 ): CrawlPlanningModule {
   const now = options.now ?? (() => new Date());
   const createId = options.createId ?? ((kind) => `${kind}-${randomUUID()}`);
@@ -82,8 +94,9 @@ export function createCrawlPlanningModule(
       const task = await captureTasks.get(taskId);
       return task ? loadView(db, task) : null;
     },
-    run: (input) => runPlanning(db, captureTasks, runtime, input, now, createId),
-    confirm: (input) => confirmPlan(db, captureTasks, input, now, options.validateSource),
+    run: (input) => runPlanning(db, captureTasks, runtime, input, now, createId, options.validateSource),
+    confirm: (input) => confirmPlan(db, captureTasks, input, now,
+      options.preflightSource ?? options.validateSource),
   };
 }
 
@@ -94,6 +107,7 @@ async function* runPlanning(
   input: { taskId: string; expectedTaskRevision: number; instruction?: string; signal?: AbortSignal },
   now: () => Date,
   createId: (kind: string) => string,
+  validateSource?: SourceCheck,
 ): AsyncIterable<CrawlPlanningEvent> {
   const request = crawlPlanningRunRequestSchema.parse({
     expectedTaskRevision: input.expectedTaskRevision,
@@ -134,7 +148,7 @@ async function* runPlanning(
         return;
       }
       const completed = await finishCompleted(db, task, runId, event.output,
-        completeInterviewTimeline(timelineParts, event.output.assistantText), now, createId);
+        completeInterviewTimeline(timelineParts, event.output.assistantText), now, createId, validateSource);
       yield parseEvent({ type: "run.completed", taskId: task.id, runId, ...completed });
       return;
     }
@@ -161,9 +175,9 @@ async function finishCompleted(
   timelineParts: InterviewMessageTimelinePart[],
   now: () => Date,
   createId: (kind: string) => string,
+  validateSource?: SourceCheck,
 ) {
   const output = crawlPlanningRuntimeOutputSchema.parse(rawOutput);
-  requireTopicCoverage(task, output);
   const timestamp = now().toISOString();
   const content = crawlPlanContentSchema.parse({
     ...output.planCandidate,
@@ -174,6 +188,9 @@ async function finishCompleted(
     taskId: task.id,
     taskRevision: task.revision,
   });
+  requireCompleteChecklist(task, content);
+  // WHY：草稿展示前先过 Provider 的纯结构校验，保证“可确认”不再只是模型 JSON 合法。
+  await checkSources(content.sources, validateSource, "来源执行校验失败");
   const planId = createId("crawl-plan");
   await db.transaction(async (transaction) => {
     const rows = await transaction.select({ version: sourceCollectionPlans.version })
@@ -219,7 +236,7 @@ async function confirmPlan(
   captureTasks: CaptureTaskModule,
   input: { taskId: string; planId: string; expectedTaskRevision: number },
   now: () => Date,
-  validateSource?: (source: CrawlPlan["content"]["sources"][number]) => void | Promise<void>,
+  preflightSource?: SourceCheck,
 ) {
   const confirmation = confirmCrawlPlanSchema.parse({ expectedTaskRevision: input.expectedTaskRevision });
   const task = await requireTask(captureTasks, input.taskId);
@@ -232,15 +249,11 @@ async function confirmPlan(
   if (plan.taskRevision !== task.revision) throw revisionConflict(task.id);
   if (plan.status !== "draft") throw new CrawlPlanningError("invalid_state", "只有当前草稿计划可以确认");
   const parsed = crawlPlanContentSchema.parse(plan.content);
+  requireCompleteChecklist(task, parsed);
   for (const source of parsed.sources) {
     if (source.executionBlockers.length > 0) throw new CrawlPlanningError("invalid_state", `计划仍有执行阻塞：${source.executionBlockers.join("；")}`);
-    try {
-      await validateSource?.(source);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new CrawlPlanningError("invalid_state", `来源执行预检失败：${message.slice(0, 1_500)}`);
-    }
   }
+  await checkSources(parsed.sources, preflightSource, "来源执行预检失败");
   const timestamp = now().toISOString();
   await db.transaction(async (transaction) => {
     await transaction.update(sourceCollectionPlans).set({ status: "superseded" })
@@ -253,6 +266,18 @@ async function confirmPlan(
     if (changed.length !== 1) throw new CrawlPlanningError("invalid_state", "抓取计划状态已改变，请刷新后重试");
   });
   return loadView(db, task);
+}
+
+async function checkSources(sources: CrawlPlanContent["sources"], check: SourceCheck | undefined, label: string) {
+  if (!check) return;
+  for (const source of sources) {
+    try {
+      await check(source);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new CrawlPlanningError("invalid_state", `${label}：${message.slice(0, 1_500)}`);
+    }
+  }
 }
 
 async function loadView(db: WorkbenchDb, task: CaptureTask): Promise<CrawlPlanningView> {
@@ -294,11 +319,51 @@ function normalizeRun(row: typeof crawlPlanningRuns.$inferSelect, planId?: strin
   });
 }
 
-function requireTopicCoverage(task: CaptureTask, output: CrawlPlanningRuntimeOutput) {
+function requireCompleteChecklist(task: CaptureTask, content: CrawlPlanContent) {
+  const taskGaps = findCaptureTaskReadinessGaps(task.content);
+  if (taskGaps.length > 0) {
+    throw new CrawlPlanningError("invalid_state",
+      `抓取任务缺少专业导购所需的调查来源，请先继续对话修订任务：${taskGaps.join("、")}`);
+  }
+  if (content.executionChecklistVersion !== 2) {
+    throw new CrawlPlanningError("invalid_state", "该计划只是历史技术纵切片，不是当前完整执行清单；请重新规划");
+  }
   const requiredTopics = new Set([...task.content.generalTopics, ...task.content.categoryTopics]);
   const coveredTopics = new Set<string>();
-  for (const source of output.planCandidate.sources) {
+  const candidates = new Map(task.content.sourceCandidates.map((candidate) => [candidate.id, candidate]));
+  const candidateUsage = new Map<string, string>();
+  for (const source of content.sources) {
+    if (source.provider.key === "jd.catalog-product" && source.sourceCandidateIds.length > 1) {
+      // WHY：JD Provider 只导航 entryUrls[0]；把多个采访入口合并会制造“清单已覆盖、执行却漏抓”的假象。
+      throw new CrawlPlanningError("invalid_state", `京东采访入口必须拆成独立执行来源：${source.name}`);
+    }
+    for (const candidateId of source.sourceCandidateIds) {
+      const candidate = candidates.get(candidateId);
+      if (!candidate) {
+        throw new CrawlPlanningError("invalid_state", `抓取来源引用了任务中不存在的来源候选：${candidateId}`);
+      }
+      if (!source.entryUrls.includes(candidate.entryUrl) || source.sourceKind !== candidate.sourceKind) {
+        throw new CrawlPlanningError("invalid_state", `抓取来源没有保留采访来源入口或类型：${candidate.name}`);
+      }
+      if (source.provider.key === "public.web-resource" && !source.targets.some((target) =>
+        target.providerConfiguration.some((item) => item.key === "url" && item.value === candidate.entryUrl))) {
+        throw new CrawlPlanningError("invalid_state", `采访来源只被列出、没有成为实际抓取项：${candidate.name}`);
+      }
+      if (source.provider.key === "jd.catalog-product"
+        && (source.entryUrls.length !== 1 || source.entryUrls[0] !== candidate.entryUrl)) {
+        throw new CrawlPlanningError("invalid_state", `京东采访入口没有成为实际执行入口：${candidate.name}`);
+      }
+      requireCandidateAttachments(source, candidate);
+      const previous = candidateUsage.get(candidateId);
+      if (previous) {
+        throw new CrawlPlanningError("invalid_state", `同一采访来源被重复拆成多个执行事实：${candidate.name}（${previous}、${source.key}）`);
+      }
+      candidateUsage.set(candidateId, source.key);
+    }
     for (const target of source.targets) {
+      if (target.providerConfiguration.length === 0) {
+        throw new CrawlPlanningError("invalid_state", `抓取目标缺少 Provider 可读配置：${source.name} / ${target.name}`);
+      }
       for (const topic of target.taskTopics) {
         if (!requiredTopics.has(topic)) {
           throw new CrawlPlanningError("invalid_state", `抓取目标引用了任务中不存在的内容方向：${topic}`);
@@ -310,6 +375,40 @@ function requireTopicCoverage(task: CaptureTask, output: CrawlPlanningRuntimeOut
   const missing = [...requiredTopics].filter((topic) => !coveredTopics.has(topic));
   if (missing.length > 0) {
     throw new CrawlPlanningError("invalid_state", `抓取计划没有覆盖任务内容方向：${missing.join("、")}`);
+  }
+  const missingCandidates = task.content.sourceCandidates.filter((candidate) => !candidateUsage.has(candidate.id));
+  if (missingCandidates.length > 0) {
+    throw new CrawlPlanningError("invalid_state", `抓取计划遗漏了采访已调查来源：${missingCandidates.map((item) => item.name).join("、")}`);
+  }
+  if (task.content.jd.disposition === "included"
+    && !content.sources.some((source) => source.provider.key === "jd.catalog-product")) {
+    throw new CrawlPlanningError("invalid_state", "抓取计划遗漏了任务中必须覆盖的京东来源");
+  }
+}
+
+function requireCandidateAttachments(
+  source: CrawlPlanContent["sources"][number],
+  candidate: CaptureTask["content"]["sourceCandidates"][number],
+) {
+  const expected = [...candidate.expectedContents, ...candidate.observedFormats].join("|");
+  if (!/(说明书|PDF|附件表格)/i.test(expected)) return;
+  const directDocumentEntry = isDirectDocumentEntry(candidate.entryUrl);
+  const plannedChildTargets = source.targets.filter((target) => {
+    const configuration = Object.fromEntries(target.providerConfiguration.map((item) => [item.key, item.value]));
+    return typeof configuration.from_target === "string"
+      || (typeof configuration.url === "string"
+        && (configuration.url !== candidate.entryUrl || directDocumentEntry));
+  });
+  if (plannedChildTargets.length === 0) {
+    throw new CrawlPlanningError("invalid_state",
+      `采访来源要求说明书/PDF/附件正文，不能只抓入口 HTML：${candidate.name}`);
+  }
+  const requiresBinaryAsset = /(PDF|附件表格)/i.test(expected);
+  const hasBinaryTarget = plannedChildTargets.some((target) =>
+    target.rawFormats.some((format) => /^(document|pdf)$/i.test(format)));
+  if (requiresBinaryAsset && (!source.rawOutputPolicy.retainAssets
+    || !source.rawOutputPolicy.formats.includes("document") || !hasBinaryTarget)) {
+    throw new CrawlPlanningError("invalid_state", `采访来源要求 PDF/附件表格，必须计划原始附件留存：${candidate.name}`);
   }
 }
 

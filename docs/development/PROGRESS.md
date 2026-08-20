@@ -1,8 +1,8 @@
 # 数据抓取与清洗平台开发进度
 
 更新日期：2026-08-20
-当前阶段：`ROADMAP.md` 1C/1D 首个京东有界纵切片
-总体状态：采访 → Markdown 确认 → Capture Task → 可执行 Crawl Plan → 显式 Start → Source Dataset 已形成生产闭环。真实京东目录 HTML 已通过并持久化；商品详情被京东登录门阻塞并 truthful 停止，尚未通过完整详情访问。
+当前阶段：`ROADMAP.md` 1B 完整清单已确认；1C/1D 京东纵切片部分通过，1E 多来源执行尚未启动
+总体状态：采访 → Markdown 确认 → Capture Task → 完整可执行 Crawl Plan → 显式 Start → Source Dataset 已形成生产主链。真实冰箱 v6 已以 8 个来源、12 个 target 覆盖品牌官网/说明书、标准/监管附件、底层原理、零售入口与 13 个 task topic，并通过确认预检；本轮未点击 Start。历史京东目录 HTML 已持久化，商品详情仍被登录门 truthful 阻塞。
 当前积分：85.5（以 `AGENT-SCORECARD.md` 为准）
 
 ## 1. 本轮目标
@@ -36,7 +36,7 @@
 - 商品门类；
 - 中国大陆普通消费者实际可购买的市场口径，不按品牌国籍排除；
 - 通用抓取内容和该品类补充内容；
-- 平台来源范围（京东由标准商品平台来源策略确定，不作为负责人取舍题；淘宝是后续同级候选，当前没有 crawler/Provider）；
+- 平台来源范围（京东由标准商品平台来源策略确定，不作为负责人取舍题；淘宝是后续同级候选，当前只有精确公开入口 Provider，没有淘宝专用 crawler、分页或登录能力）；
 - 系统通过已完成搜索得到的来源事实及当前已知格式和访问状态，不把搜索结果冒充已接入或已抓取；
 - 排除项、未决项和已确认决定。
 
@@ -550,3 +550,275 @@ Patch Disposition:
 - 本轮起始 HEAD：`0afa6c12fff7e06b2406154286179e6352dcd8c2`。
 - 实现提交：`6e571f4597d7218f70e59933a0027a2696c7af32`；已推送至 `origin/codex/executable-category-crawl`，并通过 `git ls-remote` 验证本地与远程 SHA 一致。
 - PostgreSQL 幂等启动、采访 Markdown/确认后结构化 contract、可执行 Crawl Plan、0014/0015 migration、JD Provider、Source Execution、Source Dataset、Workbench/Web/Skill/测试和权威文档已形成跨电脑接续点。本地数据库、JD CDP Profile、Cookie 和真实原始来源内容没有提交。
+
+## 10. 2026-08-20 macOS 最终 Crawl Plan 生成门纠错
+
+```text
+Baseline Impact:
+- touched modules: Crawl Planning App Server prompt、Web Crawl Plan 确认门、聚焦测试和本进度记录
+- owning fact source: unchanged; Capture Task owns scope, versioned Crawl Plan owns source/quantity/stop decisions, Source Dataset owns future runs and snapshots
+- public interface changed: no
+- new protocol/adapter/fallback: no
+- compatibility or legacy path changed: blocked v1 remains immutable history and v2 supersedes it normally
+- research update required: no; R-035/R-036 technology decisions remain unchanged
+- architecture or ADR update required: no; this fixes an implementation contradiction without changing ownership or dependency direction
+- tests and real-surface validation: focused 5/5, full 70 passed/1 realtime skipped, six-workspace production build, real macOS Workbench planning/confirmation and console check
+```
+
+```text
+Patch Disposition:
+- delete: runtime prompt clauses that required every unverified Provider fact to become a blocker and discouraged the Skill-defined production Provider limits
+- keep: injected planning Skill, server-side Provider validation/preflight, version history, explicit Start boundary and failed v1 evidence
+- rewrite: prompt to follow the injected Provider contract and Web to hide confirmation for blocked plans
+- reason: the old prompt contradicted the latest Skill, generated placeholder Providers and limits, while the page still presented a server-rejected plan as confirmable
+```
+
+- 当前 macOS 真实任务 `capture-task-f6aaf4e8-41d4-43f5-bbb5-6f0764b119c5` revision 2 的首次规划 v1 搜索 35 个网页，但错误生成 4 个 `workbench.unconfigured@unverified` 来源、非首个纵切片限额和 blockers；该版本保留为 `superseded`，没有删除或冒充成功。
+- 修复后重新规划搜索 15 个网页，生成并确认 Crawl Plan v2 `crawl-plan-d1f45777-f3cb-45de-9a13-59f9f8053a09`，content hash `1ab156a6b105bc92fd218c54cf9ab61031135c1fb309ab68bfc97ef35eb2f595`。计划只有 `jd.catalog-product@1.0.0`，冻结 `mode=cdp / include_text=冰箱 / exclude_text=二手|冷柜|酒柜|冰吧|雪茄柜|商用`、每分钟 2 次、最小间隔 10 秒、最长 180 秒、请求预算 2、一个目录 HTML 和一个详情 HTML、零附件、零 blocker。
+- 确认阶段连接隔离的 loopback Chrome CDP 并通过 Provider preflight；页面显示 `已确认` 与独立 `开始抓取`。本轮没有点击 Start，任务 Source Run 数量仍为 0；这是最终 Crawl Plan 验收，不是京东来源抓取结果。
+- 当前页面控制台 0 error / 0 warning；服务运行在 `http://127.0.0.1:6173/`，最终计划页已留作用户检查。
+
+本轮架构影响：无变化。修复只让 Planning prompt、Skill、服务端 preflight 和 Web 确认门表达同一既有事实，没有改变模块职责、事实源、公共 contract、Provider seam 或执行停止门。
+
+当前变更仅在本机工作树，尚未提交或推送，不构成新的跨电脑接续点。下一步由产品负责人直接审查已确认 v2；未经另行明确要求，不点击“开始抓取”。
+
+## 11. 2026-08-20 完整多来源 Crawl Plan 与目标级执行
+
+```text
+Baseline Impact:
+- touched modules: shared Crawl Plan/Source Dataset contract、0016 migration、Crawl Planning/Source Execution/Source Dataset、JD/公共资源 Provider、API/Web、Planning Skill 与权威文档
+- owning fact source: Capture Task owns confirmed scope/candidates/topics; Crawl Plan owns complete executable targets and limits; Source Dataset owns per-target attempts, immutable snapshots and assets
+- public interface changed: yes; checklist v2 adds sourceCandidateIds/typed target configuration, Provider events carry targetKey, Source Dataset exposes target attempts and asset download
+- new protocol/adapter/fallback: added public.web-resource@1.0.0 exact/one-linked-target adapter and cacache asset seam; no fallback, dynamic plugin, queue or model execution path
+- compatibility or legacy path changed: historical plans remain readable but checklist v1 and blocked/placeholder plans cannot confirm or start; old snapshots remain legacy-readable
+- research update required: yes; R-037 accepts Got, robots-parser, Cheerio and cacache after focused prototypes, while real multi-source access remains untested
+- architecture or ADR update required: yes; ADR-0016 and ARCHITECTURE/ROADMAP/PRD record complete-list and target-level ownership
+- tests and real-surface validation: six-workspace typecheck/build, full suite, real task v6 generation/confirmation, API reconciliation and visible Start button
+```
+
+```text
+Patch Disposition:
+- delete: no user data or plan history; archive only the synthetic task created by this investigation
+- keep: existing Capture Task v2, immutable plan history, JD bounded Provider/preflight, explicit Start boundary, source raw-data tables and prior truthful blocked runs
+- rewrite: topic-only/source-level completeness into candidate+topic+target reconciliation; placeholder-compatible candidate schema into two exact Provider protocols; source-only execution into per-target attempts; JSON commentary projection into readable text
+- reason: the prior patch proved one JD technical slice but falsely allowed brand/standard/manual/technical candidates to disappear or stop at an entrance page
+```
+
+开源/已有资产/产品代码边界：
+
+- 复用 Got stream、robots-parser、Cheerio、cacache，及已有 App Server `outputSchema`、Zod、PostgreSQL/Drizzle、SSE、JD CDP、p-queue/cockatiel；没有自研 transport、robots parser、HTML parser、CAS、队列或工作流引擎。
+- 产品特有代码只承担三类职责：Capture Task 候选/topic 完整性与附件正文门；将冻结 target 交给 Provider 并逐项对账的 orchestration；把 Source Dataset/Plan 状态投影到 Workbench。公网/来源差异停留在薄 adapter。
+
+交付事实：
+
+- 真实任务 `capture-task-f6aaf4e8-41d4-43f5-bbb5-6f0764b119c5` revision 2 已生成并确认 Crawl Plan v6 `crawl-plan-e81605a8-6749-46ae-9a13-9eeac38bdcfd`，content hash `cf00a04ca1a8f55f0fb99ad11e49d41337598f6fc44067d824b960b412a7c282`。
+- 清单包含 8 个来源、12 个 target：京东目录/首个合格详情、松下旗舰店精确入口、淘宝搜索精确入口、淘宝详情路由入口、海尔型号页＋“查看说明书”H5、GB 12021.2—2025 公开记录＋明确标为征求意见稿的官方编制说明 PDF、CNIS 公告＋家用电冰箱附件、NIST 制冷循环资料。
+- 7 个采访候选各恰好使用 1 次；13 个 Capture Task 原文 topic 全覆盖；`executionBlockers` 为 0。海尔说明书、GB PDF 和 CNIS 附件均是独立正文 target，不再用入口页中的链接冒充抓取完成。
+- 确认阶段通过当前两个 Provider 的严格配置与 preflight。重启 API/Web 后计划仍为 `confirmed`；页面显示 1 个“开始抓取”按钮、0 个“确认此计划”按钮，Planning Timeline 无 JSON 外壳。
+- 该任务 Source Run 数量为 0；本轮没有点击 Start，没有访问、下载或持久化任何 v6 来源内容。计划可开始不等于来源访问成功。
+- 调查产生的 synthetic `task-73e2fc0f-2fc3-4c10-ba49-2b11d0925be9` 已通过产品 UI 归档，未硬删数据库历史。
+
+验证：当前补丁 `npm run typecheck` 通过；`npm test` 为 94 passed、1 个既有 realtime 限速验收 skipped；`npm run build` 六个 workspace 通过。Vite 报告单个 592.79 kB chunk 警告，不影响构建成功，未在本任务扩大为前端拆包。`npm audit --omit=dev` 报告 1 moderate/4 high，依赖链属于既有 Fastify/AJV/Crawlee；本轮没有擅自执行破坏性 `audit fix`，细节登记在 R-037/R-007。目标 Linux 安装行为仍未验证。
+
+本轮架构影响：改变。ADR-0016 将 Crawl Plan 从“已绑定 Provider 的 source 列表”收口为“对账全部采访候选/topic 的 target 级完整执行清单”，并新增有界公共原始资源 Provider、target attempt 和 CAS asset 事实；Capture Task、Crawl Plan、Source Dataset 的三层 ownership 与依赖方向保持不变。
+
+当前页面服务运行在 `http://127.0.0.1:6173/` 并停留在已确认 v6；未经另行明确授权不点击“开始抓取”。全部代码、migration、Skill 和权威文档仍只在本机工作树，尚未提交或推送，不构成新的跨电脑接续点。
+
+## 12. 2026-08-20 电视专业导购 Crawl Plan 与侧栏顺序纠错
+
+```text
+Baseline Impact:
+- touched modules: Web 任务导航、采访/规划 Skill、Capture Task 准备度、Crawl Planning runtime/module、公共资源 Provider、PRD/ROADMAP/ARCHITECTURE/进度与聚焦测试
+- owning fact source: Capture Task 继续拥有已确认范围/候选/topic；Crawl Plan 拥有来源/target/数量/停止条件；Source Dataset 拥有未来 Source Run 和原始快照
+- public interface changed: yes; CrawlPlanningModule 将纯结构 validate 与依赖运行态的 preflight 分开注入，但 shared JSON/SSE 领域 contract 未变
+- new protocol/adapter/fallback: no; 复用既有两个 Provider、App Server、Zod 和显式 Start，没有新增 Provider、队列、repair 或 fallback
+- compatibility or legacy path changed: 历史 v1 与失败 Planning Run 保持不可变可读；只有通过完整性与 Provider 结构校验的新 Draft 才能保存
+- research update required: no; 沿用 R-037 已接受组件和 Provider 边界
+- architecture or ADR update required: yes; ARCHITECTURE 澄清 Draft validate、确认 preflight、直接文档和 URL 规范化边界；事实源与依赖方向未变，无新 ADR
+- tests and real-surface validation: full Vitest/typecheck/build、真实电视 v4 规划/确认/API 对账、侧栏选择顺序和 Source Run=0
+```
+
+```text
+Patch Disposition:
+- delete: 选中/加载既有会话时无条件 prepend；只检查现有 topic/候选自洽就声称完整；直接 PDF 必须再有子 target 的错误门；根 URL 原始字符串比较；被证据推翻的“跨候选 target”猜测性修复
+- keep: Capture Task 显式确认、全部候选/topic 对账、Provider 严格配置、附件正文门、版本历史、显式 Start 和 Source Dataset 不可变边界
+- rewrite: 新任务才置顶、已有任务原位更新；确认前要求零售/品牌/标准监管/技术原理四类来源；精确 PDF 按 document 留存；Provider validate 前移而 preflight 保留在确认/启动
+- reason: 用户真实电视流程证明旧实现会把“两个品牌入口”和“可执行专业导购清单”混为一谈，并暴露两个会让正确计划无法确认的实现假阴性
+```
+
+产品目标与准备度门：
+
+- 产品目标已明确为单门类、多品牌、多型号的专业导购 Agent；原始数据必须同时支撑市场在售/价格/公开评价、品牌官方配置/说明资料、国家标准/监管/能效、关键部件/技术路线/底层原理四类事实。
+- 新 Capture Task 若缺少核心零售平台、品牌官方、标准/监管或权威技术原理来源，或京东标为 included 却没有真实 `jd.com` 候选，不能确认；缺少系统调查项也不能只因负责人问题已答完而生成正式任务。
+- Crawl Planning 再次执行同一准备度门；把 topic 文本随意挂到已有品牌来源、遗漏采访候选或以入口 HTML 冒充 PDF/说明书正文均失败关闭。
+
+真实电视验收：
+
+- 旧电视任务 v1 只有 TCL/海信两个采访候选，旧 Crawl Plan v1 只有 3 个 `brand_official` 来源；它们保留为历史证据，不再冒充专业导购完整清单。
+- 当前真实任务 `capture-task-16a108ad-fbde-4cfa-9206-5d2aeb8a123a` 已修订并确认到 revision 4，共 29 个候选：4 个 retailer、7 个 brand_official、14 个 standards_body、1 个 regulator、2 个 industry_organization、1 个 technical_publisher；历史 Redmi 70/小米电视 2 等非当前型号未纳入。
+- 已生成并确认 Crawl Plan v2 `crawl-plan-a0933c21-bf79-4c0e-9e3f-3a49dd4f46fa`，content hash `43437b3aa151a40a0a05cfe3645d018fd869484de4656899b29af063bd4222f0`，基于任务 v4。清单为 29 个来源、32 个 target；29/29 候选各恰好一次，8/8 原文 topic 全覆盖，无额外 topic、无 execution blocker。
+- 京东搜索入口使用 `public.web-resource@1.0.0`；三个 `www.jd.com/brand/...` 候选各自使用 `jd.catalog-product@1.0.0`，每个独立冻结 catalog 与 first_matching_product 两个 target。其余品牌官网、国标/监管/能效和技术原理入口使用公共精确资源 Provider。
+- 发改委《平板电视能源效率标识实施规则》与 ITU BT.2020-2 原文均以 `document` target 且 `retainAssets=true` 保存；直接 PDF 的 exact target 被承认为正文，HTML 入口声称有附件时仍必须另列受控同源 target。
+- 确认时三个京东来源连接隔离 loopback CDP，全部 Provider preflight 通过。页面当前显示 `已确认` 和一个独立“开始抓取”按钮；本轮没有点击 Start，电视任务 Source Run 数量为 0。
+- 侧栏真实选择第二条“家用冰箱抓取任务 v2”后顺序仍为“电视 v4、冰箱 v2、冰箱 v1”，没有把选中项移动到顶部；随后已返回电视 v2 Crawl Plan 页面供产品负责人检查。
+
+根因与验证：
+
+- 侧栏根因是 `handleInterviewChanged` 对加载/选择产生的既有 session 也执行 prepend；现改为按 ID 原位替换，仅真正新建记录置顶。
+- 完整性根因是任务确认只看负责人未决项、计划只看已有候选/topic 的内部自洽；现增加专业导购四来源组合与京东真实候选门。
+- 计划确认期间发现并修复两个假阴性：附件门错误要求直接 PDF 仍有“子附件”；公共 Provider 把 `https://www.energylabel.com.cn` 与规范化后的尾斜杠 URL 当成不同入口。Provider 的纯结构 validate 现于 Draft 保存前执行，确认保留运行态 preflight。
+- 当前 `npm test` 为 108 passed / 1 个既有 realtime 限速验收 skipped；六个 workspace `npm run typecheck` 通过；`npm run build` 通过。Vite 仅报告既有 592.90 kB chunk 警告；`git diff --check` 无错误。
+
+本轮架构影响：澄清并收窄现有 Crawl Planning/Provider seam。新增的只是同一 Provider 在 Draft、确认、启动三阶段分别承担结构校验、运行态预检和执行的明确时机；Capture Task、Crawl Plan、Source Dataset 的 ownership、依赖方向、外部协议与显式 Start 停止门不变。
+
+当前页面服务运行在 `http://127.0.0.1:6173/`，停留在已确认电视 Crawl Plan v2。全部修改仍只在本机工作树，未提交、未推送，不构成新的跨电脑接续点；未经另行明确授权不点击“开始抓取”。
+
+## 13. 2026-08-20 Crawl Plan 折叠展示与重跑稳定性核查
+
+```text
+Baseline Impact:
+- touched modules: Crawl Planning Web 来源/target 展示、前端回归测试、PROGRESS
+- owning fact source: Crawl Plan，保持不变；Web 只投影既有 source/target
+- public interface changed: no
+- new protocol/adapter/fallback: no
+- compatibility or legacy path changed: no；历史计划使用相同折叠投影
+- research update required: no；未改变 Planning runtime、Provider 或依赖
+- architecture or ADR update required: no；模块职责、事实源、依赖方向和 contract 均未改变
+- tests and real-surface validation: 折叠红绿回归、规划完整性聚焦测试、Web production build、真实电视 v2 页面展开/折叠和 Start 可达性
+```
+
+```text
+Patch Disposition:
+- delete: 来源和内部 target 默认全部展开的长页面展示
+- keep: 全部来源/target 字段、计划状态、确认/开始边界、历史版本和现有业务动作
+- rewrite: 每个来源与其内部 target 使用原生 details/summary，默认关闭且可独立展开
+- reason: 29 个来源与 32 个 target 同时展开会把 Start 动作推到几十屏之后；问题只属于 Web 投影，不应改写计划数据
+```
+
+交付与真实页面证据：
+
+- `CrawlPlanCard` 当前把来源和内部抓取项分别投影成可访问的折叠结构；折叠标题保留来源名、发布者、来源类型、target 数和访问状态，展开后全部 Provider、频控、入口、数量与停止字段仍在。
+- 红色回归首先证明旧 HTML 中 4 个样例来源的折叠节点数量为 0；修复后聚焦测试为 5/5 passed。规划准备度、runtime prompt 与完整性集成联合验证为 4 files / 25 tests passed。
+- 真实电视 Crawl Plan v2 页面核对为 29 个来源、32 个 target、默认 `openSources=0 / openTargets=0`，独立展开来源和 target 后分别成为 1；页面仍只有 1 个“开始抓取”按钮，并已滚动到该按钮供负责人查看。
+- Web production build 通过；Vite 仅报告既有 594.15 kB chunk 警告。`git diff --check` 通过。电视任务 Source Run 仍为 0，本轮没有点击 Start。
+
+重跑稳定性结论：
+
+- 对同一个已确认电视 Capture Task revision 4，29 个 `sourceCandidates` 已是 PostgreSQL 中的任务事实。每次重新规划都会把这 29 个 ID、原始入口、来源类型和 authoritative Provider 逐项注入；计划保存门要求每个候选恰好出现一次、8 个原文 topic 全覆盖，并把最近历史计划一并提供给 runtime。模型可以改变说明、target 命名或增加更精确来源，但不能保存退回两个来源的计划；不满足时 Planning Run 必须失败关闭。
+- 对一个全新创建的电视任务，候选入口仍由采访 Agent 本轮 web search 调查并写入 Markdown，再由无搜索的 materialization 忠实转换。当前确定性代码要求零售/市场、至少两个独立品牌官网、标准或监管、权威技术原理四类入口，并在京东 included 时有真实京东候选；它没有跨任务复用电视 v4 的 29 条已确认来源，也没有冻结每个品类的完整品牌/型号/标准覆盖基线。因此不能承诺新任务必然得到相同 29 条或同等密度；这是当前真实剩余边界，不用一次成功样本冒充系统保证。
+
+本轮架构影响：无变化。只改 Web 展示并澄清现有生成门；没有增加第二份来源事实、品类模板、共享 catalog 或新 contract。若产品要求所有全新同品类任务复用已验收来源覆盖，下一步必须先设计“品类来源基线/覆盖口径”的事实归属、版本与更新门，不能把电视 29 条硬编码进通用 Capture Task 或 Prompt。
+
+当前改动仍只在本机工作树，未提交、未推送，不构成新的跨电脑接续点。
+
+## 14. 2026-08-20 采访草案四类来源证据门与全新微波炉回归
+
+```text
+Baseline Impact:
+- touched modules: shared Interview runtime contract、Category Interview 完成门/读取投影、Capture Task 准备度、0017 migration、采访 Skill/prompt、测试与架构/调研/ADR/进度文档
+- owning fact source: Category Interview/PostgreSQL；搜索时间线与 Markdown 仍是来源事实，coverage_verified 只记录该版本是否通过关系校验
+- public interface changed: yes；仅在生成 draftMarkdown 时增加四组 URL 的最小 draftCoverage 凭证，不恢复完整 Capture Task/sourceCandidates JSON
+- new protocol/adapter/fallback: no；复用 App Server web_search、Zod、Drizzle/PostgreSQL，不增加 repair、第二模型、自动 retry 或新依赖
+- compatibility or legacy path changed: 历史未验证 draft 文本保留但投影为 superseded，旧 task_ready 降回 active；已确认历史不回退
+- research update required: yes；R-029 记录真实失败、最小凭证边界与无新依赖结论
+- architecture or ADR update required: yes；ARCHITECTURE 与 ADR-0012 明确 Workbench 证据门和非第二事实源边界
+- tests and real-surface validation: 聚焦红绿测试、PostgreSQL 集成、全量 115 passed/1 skipped、六 workspace typecheck/build、旧会话降级与全新微波炉真实回归
+```
+
+```text
+Patch Disposition:
+- delete: “模型没有声明系统未决项且出现过一次搜索就等于调查完成”的隐含放行；单品牌即可支持专业导购的错误完成口径
+- keep: 一次一问、只问负责人真实取舍、Markdown 草案确认、确认后独立结构化、Capture Task/Crawl Plan/显式 Start 停止门
+- rewrite: draftMarkdown 直接进入 task_ready 改为四类 URL 必须来自已完成搜索并写入 Markdown；历史未验证待确认草案改为不可确认投影
+- reason: 真实微波炉 v1 只有京东、美的、松下三个入口，却遗漏标准监管与技术原理并错误开放确认
+```
+
+实现与验证事实：
+
+- runtime final JSON 仍是本轮最小增量；只有生成 Markdown 时才附带 `draftCoverage` 四组 URL。零售/市场至少 1 个，品牌官网至少 2 个独立站点，标准/监管至少 1 个，技术原理至少 1 个；同一 URL 不能重复或跨角色复用。
+- Workbench 将每个凭证 URL 与当前及历史 assistant 消息中 `status=completed` 的 `web_search` URL 交叉校验，并要求原字符串出现在最新 Markdown。凭证本身不落库；新草案仅写 `coverage_verified=true`。0017 对历史行默认 `false`。
+- 正式 Capture Task 完成门同步要求至少两个独立品牌官网，防止确认后 materialization 丢掉第二品牌；Crawl Plan 双品牌测试夹具同步补全为两个候选、两个来源和两个 target，没有放松既有候选/topic/Provider/附件门。
+- 先写红色回归证明旧实现会放行只有零售与品牌入口的草案；聚焦测试 18/18 通过，PostgreSQL 采访集成 10/10 通过。最终 `npm test` 为 115 passed、1 个既有 realtime 限速验收 skipped；`npm run typecheck` 六个 workspace 通过；`npm run build` 通过，Vite 只有既有约 594.65 kB chunk warning。
+- 真实旧会话 `interview-session-d1d3e03c-9f06-4a55-997a-d2ba8f8b830a` 重启后，v1 从待确认投影为 `superseded`，session 从 `task_ready` 降回 `active`，历史消息/文本保留且确认按钮消失。继续调查后生成 v2：62 个去重已完成搜索 URL；京东、美的、松下、GB/T 4706.21-2024 与市场监管总局技术原理 5 个草案入口均同时存在于搜索记录和 Markdown，v2 才进入 `draft + task_ready`。
+- 从零新建真实回归会话 `interview-session-42494f09-c475-48ff-ad7e-6935abfcba10`。首轮先完成 45 个去重搜索 URL，再只提出一个会改变产品边界的问题；回答“1”后同一轮生成 v1。草案中的京东、格兰仕、美的、GB 21456-2024、上海光机所技术原理 5 个入口逐一通过搜索记录与 Markdown 双重核对；Decision 为 confirmed，草案为 `draft + task_ready`。
+- 页面 `http://127.0.0.1:6173/` 控制台 0 error / 0 warning，当前停留在“回归验证：我要抓取微波炉的数据”草案供负责人检查。本轮没有点击“确认范围并生成正式任务”，没有生成该回归任务的 Capture Task/Crawl Plan，更没有开始抓取。
+
+本轮架构影响：改变。新增的是 Category Interview runtime 与 Workbench 之间的最小覆盖校验凭证及草案验证标记；消息、搜索时间线、Markdown、Capture Task、Crawl Plan 和 Source Dataset 的事实归属与依赖方向保持不变，没有第二套会话/任务/来源事实或 fallback。
+
+全部改动与两个真实待确认草案仍只在本机工作树/本机数据库，未提交、未推送，不构成新的跨电脑接续点。
+
+## 15. 2026-08-20 微波炉零问题直出草案缺陷与修复 Issue 登记（未实施）
+
+用户在生产 Workbench 新建“我要抓取微波炉的数据”后，首轮搜索结束便直接得到草案，没有负责人问题。当前会话 `interview-session-ce6a3268-55ef-4c43-8b08-dff1a73d1da6` 的 API 事实为 `task_ready / idle`、0 个 Decision、0 个未决项、1 个 draft；草案自行写入家用市场、产品形态、复合机和商用边界。该现象已通过只读诊断确认，不是前端漏展示。
+
+根因是生产 Skill/Prompt 允许 Agent 在调查后自行判定“提问或直接草案”，而 Workbench 只能验证模型已经声明的 Decision、未决项和四类来源覆盖，不能判断模型漏报的语义取舍。现有测试夹具又把模糊首句零 Decision 直接进入 `task_ready` 当作合法路径。四类来源证据门解决了来源不足，没有解决负责人取舍是否充分。
+
+详细且可执行的修复方案、非目标、文件范围、验收矩阵和停止条件已经登记在 `.scratch/executable-category-crawl/issues/01-interview-scope-decision-gate.md`，状态为 `ready-for-agent`；当前 PRD 同步增加对应产品不变量与链接。方案不增加最低问题数、品类表、JSON audit、第二模型、repair 或 fallback，只收紧现有 Interview Skill/Prompt 对范围依据的判断。
+
+```text
+Baseline Impact:
+- touched modules: 本轮只写 Issue/PRD/PROGRESS 留迹；后续实现限定为 Interview Skill、Codex Interview Prompt 和相关测试
+- owning fact source: Category Interview / PostgreSQL，保持不变
+- public interface changed: no
+- new protocol/adapter/fallback: no
+- compatibility or legacy path changed: no；当前真实会话和历史草案保持原样
+- research update required: no；没有新能力、依赖或模型路径
+- architecture or ADR update required: no；模块职责、事实源和依赖方向不变
+- tests and real-surface validation to run: 以 Issue 01 的模糊/完整微波炉对照流程和现有全量门为准
+```
+
+```text
+Patch Disposition:
+- delete: 后续删除模糊首句零 Decision 直接草案属于正确行为的测试语义
+- keep: 一次一问、只问真实取舍、四类来源覆盖、Markdown 确认和确认后结构化
+- rewrite: 后续重写“没有必要取舍”的 Skill/Prompt 判断纪律与 fake runtime fixture
+- reason: 当前缺陷是 Agent 把未确认范围选择误当系统默认，不是来源覆盖、状态机或 JSON schema 缺失
+```
+
+本轮架构影响：澄清，无代码、公共 contract、数据库或运行状态变化。下一步第一条动作是按 Issue 01 先建立 Prompt/fixture 红灯，再只改 Skill/Prompt；真实模糊微波炉流程仍零问题直出草案时必须判定失败并停止，不能改用硬编码或扩大架构。
+
+以上留迹仍只在本机 dirty worktree，未提交、未推送，不构成跨电脑接续点。
+
+## 16. 2026-08-20 采访范围依据纪律与模糊/完整微波炉对照验收
+
+```text
+Baseline Impact:
+- touched modules: Interview Skill、Codex Category Interview Prompt、采访 runtime/turn-policy 测试夹具、Issue 01、PROGRESS
+- owning fact source: Category Interview / PostgreSQL，保持不变
+- public interface changed: no
+- new protocol/adapter/fallback: no
+- compatibility or legacy path changed: no；历史消息、Decision 和草案未改写或清理
+- research update required: no；未引入新能力、依赖或模型路径
+- architecture or ADR update required: no；模块职责、事实源、依赖方向和公共 contract 不变
+- tests and real-surface validation: Prompt 红绿回归、采访聚焦/集成测试、全量 test/typecheck/build、真实模糊与完整微波炉 Workbench/API 对照
+```
+
+```text
+Patch Disposition:
+- delete: 模糊首句零 Decision 直接草案属于正确行为的 fixture 语义；Prompt 未检查范围依据即可直接草案的宽松表述
+- keep: 一次一问、只问真实负责人取舍、四类来源覆盖、Markdown 确认、确认后独立结构化和显式 Start 停止门
+- rewrite: “没有必要取舍”的 Skill/Prompt 判断纪律，以及需要直接草案的 fake runtime/来源门夹具
+- reason: 根因是同一个采访 Agent 把未经确认的范围选择误当系统默认，不是状态机、来源覆盖、JSON schema 或页面投影缺失
+```
+
+实现保持 Issue 01 最小边界：
+
+- `.agents/skills/interview-product-category/SKILL.md` 要求生成草案前逐项检查会改变商品集合、市场或观察时间的范围依据；只接受用户原文、已确认 Interview Decision、Skill 明确批准的系统默认，或不包含负责人选择的客观调查事实。推荐只是 proposal；仍有真实取舍时只输出影响最大的一个 `proposedDecision` 并省略草案。
+- `packages/workbench/src/codexCategoryInterviewRuntime.ts` 的生产 Prompt 对齐同一纪律，明确该规则不是最低问题数；没有品类/关键词表、固定问题、JSON 字段、migration、第二模型、repair、fallback、重试或新依赖。
+- runtime 直接草案 fixture 改成已经完整表达范围的冰箱请求；四类来源门 fixture 补入已确认生命周期 Decision。结构测试不再冒充自然语言语义判断，现有 typed delta 与 Workbench/PostgreSQL ownership 不变。
+
+红绿与自动化证据：
+
+- 先加入 Prompt contract 红灯，连续两次得到 1 failed / 6 passed；唯一缺失项是生产 Prompt 中的范围依据检查。最小修改后 runtime + turn policy 为 2 files / 13 passed，五个采访聚焦/集成文件为 27/27 passed。
+- 全量 `npm test` 为 31 files passed、115 tests passed、1 个既有 realtime acceptance skipped；`npm run typecheck` 六个 workspace 通过；`npm run build` 通过。Vite 仅报告既有约 594.65 kB chunk warning；`git diff --check` 无错误。
+- 首次在 sandbox 内运行采访集成测试只因无法连接宿主 `127.0.0.1:5432` 报 `EPERM`，获准连接同一台本地 PostgreSQL 后原命令 27/27 通过；该项分类为环境隔离，不是产品失败。
+
+真实 Workbench/API 对照：
+
+- 模糊输入会话 `interview-session-a2c4c424-345e-4684-b33a-114340d94ef1` 完成 23 个网页搜索活动后，提出 1 个真正改变商品集合的“组合型微波炉是否纳入”问题。API 为 `active / idle`、1 个 `proposed` Decision、1 个 open unresolved item、0 个草案；没有询问网站、京东、品牌/标准枚举或默认采集内容。
+- 完整输入会话 `interview-session-5f845c1d-9c61-4fae-9e18-11e401c9c0df` 完成 43 个网页搜索活动后，API 为 `task_ready / idle`、0 Decision、0 未决项、1 个未确认 draft；证明本轮没有引入强制问题数量。
+- 页面控制台为 0 error / 0 warning。两条新会话均保留供人工复核；旧错误会话和草案也未清理。本轮没有确认草案、生成回归 Capture Task/Crawl Plan、点击 Start 或执行真实来源抓取。Capture Task 列表在完整对照前后均为同 3 个 ID，因而没有新增 Capture Task 或其下游 Source Run。
+
+本轮架构影响：澄清。改变的是同一个无状态采访 Agent 的 Skill/Prompt 语义纪律和误导性测试数据；Category Interview/PostgreSQL 事实源、App Server ephemeral turn、现有 typed contract、四类来源覆盖门、Capture Task/Crawl Plan/Source Dataset/Source Run 边界与依赖方向均未改变，因此不更新 ARCHITECTURE、RESEARCH 或 ADR。
+
+当前 API/Web 服务运行在 `http://127.0.0.1:4000/` 与 `http://127.0.0.1:6173/`，页面停留在完整微波炉未确认草案供负责人查看。全部改动与两条真实回归会话仍只在本机 dirty worktree / 本机数据库，未提交、未推送，不构成跨电脑接续点。

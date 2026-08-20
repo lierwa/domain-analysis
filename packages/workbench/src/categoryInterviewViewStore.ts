@@ -39,9 +39,12 @@ export async function loadCategoryInterviewView(
       .orderBy(asc(captureTaskDraftVersions.version)),
   ]);
   const taskDrafts = rawDrafts.flatMap((row) => {
-    const { briefMarkdown, ...draftRow } = row;
+    const { briefMarkdown, coverageVerified, ...draftRow } = row;
+    // WHY：旧待确认草案缺少可复核搜索证据；文本继续留在版本历史，但不能继续作为可确认事实。
+    const status = draftRow.status === "draft" && !coverageVerified ? "superseded" : draftRow.status;
     const parsed = captureTaskDraftVersionSchema.safeParse({
       ...omitNulls(normalizeTimestamps(draftRow)),
+      status,
       markdown: briefMarkdown,
     });
     return parsed.success ? [parsed.data] : [];

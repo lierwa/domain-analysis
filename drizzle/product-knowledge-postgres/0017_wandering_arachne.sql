@@ -1,0 +1,1 @@
+ALTER TABLE "workbench"."capture_task_draft_versions" ADD COLUMN "coverage_verified" boolean DEFAULT false NOT NULL;

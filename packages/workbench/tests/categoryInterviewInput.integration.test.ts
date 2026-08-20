@@ -40,16 +40,15 @@ describeWithPostgres("采访输入理解与纠正", () => {
     const proposed = view.decisions.find((item) => item.status === "proposed")!;
     const answer = "1，另外排除二手；淘宝只是后续同级平台，不代表已经有淘宝爬虫";
     harness.runtime.push({
+      ...draftOutput([
+        "# 显示器采访范围", "", "- 仅当前在售型号", "- 排除二手商品",
+        "- 淘宝是后续同级候选平台，当前没有可执行的淘宝 crawler/Provider",
+      ].join("\n")),
       assistantText: "已记录仅在售、排除二手，以及淘宝当前没有爬虫的纠正。",
       decisionResolution: {
         decisionId: proposed.id, selection: "仅当前在售型号",
         rationale: "完整原文同时包含回答、排除项和平台能力纠正。",
       },
-      draftMarkdown: [
-        "# 显示器采访范围", "", "- 仅当前在售型号", "- 排除二手商品",
-        "- 淘宝是后续同级候选平台，当前没有可执行的淘宝 crawler/Provider",
-      ].join("\n"),
-      unresolvedItems: [],
       resolvedUnresolvedKeys: ["catalog.lifecycle-scope"],
     });
     await run(harness, answer, view.session.revision);
@@ -71,10 +70,9 @@ describeWithPostgres("采访输入理解与纠正", () => {
     const proposed = view.decisions.find((item) => item.status === "proposed")!;
     const correction = "这个问题不该让我选，应由系统按公开在售事实判断";
     harness.runtime.push({
+      ...draftOutput("# 显示器采访范围\n\n型号范围按公开在售事实判断。"),
       assistantText: "纠正成立；问题已撤回，并按公开事实形成草案。",
       decisionWithdrawal: { decisionId: proposed.id, rationale: "该问题应按可调查事实处理。" },
-      draftMarkdown: "# 显示器采访范围\n\n型号范围按公开在售事实判断。",
-      unresolvedItems: [],
       resolvedUnresolvedKeys: ["catalog.lifecycle-scope"],
     });
     await run(harness, correction, view.session.revision);
@@ -137,6 +135,9 @@ class RecordingRuntime implements CategoryInterviewRuntime {
     const result = this.results.shift();
     if (!result) throw new Error("测试没有准备采访输出");
     if (result instanceof Error) throw result;
+    if (result.draftCoverage) {
+      yield { type: "activity", activity: completedCoverageSearch(result.draftCoverage) };
+    }
     yield { type: "completed", output: result };
   }
 
@@ -202,7 +203,34 @@ function platformQuestionOutput(): CategoryInterviewRuntimeOutput {
 }
 
 function draftOutput(draftMarkdown: string): CategoryInterviewRuntimeOutput {
-  return { assistantText: "已形成采访范围草案。", draftMarkdown, unresolvedItems: [], resolvedUnresolvedKeys: [] };
+  const draftCoverage = completeCoverage();
+  return {
+    assistantText: "已形成采访范围草案。",
+    draftMarkdown: `${draftMarkdown}\n\n${coverageMarkdown(draftCoverage)}`,
+    draftCoverage,
+    unresolvedItems: [],
+    resolvedUnresolvedKeys: [],
+  };
+}
+
+function completeCoverage() {
+  return {
+    retailMarketUrls: ["https://www.jd.com/category"],
+    brandOfficialUrls: ["https://brand.example.com/products", "https://second-brand.example.com/products"],
+    standardsRegulationUrls: ["https://standard.example.com/document"],
+    technicalPrincipleUrls: ["https://technical.example.com/principles"],
+  };
+}
+
+function coverageMarkdown(coverage: ReturnType<typeof completeCoverage>) {
+  return ["## 已调查来源", ...Object.values(coverage).flat().map((url) => `- ${url}`)].join("\n");
+}
+
+function completedCoverageSearch(coverage: ReturnType<typeof completeCoverage>) {
+  return {
+    id: "search-professional-coverage", kind: "web_search" as const,
+    label: "搜索专业导购四类来源", urls: Object.values(coverage).flat(), status: "completed" as const,
+  };
 }
 
 async function collect<T>(events: AsyncIterable<T>) {

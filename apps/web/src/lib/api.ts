@@ -189,3 +189,7 @@ export async function fetchSourceCollectionRun(taskId: string, runId: string): P
 export function sourceRunExportUrl(taskId: string, runId: string, format: "jsonl" | "csv") {
   return `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs/${encodeURIComponent(runId)}/export?format=${format}`;
 }
+
+export function sourceAssetUrl(taskId: string, runId: string, assetId: string) {
+  return `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs/${encodeURIComponent(runId)}/assets/${encodeURIComponent(assetId)}`;
+}

@@ -1,6 +1,6 @@
 # PRD：从品类采访到可执行抓取任务的最小闭环
 
-Status: ready-for-agent
+Status: implemented with open interview scope-decision regression; multi-source real execution remains unstarted
 
 ## Problem Statement
 
@@ -90,6 +90,10 @@ Workbench 提供一条最小但完整的主路径：
 48. As a developer, I want Provider-specific configuration validated by the selected Provider before plan confirmation, so that arbitrary JSON metadata cannot cross module boundaries unchecked.
 49. As a developer, I want no Codex invocation after a confirmed plan starts, so that execution is deterministic and constrained to the frozen plan.
 50. As a developer, I want the minimum implementation to reuse the existing interview timeline, PostgreSQL records, planning UI, access gate, raw dataset tables, and export path, so that fixing the main path does not create another platform layer.
+51. As a 抓取任务负责人, I want every interviewed source candidate used exactly once and every original task topic covered by a real target, so that attaching topic text to a JD demo cannot masquerade as a complete plan.
+52. As a 抓取任务负责人, I want manuals, standards, registry tables, and technical-principle material listed as separate executable targets, so that an entrance page containing a link is not counted as captured content.
+53. As a 抓取任务负责人, I want every target to have its own run status and counts, so that a source-level completed flag cannot hide an omitted or failed checklist item.
+54. As a 抓取任务负责人, I want a vague category request to surface any unconfirmed material scope boundary as one genuine decision before a draft, so that the Agent cannot silently turn its recommendation into my confirmed scope.
 
 ## Implementation Decisions
 
@@ -102,6 +106,9 @@ Workbench 提供一条最小但完整的主路径：
 - Crawl Plan becomes the only active plan contract. Old Source Collection Plan content remains read-only legacy data and cannot be accepted by the new confirmation or start paths. The active database column must no longer treat two shapes as equally authoritative.
 - A Crawl Plan envelope contains plan identity, Capture Task identity and revision, version, status, content hash, readable summary, excluded content, source items, creation time, and confirmation time.
 - Each source item contains a stable source key, source name, publisher, source kind, role, one or more entrypoints, Provider binding, Capture Targets, effective access policy, source-level stop policy, raw output policy, and execution blockers.
+- The current complete checklist contract is version 2. A new candidate must account for every Capture Task source candidate exactly once and every original topic at least once; active v2 sources use real Provider configurations with no blocker. Historical blocked or vertical-slice plans remain readable but cannot start.
+- `public.web-resource@1.0.0` accepts only an exact public HTTPS 443 target, or one later target that follows a unique normalized anchor text from a preceding HTML target on the same origin. It is a bounded raw-resource adapter, not a site crawler, selector engine, redirect follower, login flow, or recursive discovery system.
+- Source execution creates target attempts before access and accepts only observations/events carrying a planned `targetKey`. Unknown, duplicate, omitted, or unreconciled target outcomes fail closed. Binary assets use a local content-addressed store behind the Source Dataset interface.
 - An entrypoint contains a validated URL and a semantic role such as category catalog, search result, product catalog, registry query, standard catalog, or document index. Search discovery alone may create a candidate entrypoint, but plan confirmation requires the selected Provider to validate that it can accept the entrypoint shape.
 - Provider binding contains a stable Provider key and version plus Provider-owned configuration. The common plan does not contain JD selectors or site-specific field names. Provider-specific configuration enters through the external seam and is validated immediately by the selected Provider before persistence or confirmation; arbitrary `unknown` metadata is not retained as an internal contract.
 - A Provider is reusable code, not generated JSON. It knows the source mechanics: starting a session, accepting entrypoints, pagination or discovery, identifying external objects, capturing source responses, detecting login/CAPTCHA/access denial, and returning raw observations. It does not decide business scope, quantities, or cleaning fields.
@@ -123,6 +130,7 @@ Workbench 提供一条最小但完整的主路径：
 - Planning can mention an unimplemented source, but it must attach an execution blocker such as `provider_missing`. It cannot manufacture a Provider key or mark the source executable.
 - Plan and interview errors are returned as stable typed codes with readable Chinese messages. Raw Zod paths, ANSI output, stderr, and internal schema text are logged only at the bounded server seam and are not shown as the main user message.
 - Existing interview failures are corrected at the contract source rather than with retries or fallback: proposal selection duplication is removed; optional external observations are not required in interview output; formal URL/provider validation occurs during planning; one same-model repair path is not introduced.
+- Before generating a draft, the Interview Agent must distinguish material scope boundaries by their basis: user text, confirmed Decision, an explicitly approved Skill default, or a non-optional researched fact. Any result-changing boundary with none of those bases remains one owner decision; the Agent cannot label its recommendation as a system default. This semantic check stays in the existing Skill/Prompt and does not add a question count, category table, JSON audit, or second model call.
 - Existing historical JSON rows are preserved without deletion. They are displayed as legacy structured records or excluded from the active draft list, and they are never eligible for new confirmation until explicitly revised through the current interview.
 - `npm run dev` keeps one idempotent local PostgreSQL start step before schema assurance. If port 5432 already serves the configured PostgreSQL instance, it does nothing; if a known local PostgreSQL installation exists but is stopped, it starts it once; if no supported installation is available, it exits with one actionable message.
 - No separate manager, coordinator, engine, kernel, dynamic plugin framework, duplicate plan DTO, or generalized workflow platform is added. The product-specific code is limited to domain validation, thin Provider/DB adapters, and the application orchestration required by this path.
@@ -135,10 +143,12 @@ Workbench 提供一条最小但完整的主路径：
 - The real acceptance record must report separately: user-visible interview result, confirmed plan contents, Provider preflight result, source access result, Source Run identity/status/counts, persisted snapshot/asset identities, export count, browser console state, and any login/CAPTCHA/risk-control stop. A fixture pass cannot replace any of these facts.
 - A highest-seam automated integration test covers the same orchestration with a controlled Provider implementation: confirmed plan reload, Provider preflight, Source Run creation, observation persistence, counters, completion/stopping, and Source Dataset read/export. This test protects domain orchestration without asserting private helper calls.
 - Interview contract tests prove that a proposal with exactly one recommended option does not require a duplicated selection, that a later user resolution stores the selection, and that a recommendation mismatch cannot fail before the user has answered.
+- Interview behavior acceptance contrasts one vague microwave request, which must return one material owner question and no draft, with one fully scoped microwave request, which may produce a zero-question draft after source investigation. This pair protects both sides of the rule without hard-coding a minimum question count.
 - Interview integration tests prove that user input is committed before runtime execution, failed turns preserve input, retry only targets the latest failed input, and textual source facts with unknown access or time do not require formal source fields.
 - Draft tests prove that current Markdown renders headings/lists/tables as readable content, legacy JSON is visibly legacy and not confirmable, and a subsequent input invalidates the previous current draft without deleting history.
 - Materialization tests prove that only confirmed Interview Working Record facts enter Capture Task, that materialization performs no search, and that newly invented source facts or missing decision references fail closed.
 - Crawl Plan contract tests cover entrypoint URL validation, duplicate source/target keys, task-topic coverage, quantity modes, denominators, unique keys, Provider binding, access policy, stop policy, raw output policy, and blocker handling.
+- Completeness tests also cover exact-once Capture Task candidate usage, entry-only manual/PDF/table rejection, ordered same-origin linked targets, and per-target run reconciliation.
 - Provider preflight integration tests prove that an absent Provider, incompatible entrypoint, invalid Provider configuration, or unresolved blocker prevents confirmation and start without creating a Source Run.
 - API tests prove that start accepts only plan identity/version, reloads the plan from PostgreSQL, rejects draft/superseded/stale plans, and streams typed Source Run events for a confirmed current plan.
 - Worker contract tests prove that plan scope is passed unchanged to the selected Provider, that one source can emit multiple observations, that external results are validated at the seam, and that no Codex/model call is made during execution.
@@ -159,13 +169,15 @@ Workbench 提供一条最小但完整的主路径：
 - Distributed queues, crash recovery, automatic resume, scheduled recurring crawls, incremental synchronization, and cross-machine execution for the first vertical.
 - Automatic model fallback, silent retry, schema-repair loops, or a second product conversation store.
 - CAPTCHA bypass, login automation without explicit authorization, Cookie/Profile export, risk-control evasion, or credential persistence in Git/logs/plans.
-- Taobao and broad multi-platform execution in the first vertical. They require independently implemented and validated Providers before becoming executable plan sources.
-- Prebuilding adapters for unknown brand-official websites. Such sources remain blocked until an appropriate reusable Provider or source-specific adapter is implemented and validated.
+- Taobao pagination, dynamic商品发现、登录态访问和 broad multi-platform crawling. A frozen public exact entry may use the bounded raw-resource Provider, but that does not prove platform coverage.
+- Prebuilding adapters for unknown brand-official websites. A public exact page or one explicit same-origin link can use the generic raw-resource Provider; source-specific traversal still requires an independently researched adapter.
 - Cleaning source-native HTML/JSON/PDF/images into a unified product parameter schema.
 - Deleting historical user tasks, interviews, legacy structured records, or raw data as part of this implementation.
 - Rewriting unrelated Settings, shell, UI styling, or historical domain modules.
 
 ## Further Notes
+
+- The open repair for the zero-question microwave regression is tracked in [`issues/01-interview-scope-decision-gate.md`](issues/01-interview-scope-decision-gate.md). That Issue is the detailed implementation and acceptance source; this PRD only owns the product invariant.
 
 - “可执行 Crawl Plan” does not mean a sufficiently detailed JSON can teach a crawler how to operate a website. It means every plan source is bound to already implemented Provider code, with validated entrypoints and typed configuration. The plan supplies business scope and limits; the Provider supplies source mechanics.
 - One source item is not one JSON request. It can expand through its Provider into catalog discovery and many product/detail/document/media captures while remaining within the confirmed targets, quantities, and stop policies.

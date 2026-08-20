@@ -23,7 +23,8 @@ amended: 2026-08-20
 - Agent 的问题和建议不能自行成为 confirmed，也不能把 Composer 变成选项表单。Workbench 先保存负责人原文并把它交给下一轮 Codex；Codex 结合当前 proposal 和全部工作资料解释回答、纠正、补充、否定问题前提或追问。明确回答可解决当前问题；成立的前提否定必须撤回问题，不能被强行解释成选择或继续遗留为负责人未决项。
 - Codex final answer 是本轮理解增量，不重报完整会话状态；只包含助手说明、当前决定解释或撤回、下一问题、未决项变化和可选的完整 `draftMarkdown`。用户同一句话里的选择与附加事实必须同时进入记录和下一版草稿；若本轮只是解释且范围未变，应明确表达“当前范围不变”，不伪造决定或草稿修订。
 - Capture Task Draft 是供人审阅的版本化 Markdown，不是正式 Capture Task schema。采访回合不得生成 `taskCandidate`、结构化 `sourceCandidates` 或模型时间戳。
-- 任意新输入都会先让上一版草稿离开当前可确认态。只有最新回合已经结束、会话空闲、最新完整草稿处于待确认态且没有负责人未决项时，Workbench 才允许确认；模型生成草稿或说明范围未变都不是确认。用户显式确认后，Workbench 才调用独立 materialization 把已确认 Markdown 忠实转换为正式 Capture Task；该调用不得搜索、提问或补充事实。确认不触发 Crawl Planning 或真实抓取。
+- 生成草案时，Codex 额外返回只含四组 URL 的 `draftCoverage` 校验凭证；零售/市场至少一个，品牌官方至少两个独立站点，标准/监管至少一个，技术原理至少一个。Workbench 必须证明每个 URL 来自本会话已完成的网页搜索、原样出现在 Markdown 且没有跨角色复用；凭证不持久化为来源清单，也不包含 Capture Task/Crawl Plan 字段。
+- 任意新输入都会先让上一版草稿离开当前可确认态。只有最新回合已经结束、会话空闲、最新完整草稿处于待确认态、没有负责人未决项且四类来源覆盖已验证时，Workbench 才允许确认；模型生成草稿或说明范围未变都不是确认。历史未验证待确认草案保留文本但降为不可确认版本。用户显式确认后，Workbench 才调用独立 materialization 把已确认 Markdown 忠实转换为正式 Capture Task；该调用不得搜索、提问或补充事实。确认不触发 Crawl Planning 或真实抓取。
 - `web_search` 只用于发现候选入口，不能自动证明页面已打开、内容已读取、来源已授权或已有 crawler/Provider；采访草稿按实际已知状态保守记录。
 - 首次调查一个品类以及把既有采访切换到另一品类时，必须至少完成一个 `web_search` item，只有 started/failed 事件不满足调查门。后续纯解释或范围未变回合不强制重复搜索。
 - 正式 Source Candidate 的记录时间由 Workbench 掌握：模型不生成 `observedAt`，Workbench 只在确认后结构化 Capture Task 时写入当前时间。
@@ -33,7 +34,7 @@ amended: 2026-08-20
 
 - Chat Timeline 使用 `assistant-ui` ExternalStoreRuntime；消息和业务状态仍完全归 Workbench/PostgreSQL。
 - Codex 使用锁定版本的 App Server `stdio`，每轮只启动 `thread/start(ephemeral:true)`；不 resume、不持久化产品 thread。
-- commentary 使用官方 delta，final answer 在服务端通过领域 Zod contract 后才持久化。结构化机器 contract 属于 runtime/Workbench 边界，采访 Skill 只定义行为，不复制 JSON 字段或传输协议。
+- commentary 使用官方 delta，final answer 在服务端通过领域 Zod contract 后才持久化。结构化机器 contract 属于 runtime/Workbench 边界；其中 `draftCoverage` 只证明 Markdown 与搜索记录的关系，不成为正式领域事实或完整任务 schema。
 - MVP 不引入 Pi Agent、agent registry、多模型 Provider 或自动 fallback。
 
 ## 后果

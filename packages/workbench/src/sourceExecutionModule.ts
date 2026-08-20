@@ -1,22 +1,30 @@
 import type {
+  CrawlPlan,
   CrawlPlanSource,
+  CrawlPlanTarget,
+  SourceProviderEvent,
   SourceRunEvent,
-  SourceSnapshotCommit,
 } from "@domain-analysis/shared";
-import { sourceRunEventSchema, startCrawlPlanSchema } from "@domain-analysis/shared";
-import type { SourceDatasetModule } from "./sourceDatasetModule";
+import {
+  sourceProviderEventSchema,
+  sourceRunEventSchema,
+  startCrawlPlanSchema,
+} from "@domain-analysis/shared";
+
 import type { CrawlPlanningModule } from "./crawlPlanningModule";
+import type { SourceDatasetModule } from "./sourceDatasetModule";
 
 export interface SourceProvider {
   readonly key: string;
   readonly version: string;
   validate(source: CrawlPlanSource): void;
   preflight(source: CrawlPlanSource): Promise<void>;
-  collect(source: CrawlPlanSource, runId: string, signal?: AbortSignal): AsyncIterable<Omit<SourceSnapshotCommit, "runId">>;
+  collect(source: CrawlPlanSource, runId: string, signal?: AbortSignal): AsyncIterable<SourceProviderEvent>;
 }
 
 export interface SourceExecutionModule {
-  start(input: { taskId: string; planId: string; expectedTaskRevision: number; expectedPlanVersion: number; signal?: AbortSignal }): AsyncIterable<SourceRunEvent>;
+  start(input: { taskId: string; planId: string; expectedTaskRevision: number;
+    expectedPlanVersion: number; signal?: AbortSignal }): AsyncIterable<SourceRunEvent>;
   validateSource(source: CrawlPlanSource): void;
 }
 
@@ -35,72 +43,189 @@ export function createSourceExecutionModule(
   datasets: SourceDatasetModule,
   providers: ReadonlyMap<string, SourceProvider>,
 ): SourceExecutionModule {
-  const resolve = (source: CrawlPlanSource) => {
-    const provider = providers.get(source.provider.key);
-    if (!provider || provider.version !== source.provider.version) {
-      throw new SourceExecutionError("invalid_state", `Provider 不可用：${source.provider.key}@${source.provider.version}`);
-    }
-    try {
-      provider.validate(source);
-    } catch (error) {
-      throw new SourceExecutionError("invalid_state", boundedProviderError(source, error));
-    }
-    return provider;
-  };
+  const resolve = (source: CrawlPlanSource) => resolveProvider(providers, source);
   return {
     validateSource: (source) => { resolve(source); },
     start: async function* (raw) {
-      const request = startCrawlPlanSchema.parse({ expectedTaskRevision: raw.expectedTaskRevision, expectedPlanVersion: raw.expectedPlanVersion });
+      const request = startCrawlPlanSchema.parse({ expectedTaskRevision: raw.expectedTaskRevision,
+        expectedPlanVersion: raw.expectedPlanVersion });
       const view = await planning.get(raw.taskId);
       const plan = view?.plans.find((item) => item.id === raw.planId);
-      if (!view || !plan) throw new SourceExecutionError("not_found", `已确认计划不存在：${raw.planId}`);
-      if (plan.version !== request.expectedPlanVersion || plan.taskRevision !== request.expectedTaskRevision) {
-        throw new SourceExecutionError("revision_conflict", "计划版本或任务范围已变化，请刷新后重试");
-      }
-      if (plan.status !== "confirmed") throw new SourceExecutionError("invalid_state", "只有当前已确认计划可以启动");
+      requireExecutablePlan(view, plan, request);
+      for (const source of plan.content.sources) await preflightSource(source, resolve(source));
       for (const source of plan.content.sources) {
-        const provider = resolve(source);
-        if (source.executionBlockers.length > 0) {
-          throw new SourceExecutionError("invalid_state", `来源仍有执行阻塞：${source.executionBlockers.join("；")}`);
-        }
-        try {
-          await provider.preflight(source);
-        } catch (error) {
-          throw new SourceExecutionError("preflight_failed", boundedProviderError(source, error));
-        }
-      }
-      for (const source of plan.content.sources) {
-        const provider = resolve(source);
-        const run = await datasets.startRun({ taskId: plan.taskId, planId: plan.id, sourceKey: source.key,
-          providerKey: provider.key, accessPolicy: { ...source.accessPolicy, jitterMs: { min: 0, max: 0 }, batchSize: 1, batchCooldownMs: 1 } });
-        yield sourceRunEventSchema.parse({ type: "run.started", run });
-        try {
-          for await (const observation of provider.collect(source, run.id, raw.signal)) {
-            const view = await datasets.commitSnapshot({ ...observation, runId: run.id });
-            yield sourceRunEventSchema.parse({ type: "run.updated", run: view.run });
-            if (observation.observation.state !== "accessible" && source.stopPolicy.stopOnAccessRestriction) {
-              const stopped = await datasets.finishRun({ runId: run.id, status: "failed", terminationReason: observation.observation.state });
-              yield sourceRunEventSchema.parse({ type: "run.failed", run: stopped });
-              break;
-            }
-          }
-          const current = await datasets.getRun(run.id);
-          if (current?.run.status === "running") {
-            const completed = await datasets.finishRun({ runId: run.id, status: raw.signal?.aborted ? "stopped" : "completed",
-              terminationReason: raw.signal?.aborted ? "operator_cancelled" : "plan_scope_completed" });
-            yield sourceRunEventSchema.parse({ type: raw.signal?.aborted ? "run.stopped" : "run.completed", run: completed });
-          }
-        } catch (error) {
-          const failed = await datasets.finishRun({ runId: run.id, status: raw.signal?.aborted ? "stopped" : "failed",
-            terminationReason: error instanceof Error ? error.message : String(error) });
-          yield sourceRunEventSchema.parse({ type: raw.signal?.aborted ? "run.stopped" : "run.failed", run: failed });
-        }
+        if (raw.signal?.aborted) return;
+        yield* executeSource(plan, source, resolve(source), datasets, raw.signal);
       }
     },
   };
 }
 
+async function* executeSource(
+  plan: CrawlPlan,
+  source: CrawlPlanSource,
+  provider: SourceProvider,
+  datasets: SourceDatasetModule,
+  signal?: AbortSignal,
+): AsyncIterable<SourceRunEvent> {
+  const run = await datasets.startRun({ taskId: plan.taskId, planId: plan.id, planVersion: plan.version,
+    sourceKey: source.key, providerKey: provider.key, providerVersion: provider.version,
+    accessPolicy: effectiveAccessPolicy(source), targetKeys: source.targets.map((target) => target.key) });
+  yield parseRunEvent({ type: "run.started", run });
+  const states = new Map(source.targets.map((target) => [target.key,
+    { status: "pending" as TargetState, accessibleCount: 0 }]));
+  try {
+    for await (const rawEvent of provider.collect(source, run.id, signal)) {
+      const event = sourceProviderEventSchema.parse(rawEvent);
+      const state = requireTargetState(states, event.targetKey);
+      if (event.type === "capture") {
+        await ensureTargetRunning(datasets, run.id, event.targetKey, state);
+        const view = await datasets.commitSnapshot({ ...event.snapshot, runId: run.id,
+          targetKey: event.targetKey, assets: event.assets });
+        if (event.snapshot.observation.state === "accessible") state.accessibleCount += 1;
+        yield parseRunEvent({ type: "run.updated", run: view.run });
+        if (event.snapshot.observation.state !== "accessible" && source.stopPolicy.stopOnAccessRestriction) {
+          state.status = "failed";
+          await datasets.finishTarget({ runId: run.id, targetKey: event.targetKey, status: "failed",
+            terminationReason: event.snapshot.observation.state });
+          await closeOpenTargets(datasets, run.id, states, event.snapshot.observation.state, false);
+          const failed = await datasets.finishRun({ runId: run.id, status: "failed",
+            terminationReason: event.snapshot.observation.state });
+          yield parseRunEvent({ type: "run.failed", run: failed });
+          return;
+        }
+        continue;
+      }
+      await ensureTargetRunning(datasets, run.id, event.targetKey, state);
+      assertQuantityReached(source.targets, event.targetKey, state.accessibleCount);
+      await datasets.finishTarget({ runId: run.id, targetKey: event.targetKey,
+        status: "completed", terminationReason: "target_scope_completed" });
+      state.status = "completed";
+      const updated = await datasets.getRun(run.id);
+      if (updated) yield parseRunEvent({ type: "run.updated", run: updated.run });
+    }
+    if (signal?.aborted) {
+      await closeOpenTargets(datasets, run.id, states, "operator_cancelled", true);
+      const stopped = await datasets.finishRun({ runId: run.id, status: "stopped",
+        terminationReason: "operator_cancelled" });
+      yield parseRunEvent({ type: "run.stopped", run: stopped });
+      return;
+    }
+    if ([...states.values()].some((state) => state.status !== "completed")) {
+      throw new Error("Provider 在全部 target 完成前结束");
+    }
+    const completed = await datasets.finishRun({ runId: run.id, status: "completed",
+      terminationReason: "plan_scope_completed" });
+    yield parseRunEvent({ type: "run.completed", run: completed });
+  } catch (error) {
+    const stopped = Boolean(signal?.aborted);
+    const reason = stopped ? "operator_cancelled" : boundedMessage(error);
+    await closeOpenTargets(datasets, run.id, states, reason, stopped);
+    const failed = await datasets.finishRun({ runId: run.id, status: stopped ? "stopped" : "failed",
+      terminationReason: reason });
+    yield parseRunEvent({ type: stopped ? "run.stopped" : "run.failed", run: failed });
+  }
+}
+
+function requireExecutablePlan(
+  view: Awaited<ReturnType<CrawlPlanningModule["get"]>>,
+  plan: CrawlPlan | undefined,
+  request: { expectedTaskRevision: number; expectedPlanVersion: number },
+): asserts plan is CrawlPlan {
+  if (!view || !plan) throw new SourceExecutionError("not_found", "已确认计划不存在");
+  if (plan.version !== request.expectedPlanVersion || plan.taskRevision !== request.expectedTaskRevision
+    || view.taskRevision !== request.expectedTaskRevision) {
+    throw new SourceExecutionError("revision_conflict", "计划版本或任务范围已变化，请刷新后重试");
+  }
+  if (plan.status !== "confirmed") throw new SourceExecutionError("invalid_state", "只有当前已确认计划可以启动");
+  if (plan.content.executionChecklistVersion !== 2
+    || plan.content.sources.some((source) => source.targets.some((target) => target.providerConfiguration.length === 0))) {
+    throw new SourceExecutionError("invalid_state", "该计划不是当前完整执行清单，请重新规划并确认");
+  }
+}
+
+function resolveProvider(providers: ReadonlyMap<string, SourceProvider>, source: CrawlPlanSource) {
+  const provider = providers.get(source.provider.key);
+  if (!provider || provider.version !== source.provider.version) {
+    throw new SourceExecutionError("invalid_state", `Provider 不可用：${source.provider.key}@${source.provider.version}`);
+  }
+  try {
+    provider.validate(source);
+  } catch (error) {
+    throw new SourceExecutionError("invalid_state", boundedProviderError(source, error));
+  }
+  return provider;
+}
+
+async function preflightSource(source: CrawlPlanSource, provider: SourceProvider) {
+  if (source.executionBlockers.length > 0) {
+    throw new SourceExecutionError("invalid_state", `来源仍有执行阻塞：${source.executionBlockers.join("；")}`);
+  }
+  try {
+    await provider.preflight(source);
+  } catch (error) {
+    throw new SourceExecutionError("preflight_failed", boundedProviderError(source, error));
+  }
+}
+
+function effectiveAccessPolicy(source: CrawlPlanSource) {
+  return { ...source.accessPolicy, jitterMs: { min: 0, max: 0 }, batchSize: 1, batchCooldownMs: 1 };
+}
+
+type TargetState = "pending" | "running" | "completed" | "failed" | "stopped";
+
+function requireTargetState(states: Map<string, { status: TargetState; accessibleCount: number }>, targetKey: string) {
+  const state = states.get(targetKey);
+  if (!state) throw new Error(`Provider 返回了计划外 target：${targetKey}`);
+  if (state.status === "completed" || state.status === "failed" || state.status === "stopped") {
+    throw new Error(`Provider 重复结束或写入 target：${targetKey}`);
+  }
+  return state;
+}
+
+async function ensureTargetRunning(
+  datasets: SourceDatasetModule,
+  runId: string,
+  targetKey: string,
+  state: { status: TargetState },
+) {
+  if (state.status === "pending") {
+    await datasets.startTarget({ runId, targetKey });
+    state.status = "running";
+  }
+}
+
+function assertQuantityReached(targets: CrawlPlanTarget[], targetKey: string, accessibleCount: number) {
+  const target = targets.find((item) => item.key === targetKey)!;
+  if (target.quantity.mode !== "all_available" && accessibleCount !== target.quantity.targetCount) {
+    throw new Error(`target 数量未对账：${targetKey} 计划 ${target.quantity.targetCount}，实际 ${accessibleCount}`);
+  }
+}
+
+async function closeOpenTargets(
+  datasets: SourceDatasetModule,
+  runId: string,
+  states: Map<string, { status: TargetState }>,
+  reason: string,
+  stopped: boolean,
+) {
+  for (const [targetKey, state] of states) {
+    if (state.status === "completed" || state.status === "failed" || state.status === "stopped") continue;
+    const status = state.status === "running" && !stopped ? "failed" : "stopped";
+    await datasets.finishTarget({ runId, targetKey, status, terminationReason: reason });
+    state.status = status;
+  }
+}
+
+function parseRunEvent(event: SourceRunEvent) {
+  return sourceRunEventSchema.parse(event);
+}
+
 function boundedProviderError(source: CrawlPlanSource, error: unknown) {
+  return `${source.provider.key}@${source.provider.version}：${boundedMessage(error)}`;
+}
+
+function boundedMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return `${source.provider.key}@${source.provider.version}：${message.slice(0, 1_500) || "Provider 校验失败"}`;
+  return message.slice(0, 1_500) || "Provider 校验失败";
 }

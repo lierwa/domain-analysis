@@ -3,15 +3,30 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { CodexAppServerError } from "./codexAppServerClient";
 
+const unsupportedCodexSchemaKeywords = [
+  "format", "pattern", "minLength", "maxLength", "minimum", "maximum",
+  "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minItems", "maxItems",
+];
+
 export function zodSchemaToCodexJsonSchema(schema: ZodTypeAny) {
+  return convertSchema(schema, ["format"]);
+}
+
+export function zodSchemaToCodexOutputSchema(schema: ZodTypeAny) {
+  const generated = convertSchema(schema, unsupportedCodexSchemaKeywords);
+  const { $schema: _schemaVersion, ...outputSchema } = generated;
+  return outputSchema;
+}
+
+function convertSchema(schema: ZodTypeAny, removedKeywords: string[]) {
   return zodToJsonSchema(schema, {
     target: "openAi",
     $refStrategy: "none",
     postProcess: (jsonSchema) => {
-      if (!jsonSchema || !("format" in jsonSchema)) return jsonSchema;
-      // WHY：Codex strict schema 不接受 uri/date-time 等 format；最终结果仍由原始 Zod 完整校验。
-      const { format: _unsupportedFormat, ...supportedSchema } = jsonSchema;
-      return supportedSchema;
+      if (!jsonSchema || typeof jsonSchema !== "object") return jsonSchema;
+      const supportedSchema = { ...jsonSchema } as Record<string, unknown>;
+      for (const keyword of removedKeywords) delete supportedSchema[keyword];
+      return supportedSchema as typeof jsonSchema;
     },
   });
 }

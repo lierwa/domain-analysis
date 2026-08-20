@@ -8,7 +8,7 @@ import {
   type InterviewMessageTimelinePart,
 } from "@domain-analysis/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, LoaderCircle, RefreshCw, Square } from "lucide-react";
+import { Check, ChevronRight, LoaderCircle, RefreshCw, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -175,11 +175,22 @@ function PlanningTimeline({ parts, isRunning }: { parts: InterviewMessageTimelin
       </div>
       <div className="space-y-3 text-sm leading-6">
         {collapseWebSearchActivities(parts).map((part, index) => part.type === "text"
-          ? <p key={`text-${index}`} className="whitespace-pre-wrap">{part.text}</p>
+          ? <p key={`text-${index}`} className="whitespace-pre-wrap">{planningTimelineText(part.text)}</p>
           : <InterviewActivity key={`${part.activity.id}-${index}`} activity={part.activity} />)}
       </div>
     </section>
   );
+}
+
+export function planningTimelineText(text: string) {
+  try {
+    const parsed = JSON.parse(text) as { assistantText?: unknown };
+    // WHY：保留历史运行事实不做迁移；显示层只收窄已知结构化外壳，普通文字仍原样投影。
+    return typeof parsed.assistantText === "string" && parsed.assistantText.trim()
+      ? parsed.assistantText.trim() : text;
+  } catch {
+    return text;
+  }
 }
 
 export function CrawlPlanCard({
@@ -198,66 +209,23 @@ export function CrawlPlanCard({
   onExecute: () => void;
 }) {
   const current = plan.taskRevision === currentTaskRevision;
+  // WHY：服务端会拒绝任何带 blocker 的计划；页面必须在点击前表达同一事实，避免把纸面候选伪装成可确认计划。
+  const hasExecutionBlockers = plan.content.sources.some((source) => source.executionBlockers.length > 0);
+  const isExecutionChecklist = plan.content.executionChecklistVersion === 2
+    && plan.content.sources.every((source) => source.targets.every((target) => target.providerConfiguration.length > 0));
+  const targetCount = plan.content.sources.reduce((count, source) => count + source.targets.length, 0);
   return (
     <section className="rounded-xl border border-line bg-surface p-5 sm:p-7">
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-line pb-5">
         <div>
-          <p className="text-xs font-medium text-muted">抓取计划 v{plan.version} · 基于任务 v{plan.taskRevision}</p>
+          <p className="text-xs font-medium text-muted">Crawl Plan v{plan.version} · 执行清单 {plan.content.executionChecklistVersion ?? "旧版"} · 基于任务 v{plan.taskRevision}</p>
           <h3 className="mt-1 text-lg font-semibold">{plan.content.summary}</h3>
+          <p className="mt-1 text-xs text-muted">{plan.content.sources.length} 个来源 · {targetCount} 个可对账抓取项</p>
         </div>
-        <span className="status-badge">{planStatus(plan, current)}</span>
+        <span className="status-badge">{planStatus(plan, current, hasExecutionBlockers, isExecutionChecklist)}</span>
       </div>
       <div className="mt-5 space-y-5">
-        {plan.content.sources.map((source) => (
-          <article key={source.key} className="rounded-lg border border-line bg-panel p-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h4 className="font-semibold">{source.name}</h4>
-                <p className="mt-1 text-xs text-muted">{source.publisher} · {source.sourceKind} · 搜索发现</p>
-              </div>
-              <span className="rounded-full border border-line bg-surface px-2 py-1 text-xs">{source.accessState}</span>
-            </div>
-            <p className="mt-3 text-sm leading-6">{source.role}</p>
-            <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-              <PlanField label="Provider" value={`${source.provider.key}@${source.provider.version}`} />
-              <PlanField label="访问限制" value={`每分钟 ${source.accessPolicy.maxRequestsPerMinute} 次 · 间隔 ${source.accessPolicy.minimumIntervalMs}ms · 最长 ${source.accessPolicy.maximumRunMs}ms`} />
-              <PlanField label="Provider 配置" value={source.provider.configuration.map((item) => `${item.key}=${item.value}`).join("；")} />
-              <PlanField label="原始输出" value={`${source.rawOutputPolicy.formats.join("、")} · ${source.rawOutputPolicy.retainAssets ? "保存附件" : "不单独下载附件"}`} />
-              <PlanField label="请求预算" value={`${source.stopPolicy.requestBudget} 次`} />
-              <PlanField label="强制停止" value={source.stopPolicy.stopOnAccessRestriction ? "登录/验证码/拒绝/风控立即停止" : "按 Provider 策略"} />
-            </dl>
-            <div className="mt-3 space-y-1">
-              {source.entryUrls.map((url) => <a key={url} href={url} target="_blank" rel="noreferrer"
-                className="block break-all text-xs text-muted underline underline-offset-2 hover:text-ink">{url}</a>)}
-            </div>
-            <div className="mt-4 space-y-3">
-              {source.targets.map((target) => (
-                <div key={target.key} className="rounded-lg border border-line bg-surface p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-semibold">{target.name}</p>
-                    <span className="text-xs text-muted">{quantityLabel(target.quantity)}</span>
-                  </div>
-                  <dl className="mt-3 grid gap-3 text-xs leading-5 sm:grid-cols-2">
-                    <PlanField label="任务内容" value={target.taskTopics.join("、")} />
-                    <PlanField label="捕获单元 / 格式" value={`${target.captureUnit} / ${target.rawFormats.join("、")}`} />
-                    <PlanField label="覆盖分母" value={target.quantity.denominator} />
-                    <PlanField label="唯一键" value={target.uniqueKey} />
-                    <PlanField label="遍历方式" value={target.traversal} />
-                    <PlanField label="停止条件" value={target.stopCondition} />
-                    <PlanField label="数量依据" value={target.quantity.rationale} />
-                  </dl>
-                </div>
-              ))}
-            </div>
-            {source.executionBlockers.length > 0 && (
-              <div className="mt-4 rounded-lg border border-amber-300/60 bg-amber-50 p-3 text-xs leading-5 text-amber-950">
-                <p className="font-semibold">执行前仍需通过</p>
-                <ul className="mt-1 list-disc pl-5">{source.executionBlockers.map((item) => <li key={item}>{item}</li>)}</ul>
-              </div>
-            )}
-            <p className="mt-3 text-xs text-muted">观察时间：{formatDateTime(source.observedAt)}</p>
-          </article>
-        ))}
+        {plan.content.sources.map((source) => <CrawlPlanSourceCard key={source.key} source={source} />)}
       </div>
       {plan.content.excludedContent.length > 0 && (
         <div className="mt-5 border-t border-line pt-4 text-sm">
@@ -266,7 +234,7 @@ export function CrawlPlanCard({
         </div>
       )}
       <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-line pt-5">
-        {plan.status === "draft" && current && (
+        {plan.status === "draft" && current && !hasExecutionBlockers && isExecutionChecklist && (
           <button type="button" className="button-primary" disabled={isConfirming} onClick={onConfirm}>
             {isConfirming
               ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -274,17 +242,98 @@ export function CrawlPlanCard({
             {isConfirming ? "正在确认…" : "确认此计划"}
           </button>
         )}
-        {plan.status === "confirmed" && current && (
+        {plan.status === "draft" && current && (hasExecutionBlockers || !isExecutionChecklist) && (
+          <p className="text-xs leading-5 text-amber-800">
+            该计划不是无阻塞的完整执行清单，不能确认；请按阻塞项重新规划。
+          </p>
+        )}
+        {plan.status === "confirmed" && current && !hasExecutionBlockers && isExecutionChecklist && (
           <button type="button" className="button-primary" disabled={isExecuting} onClick={onExecute}>
             {isExecuting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             {isExecuting ? "正在抓取…" : "开始抓取"}
           </button>
+        )}
+        {plan.status === "confirmed" && current && (hasExecutionBlockers || !isExecutionChecklist) && (
+          <p className="text-xs leading-5 text-amber-800">这是历史技术纵切片，不能继续启动；请生成当前完整执行清单。</p>
         )}
         <p className="text-xs leading-5 text-muted">
           确认只冻结来源、内容和数量，不创建 Source Run，也不开始抓取。
         </p>
       </div>
     </section>
+  );
+}
+
+type CrawlPlanSource = CrawlPlan["content"]["sources"][number];
+type CrawlPlanTarget = CrawlPlanSource["targets"][number];
+
+function CrawlPlanSourceCard({ source }: { source: CrawlPlanSource }) {
+  return (
+    <details data-crawl-plan-source="true" className="group/source rounded-lg border border-line bg-panel">
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-3 p-4 [&::-webkit-details-marker]:hidden">
+        <span className="flex min-w-0 items-start gap-2">
+          <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted transition-transform group-open/source:rotate-90" aria-hidden="true" />
+          <span className="min-w-0">
+            <span className="block font-semibold">{source.name}</span>
+            <span className="mt-1 block text-xs text-muted">{source.publisher} · {source.sourceKind} · 搜索发现</span>
+          </span>
+        </span>
+        <span className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <span className="text-xs text-muted">{source.targets.length} 个抓取项</span>
+          <span className="rounded-full border border-line bg-surface px-2 py-1 text-xs">{source.accessState}</span>
+        </span>
+      </summary>
+      <div className="border-t border-line p-4">
+        <p className="text-sm leading-6">{source.role}</p>
+        <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+          <PlanField label="Provider" value={`${source.provider.key}@${source.provider.version}`} />
+          <PlanField label="采访来源" value={source.sourceCandidateIds.length > 0 ? source.sourceCandidateIds.join("、") : "本轮规划新增来源"} />
+          <PlanField label="访问限制" value={`每分钟 ${source.accessPolicy.maxRequestsPerMinute} 次 · 间隔 ${source.accessPolicy.minimumIntervalMs}ms · 最长 ${source.accessPolicy.maximumRunMs}ms`} />
+          <PlanField label="Provider 配置" value={source.provider.configuration.map((item) => `${item.key}=${item.value}`).join("；")} />
+          <PlanField label="原始输出" value={`${source.rawOutputPolicy.formats.join("、")} · ${source.rawOutputPolicy.retainAssets ? "保存附件" : "不单独下载附件"}`} />
+          <PlanField label="请求预算" value={`${source.stopPolicy.requestBudget} 次`} />
+          <PlanField label="强制停止" value={source.stopPolicy.stopOnAccessRestriction ? "登录/验证码/拒绝/风控立即停止" : "按 Provider 策略"} />
+        </dl>
+        <div className="mt-3 space-y-1">
+          {source.entryUrls.map((url) => <a key={url} href={url} target="_blank" rel="noreferrer"
+            className="block break-all text-xs text-muted underline underline-offset-2 hover:text-ink">{url}</a>)}
+        </div>
+        <div className="mt-4 space-y-3">
+          {source.targets.map((target) => <CrawlPlanTargetCard key={target.key} target={target} />)}
+        </div>
+        {source.executionBlockers.length > 0 && (
+          <div className="mt-4 rounded-lg border border-amber-300/60 bg-amber-50 p-3 text-xs leading-5 text-amber-950">
+            <p className="font-semibold">执行前仍需通过</p>
+            <ul className="mt-1 list-disc pl-5">{source.executionBlockers.map((item) => <li key={item}>{item}</li>)}</ul>
+          </div>
+        )}
+        <p className="mt-3 text-xs text-muted">观察时间：{formatDateTime(source.observedAt)}</p>
+      </div>
+    </details>
+  );
+}
+
+function CrawlPlanTargetCard({ target }: { target: CrawlPlanTarget }) {
+  return (
+    <details data-crawl-plan-target="true" className="group/target rounded-lg border border-line bg-surface">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-4 [&::-webkit-details-marker]:hidden">
+        <span className="flex min-w-0 items-center gap-2">
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted transition-transform group-open/target:rotate-90" aria-hidden="true" />
+          <span className="text-sm font-semibold">{target.name}</span>
+        </span>
+        <span className="shrink-0 text-xs text-muted">{quantityLabel(target.quantity)}</span>
+      </summary>
+      <dl className="grid gap-3 border-t border-line p-4 text-xs leading-5 sm:grid-cols-2">
+        <PlanField label="任务内容" value={target.taskTopics.join("、")} />
+        <PlanField label="执行参数" value={target.providerConfiguration.map((item) => `${item.key}=${item.value}`).join("；")} />
+        <PlanField label="捕获单元 / 格式" value={`${target.captureUnit} / ${target.rawFormats.join("、")}`} />
+        <PlanField label="覆盖分母" value={target.quantity.denominator} />
+        <PlanField label="唯一键" value={target.uniqueKey} />
+        <PlanField label="遍历方式" value={target.traversal} />
+        <PlanField label="停止条件" value={target.stopCondition} />
+        <PlanField label="数量依据" value={target.quantity.rationale} />
+      </dl>
+    </details>
   );
 }
 
@@ -311,10 +360,12 @@ function quantityLabel(quantity: CrawlPlan["content"]["sources"][number]["target
   return `${quantity.mode === "sample" ? "样本" : "目标"} ${quantity.targetCount} ${quantity.unit}`;
 }
 
-function planStatus(plan: CrawlPlan, current: boolean) {
+function planStatus(plan: CrawlPlan, current: boolean, hasExecutionBlockers: boolean, isExecutionChecklist: boolean) {
   if (!current) return "任务范围已更新";
+  if (!isExecutionChecklist) return "历史技术纵切片";
   if (plan.status === "confirmed") return "已确认";
   if (plan.status === "superseded") return "历史版本";
+  if (hasExecutionBlockers) return "有执行阻塞";
   return "待确认";
 }
 

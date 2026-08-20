@@ -53,6 +53,8 @@ describe("Codex 采访运行时事件边界", () => {
         "https://www.jd.com/",
         "https://www.haier.com/refrigerators/",
         "https://example.com/private",
+        "https://openstd.samr.gov.cn/",
+        "https://www.nist.gov/refrigeration-cycle",
       ],
     });
     expect(remaining).toContainEqual({
@@ -80,7 +82,7 @@ describe("Codex 采访运行时事件边界", () => {
 });
 
 describe("Codex 采访结果投影与连接复用", () => {
-  it("把真实 commentary 和网页搜索映射给 Workbench，但不暴露内部本地命令", async () => {
+  it("把完整范围请求的真实 commentary 和网页搜索映射给 Workbench，但不暴露内部本地命令", async () => {
     const runtime = createCodexCategoryInterviewRuntime({
       repositoryRoot: process.cwd(),
       model: "gpt-5.6-terra",
@@ -88,10 +90,13 @@ describe("Codex 采访结果投影与连接复用", () => {
       executable: await fakeCodexExecutable(successSource()),
     });
     runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
+    const completeRequest = "抓中国大陆当前在售家用冰箱，包含独立式和嵌入式，排除商用、二手和停售型号";
+    const session = emptyInterviewView();
+    session.session.initialRequest = completeRequest;
 
     const events = await collect(runtime.run({
-      session: emptyInterviewView(),
-      trigger: { type: "user_message", text: "抓冰箱" },
+      session,
+      trigger: { type: "user_message", text: completeRequest },
     }));
 
     expect(events.filter((event) => event.type === "text_delta")).toEqual([
@@ -116,6 +121,8 @@ describe("Codex 采访结果投影与连接复用", () => {
           "https://www.jd.com/",
           "https://www.haier.com/refrigerators/",
           "https://example.com/private",
+          "https://openstd.samr.gov.cn/",
+          "https://www.nist.gov/refrigeration-cycle",
         ], status: "completed",
       } },
       { type: "activity", activity: {
@@ -248,7 +255,21 @@ async function fakeCodexExecutable(source: string) {
 function successSource(failedSearch = false) {
   const output = JSON.stringify({
     assistantText: "已完成第一轮调查并生成采访范围草案。",
-    draftMarkdown: "# 冰箱采访范围\n\n覆盖中国大陆家用冰箱，并记录京东和品牌官网等调查事实。",
+    draftMarkdown: [
+      "# 冰箱采访范围",
+      "",
+      "- 零售市场：https://www.jd.com/",
+      "- 品牌官网：https://www.haier.com/refrigerators/",
+      "- 品牌官网：https://www.midea.cn/",
+      "- 国家标准：https://openstd.samr.gov.cn/",
+      "- 技术原理：https://www.nist.gov/refrigeration-cycle",
+    ].join("\n"),
+    draftCoverage: {
+      retailMarketUrls: ["https://www.jd.com/"],
+      brandOfficialUrls: ["https://www.haier.com/refrigerators/", "https://www.midea.cn/"],
+      standardsRegulationUrls: ["https://openstd.samr.gov.cn/"],
+      technicalPrincipleUrls: ["https://www.nist.gov/refrigeration-cycle"],
+    },
     unresolvedItems: [],
     resolvedUnresolvedKeys: [],
   });
@@ -286,6 +307,8 @@ async function handle(message) {
     const prompt = message.params.input.find((item) => item.type === "text")?.text ?? "";
     if (!prompt.includes("不要通过本地命令查找或读取 Skill、AGENTS.md、开发文档或 Git 状态")) process.exit(9);
     if (!prompt.includes("不得把默认采集内容改写成采集深度问题")) process.exit(10);
+    if (!prompt.includes("draftCoverage 只是 Workbench 校验 Markdown 与搜索记录的四组 URL")) process.exit(11);
+    if (!prompt.includes("逐项检查会改变纳入商品集合、市场范围或观察时间范围的边界依据")) process.exit(12);
     const skill = message.params.input.find((item) => item.type === "skill");
     const normalizedSkillPath = String(skill?.path).replaceAll("\\\\", "/");
     const normalizedCwd = productInterviewCwd.replaceAll("\\\\", "/");
@@ -326,6 +349,8 @@ async function handle(message) {
       { title: "京东", url: "https://www.jd.com/" },
       { title: "海尔冰箱", metadata: { href: "https://www.haier.com/refrigerators/" } },
       { title: "带凭据 URL", url: "https://user:secret@example.com/private" },
+      { title: "国家标准", url: "https://openstd.samr.gov.cn/" },
+      { title: "制冷技术原理", url: "https://www.nist.gov/refrigeration-cycle" },
       { title: "无效协议", link: "javascript:alert(1)" }
     ]
   } } });

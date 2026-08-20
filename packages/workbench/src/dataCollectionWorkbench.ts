@@ -36,6 +36,7 @@ export interface OpenDataCollectionWorkbenchOptions {
   categoryInterviewModule?: { now?: () => Date; createId?: (kind: string) => string };
   crawlPlanningRuntime?: CrawlPlanningRuntime;
   crawlPlanningModule?: { now?: () => Date; createId?: (kind: string) => string };
+  sourceDatasetModule?: { assetCachePath?: string };
   sourceProviders?: ReadonlyMap<string, SourceProvider>;
 }
 
@@ -48,16 +49,23 @@ export async function openDataCollectionWorkbench(
   const captureTasks = createCaptureTaskModule(db);
   const categoryInterviewRuntime = options.categoryInterviewRuntime;
   const crawlPlanningRuntime = options.crawlPlanningRuntime;
-  const sourceDatasets = createSourceDatasetModule(db);
-  const providerValidation = options.sourceProviders ? async (source: Parameters<SourceProvider["validate"]>[0]) => {
+  const sourceDatasets = createSourceDatasetModule(db, options.sourceDatasetModule);
+  const resolveSourceProvider = options.sourceProviders ? (source: Parameters<SourceProvider["validate"]>[0]) => {
     const provider = options.sourceProviders!.get(source.provider.key);
     if (!provider || provider.version !== source.provider.version) throw new Error(`Provider 不可用：${source.provider.key}@${source.provider.version}`);
+    return provider;
+  } : undefined;
+  const providerValidation = resolveSourceProvider ? (source: Parameters<SourceProvider["validate"]>[0]) => {
+    resolveSourceProvider(source).validate(source);
+  } : undefined;
+  const providerPreflight = resolveSourceProvider ? async (source: Parameters<SourceProvider["validate"]>[0]) => {
+    const provider = resolveSourceProvider(source);
     provider.validate(source);
     await provider.preflight(source);
   } : undefined;
   const crawlPlanning = options.crawlPlanningRuntime
     ? createCrawlPlanningModule(db, captureTasks, options.crawlPlanningRuntime,
-      { ...options.crawlPlanningModule, validateSource: providerValidation })
+      { ...options.crawlPlanningModule, validateSource: providerValidation, preflightSource: providerPreflight })
     : undefined;
   return {
     captureTasks,

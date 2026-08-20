@@ -14,6 +14,7 @@
     "@domain-analysis/db": "0.1.0",
     "@domain-analysis/shared": "0.1.0",
     "@openai/codex": "0.147.0",
+    "cacache": "20.0.4",
     "canonicalize": "3.0.0",
     "csv-stringify": "^6.8.1",
     "drizzle-orm": "0.45.2",
@@ -23,6 +24,7 @@
     "zod-to-json-schema": "3.25.2"
   },
   "devDependencies": {
+    "@types/cacache": "20.0.1",
     "@types/ndjson": "2.0.4"
   }
 }

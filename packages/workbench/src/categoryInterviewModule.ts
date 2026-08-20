@@ -246,7 +246,7 @@ async function finishTurn(
     throw revisionConflict(view.session.id);
   }
   const { output, decisionChange, nextPhase } = prepareInterviewTurn(
-    current, parsedOutput, timestamp, createId, sourceUserMessageId,
+    current, parsedOutput, timestamp, createId, sourceUserMessageId, timelineParts,
   );
   const message = normalizedInterviewMessageSchema.parse({
     id: createId("interview-message"), sessionId: view.session.id,
@@ -307,6 +307,7 @@ async function finishTurn(
         id: createId("capture-task-draft"), sessionId: view.session.id,
         version: Math.max(0, ...rawDrafts.map((item) => item.version)) + 1,
         status: "draft", contentHash: contentHash(output.draftMarkdown), briefMarkdown: output.draftMarkdown,
+        coverageVerified: true,
         createdAt: timestamp,
       });
     }

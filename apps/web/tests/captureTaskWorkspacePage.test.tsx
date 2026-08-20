@@ -7,7 +7,10 @@ vi.mock("../src/pages/CategoryInterviewTimeline", () => ({
   CategoryInterviewTimeline: () => <section aria-label="抓取任务对话" />,
 }));
 
-import { CaptureTaskWorkspacePage } from "../src/pages/CaptureTaskWorkspacePage";
+import {
+  CaptureTaskWorkspacePage,
+  upsertInterviewPreservingOrder,
+} from "../src/pages/CaptureTaskWorkspacePage";
 import { ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY } from "../src/pages/CategoryInterviewTimeline";
 
 describe("抓取任务工作区恢复", () => {
@@ -71,4 +74,29 @@ describe("抓取任务工作区恢复", () => {
     expect(html).toContain("aria-label=\"删除抓电视机\"");
     expect(html).toContain("aria-label=\"删除家用冰箱抓取任务\"");
   });
+
+  it("查看或更新已有采访只替换原位置，不把选中项移到列表顶部", () => {
+    const current = [interview("first", "第一条"), interview("second", "第二条"), interview("third", "第三条")];
+    const changed = { ...current[1]!, initialRequest: "第二条（已更新）", revision: 2 };
+
+    const next = upsertInterviewPreservingOrder(current, changed);
+
+    expect(next.map((item) => item.id)).toEqual(["first", "second", "third"]);
+    expect(next[1]).toEqual(changed);
+  });
+
+  it("真正新建的采访仍插入任务记录顶部", () => {
+    const current = [interview("first", "第一条"), interview("second", "第二条")];
+
+    const next = upsertInterviewPreservingOrder(current, interview("new", "新任务"));
+
+    expect(next.map((item) => item.id)).toEqual(["new", "first", "second"]);
+  });
 });
+
+function interview(id: string, initialRequest: string) {
+  return {
+    id, initialRequest, phase: "active" as const, turnState: "idle" as const, revision: 1,
+    createdAt: "2026-08-19T00:00:00.000Z", updatedAt: "2026-08-19T00:00:00.000Z",
+  };
+}

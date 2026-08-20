@@ -5,10 +5,11 @@ import type {
   RawSourceObservation,
   RawSourcePayload,
   SourceAccessPolicy,
+  SourceCollectionTargetRun,
   SourceCollectionPlanContent,
 } from "@domain-analysis/shared";
 import { sql } from "drizzle-orm";
-import { index, integer, jsonb, pgSchema, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgSchema, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const workbenchSchemaName = "workbench";
 const workbenchSchema = pgSchema(workbenchSchemaName);
@@ -83,6 +84,8 @@ export const captureTaskDraftVersions = workbenchSchema.table("capture_task_draf
   status: text("status", { enum: ["draft", "confirmed", "superseded"] }).notNull(),
   contentHash: text("content_hash").notNull(),
   briefMarkdown: text("brief_markdown").notNull(),
+  // WHY：历史草案没有经过四类来源搜索证据门；显式标记让读取层保留文本历史但禁止误确认。
+  coverageVerified: boolean("coverage_verified").notNull().default(false),
   taskId: text("task_id").references(() => captureTasks.id),
   createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
   confirmedAt: timestamp("confirmed_at", { mode: "string", withTimezone: true }),
@@ -127,7 +130,9 @@ export const sourceCollectionRuns = workbenchSchema.table("source_collection_run
   taskId: text("task_id").notNull().references(() => captureTasks.id),
   sourceCollectionPlanId: text("source_collection_plan_id").references(() => sourceCollectionPlans.id),
   sourceCollectionPlanSourceKey: text("source_collection_plan_source_key"),
+  sourceCollectionPlanVersion: integer("source_collection_plan_version"),
   providerKey: text("provider_key").notNull(),
+  providerVersion: text("provider_version"),
   accessPolicy: jsonb("access_policy_json").$type<SourceAccessPolicy>().notNull(),
   status: text("status", { enum: ["running", "completed", "failed", "stopped"] }).notNull(),
   snapshotCount: integer("snapshot_count").notNull().default(0),
@@ -140,6 +145,24 @@ export const sourceCollectionRuns = workbenchSchema.table("source_collection_run
 }, (table) => [
   index("source_collection_run_task_time_idx").on(table.taskId, table.startedAt),
   index("source_collection_run_plan_batch_idx").on(table.sourceCollectionPlanId, table.sourceCollectionPlanSourceKey),
+]);
+
+export const sourceCollectionTargetRuns = workbenchSchema.table("source_collection_target_runs", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => sourceCollectionRuns.id),
+  targetKey: text("target_key").notNull(),
+  status: text("status", { enum: ["pending", "running", "completed", "failed", "stopped"] })
+    .$type<SourceCollectionTargetRun["status"]>().notNull(),
+  snapshotCount: integer("snapshot_count").notNull().default(0),
+  accessibleCount: integer("accessible_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  assetCount: integer("asset_count").notNull().default(0),
+  startedAt: timestamp("started_at", { mode: "string", withTimezone: true }),
+  finishedAt: timestamp("finished_at", { mode: "string", withTimezone: true }),
+  terminationReason: text("termination_reason"),
+}, (table) => [
+  uniqueIndex("source_target_run_key_uq").on(table.runId, table.targetKey),
+  index("source_target_run_status_idx").on(table.runId, table.status),
 ]);
 
 export const sourceObjects = workbenchSchema.table("source_objects", {
@@ -156,6 +179,7 @@ export const sourceObjects = workbenchSchema.table("source_objects", {
 export const sourceSnapshots = workbenchSchema.table("source_snapshots", {
   id: text("id").primaryKey(),
   runId: text("run_id").notNull().references(() => sourceCollectionRuns.id),
+  targetKey: text("target_key"),
   objectId: text("object_id").notNull().references(() => sourceObjects.id),
   idempotencyKey: text("idempotency_key").notNull(),
   observation: jsonb("observation_json").$type<RawSourceObservation>().notNull(),
