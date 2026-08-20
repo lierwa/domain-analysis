@@ -821,4 +821,4 @@ Patch Disposition:
 
 本轮架构影响：澄清。改变的是同一个无状态采访 Agent 的 Skill/Prompt 语义纪律和误导性测试数据；Category Interview/PostgreSQL 事实源、App Server ephemeral turn、现有 typed contract、四类来源覆盖门、Capture Task/Crawl Plan/Source Dataset/Source Run 边界与依赖方向均未改变，因此不更新 ARCHITECTURE、RESEARCH 或 ADR。
 
-当前 API/Web 服务运行在 `http://127.0.0.1:4000/` 与 `http://127.0.0.1:6173/`，页面停留在完整微波炉未确认草案供负责人查看。全部改动与两条真实回归会话仍只在本机 dirty worktree / 本机数据库，未提交、未推送，不构成跨电脑接续点。
+实现、测试、迁移、Skill、Issue 与权威文档已提交为 `f359e4d2a293f2fce7760aef92609f9f73f686d6` 并合入 `master`，随本次远端交付形成代码层面的跨电脑接续点。本机 API/Web 服务已在交付前停止。两条真实回归会话、搜索时间线与未确认草案仍只存在于本机 PostgreSQL；Cookie、Profile、认证材料和来源内容均未进入 Git，其他电脑需要使用相同输入重新执行真实页面验收。
