@@ -1,4 +1,4 @@
-import { sourceRunEventSchema, startCrawlPlanSchema } from "@domain-analysis/shared";
+import { sourcePreparationSchema, sourceRunEventSchema, startCrawlPlanSchema } from "@domain-analysis/shared";
 import type { SourceExecutionModule } from "@domain-analysis/workbench";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -6,6 +6,12 @@ import { z } from "zod";
 const paramsSchema = z.object({ taskId: z.string().min(1), planId: z.string().min(1) }).strict();
 
 export async function registerSourceExecutionRoutes(app: FastifyInstance, execution: SourceExecutionModule) {
+  app.post("/api/capture-tasks/:taskId/crawl-plans/:planId/prepare", async (request) => {
+    const params = paramsSchema.parse(request.params);
+    const body = startCrawlPlanSchema.parse(request.body);
+    return { item: sourcePreparationSchema.parse(await execution.prepare({ ...params, ...body })) };
+  });
+
   app.post("/api/capture-tasks/:taskId/crawl-plans/:planId/start", async (request, reply) => {
     const params = paramsSchema.parse(request.params);
     const body = startCrawlPlanSchema.parse(request.body);

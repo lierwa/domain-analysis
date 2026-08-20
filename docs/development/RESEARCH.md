@@ -3,7 +3,7 @@
 > 2026-08-20 当前边界：项目只实施阶段 1 数据抓取。本文保留历史候选和淘汰依据，但其中 Evidence、Knowledge Factory、知识包、Runtime、Market Universe 及旧具体来源 Provider 均已退出当前生产组合根，不得按历史“接受”状态继续实现。当前组合除 PostgreSQL/Drizzle、Fastify、assistant-ui、Codex App Server、Crawlee、p-queue 与 cockatiel 外，已按 R-036/R-037 接受 Playwright CDP、Got、robots-parser、Cheerio 与 cacache；后续新增来源机制仍须重新进入调研和真实原型门。
 
 状态：持续维护
-更新日期：2026-08-20
+更新日期：2026-08-21
 
 本文件只记录技术问题、成熟候选、官方依据、原型结果、接受/拒绝/替代状态和退出成本。阶段进度看 `PROGRESS.md`，模块边界看 `ARCHITECTURE.md`，已删除 POC 的历史结论只通过本文件、ADR 与 Git 历史追溯。
 
@@ -18,7 +18,9 @@
 | R-028 | 本地 Chat Timeline | 接受 `assistant-ui` ExternalStoreRuntime；单回合有序 parts、普通问题文案、Composer 自定义回答和刷新恢复已验证 |
 | R-029 | Codex 交互运行时与 Pi 边界 | 接受：锁定官方 `codex app-server` `stdio`，每轮 `thread/start(ephemeral:true)`；commentary 用官方 delta，最终 JSON 由本地 Zod 校验；MVP 不引入 Pi |
 | R-035 | Crawl Planning Agent 运行与版本化计划 | 接受复用 App Server/Skill/Zod/PostgreSQL；前台可见、断连中止；拒绝为短规划引入后台队列 |
+| R-036 | 京东有界 Provider 与抓取前准备 | 接受 Playwright CDP＋项目独立 persistent Profile；确认不接触运行态，Prepare 自动启动 Chrome 并检查端口/登录，Start 最终复检 |
 | R-037 | 完整执行清单、公共原始资源与附件 CAS | 接受 Got＋robots-parser＋Cheerio＋cacache；只允许精确 URL 或一次同源唯一链接，真实多来源 Start 尚未执行 |
+| R-038 | Crawl Planning 结构化输出修正 | 接受同一 ephemeral thread 最多一个 repair turn；只回填现有校验错误，不新增校验、模型或持久会话 |
 | R-032 | 来源访问限速、取消与熔断 | 当前只保留 `p-queue`＋`cockatiel` 基础；具体 Crawl Plan、持久恢复和京东真实窗口在 1A 后重新验证 |
 | 历史 R-002～R-026、R-030～R-034 | 旧知识生产与 POC | 只保留调研/失败证据；DBOS、Evidence、知识包、Runtime、Market Universe 和旧 Source Dataset contract 均由 ADR-0015 退出当前范围 |
 
@@ -961,16 +963,16 @@ Node/TypeScript、本地/离线和部署边界：纯 Node 24/TypeScript；App Se
 
 ### R-036 京东有界 CDP Provider 与显式 Source Run
 
-状态：最小生产实现已接受；真实目录 passed，详情访问被登录门 blocked
+状态：最小生产实现已接受；自动启动与登录人工动作 passed，扫码后的 ready 仍待用户页面验收
 目标阶段：1C/1D 首个纵切片
 
-问题：Crawl Plan 必须能指导已实现程序，而不是把自然语言 traversal 当 crawler；确认与开始必须分离，来源原始结果必须进入正式 Source Dataset。
+问题：Crawl Plan 必须能指导已实现程序，而不是把自然语言 traversal 当 crawler；确认、运行准备与开始必须分离，来源原始结果必须进入正式 Source Dataset。9222 和登录会随本机变化，不能成为计划能否确认的条件。
 
-候选与官方依据：继续采用 R-012 已验证的官方 Playwright CDP 能力与系统 Chrome，锁定 `playwright-core@1.62.1`（Apache-2.0、Node/TypeScript、本地）；复用已接受的 `p-queue@9.3.3`、`cockatiel@4.0.0`、PostgreSQL、Drizzle、Fastify SSE 和 Zod。拒绝复制 Cookie/Profile、Patchright/反检测、动态插件系统、自研队列和运行时生成 crawler。
+候选与官方依据：继续采用 R-012 已验证的官方 Playwright CDP 能力与系统 Chrome，锁定 `playwright-core@1.62.1`（Apache-2.0、Node/TypeScript、本地）；复用已接受的 `p-queue@9.3.3`、`cockatiel@4.0.0`、PostgreSQL、Drizzle、Fastify SSE 和 Zod。Playwright 官方 `launchPersistentContext(userDataDir, { channel: "chrome" })` 明确提供持久浏览器上下文并要求使用独立自动化 Profile；关闭 context 即关闭所拥有浏览器。Chrome 官方从 136 起也要求 remote debugging port 必须搭配非默认 `--user-data-dir`。因此接受由 JD Provider 在 Prepare 时先连接 loopback CDP，端口不存在则通过 Playwright 启动系统 Chrome，随后再以 CDP 校验 9222；页面操作继续使用 Playwright 所拥有的高保真 context。拒绝复制 Cookie/Profile、硬编码 Chrome 安装路径、Patchright/反检测、动态插件系统、自研进程管理和运行时生成 crawler。官方依据：https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context 、https://developer.chrome.com/blog/remote-debugging-port
 
-产品边界：Provider 配置使用通用 key/value 数组，JD 当前验证 `mode=cdp`、`include_text`、`exclude_text`；品类与排除词是 plan data，JD DOM/导航机制只在 Provider。入口仅允许 `https://www.jd.com`，CDP 仅允许 loopback；计划固定请求预算 2、每分钟最多 2、最小间隔 10 秒、最长 3 分钟、零重试。HTML 可内联保存；登录页、Cookie、Profile、认证 Header 和验证码材料不保存。
+产品边界：Provider 配置使用通用 key/value 数组，JD 当前验证 `mode=cdp`、`include_text`、`exclude_text`；品类与排除词是 plan data，JD DOM/导航机制只在 Provider。入口仅允许 `https://www.jd.com`，CDP 仅允许 loopback；项目 Profile 固定在 Git 忽略的本机 `data/`，不读取日常 Chrome Profile。Prepare 只返回临时 `ready/action_required`，不创建 Source Run、不入库；未登录或验证页由用户人工处理并重新检查。Start 重读 confirmed plan 并最终 preflight。计划固定请求预算 2、每分钟最多 2、最小间隔 10 秒、最长 3 分钟、零重试。HTML 可内联保存；登录页、Cookie、Profile、认证 Header 和验证码材料不保存。
 
-真实结果（2026-08-20 Windows）：全新冰箱采访完成 19 个网页搜索并生成可读 Markdown；确认后得到 Capture Task v1。Planning v3 以 20 个网页搜索核实入口，冻结 `jd.catalog-product@1.0.0` 与 include/exclude 配置并通过 CDP preflight。两次独立 Source Run 均从正式 Web 显式开始：目录 HTML accessible，详情 SKU `100377318432` 被重定向到 `passport.jd.com`，记录 `login_required` 并停止；每次 2 snapshots、1 accessible、1 failed、0 assets，JSONL 各 2 条。该结果证明目录、写入、查看和导出闭环，详情为 blocked，不证明完整京东访问通过。
+真实结果：2026-08-20 Windows 的两次独立 Source Run 均从正式 Web 显式开始：目录 HTML accessible，详情 SKU `100377318432` 被重定向到 `passport.jd.com`，记录 `login_required` 并停止；每次 2 snapshots、1 accessible、1 failed、0 assets，JSONL 各 2 条。2026-08-21 在 9222 关闭的本机用户等价权限下调用正式 Prepare，系统自动启动 Chrome/151、开放 9222，并返回 `action_required/login_required`，同时打开京东登录页；数据库没有新增 Source Run。本次未代替用户扫码，也未调用 Start，因此 post-login `ready` 与随后完整多来源执行仍待页面人工验收。
 
 退出成本：删除 composition-root 注入与 JD Provider 不改变 Crawl Plan、Source Execution 或 Source Dataset contract；其他来源必须各自通过同一调研和真实门。
 
@@ -1010,6 +1012,19 @@ Node/TypeScript、本地/离线和部署边界：纯 Node 24/TypeScript；App Se
 验证证据：本机 HTTPS fixture/注入 transport 已证明候选/topic 完整性、入口-only 附件拒绝、H5 说明书的一次同源跟进、PDF/表格附件门、Provider 精确 target、未知/重复 target event 拒绝、逐 target completed/failed/stopped 与 snapshot/asset 对账、超字节、redirect、私网解析、robots 禁止、取消、零重试和 CAS 字节复用。真实 Workbench Planning Run v6 通过相同 contract 与 Provider preflight，形成 7/7 候选、13/13 topic、8 来源、12 target 的 confirmed plan；没有点击 Start，因此海尔、CNIS、SAMR、淘宝和 NIST 的真实访问仍为未测试。
 
 依赖安全：2026-08-20 `npm audit --omit=dev` 报告 1 moderate/4 high。`npm explain` 显示受影响 AJV/fast-uri/Fastify/find-my-way 来自既有 API 链，受影响 `brace-expansion@2.1.0` 来自既有 Crawlee；本轮 cacache 使用的 `brace-expansion@5.0.9` 和新增 Cheerio 不在报告链。Fastify 修复提示破坏性升级，未在本任务中擅自 `audit fix`；该仓库级风险继续由 R-007 处置，不把本轮技术接受写成“无安全公告”。
+
+### R-038 Crawl Planning 结构化输出同线程修正
+
+状态：已接受最小应用编排；不增加校验或依赖
+目标阶段：阶段 1B Crawl Plan 生成
+
+问题：Crawl Plan 的最终 JSON 较大，现有 Zod、候选/topic 完整性、附件正文或 Provider 结构校验只要发现一处错误，旧流程就直接关闭 Planning Run，已经完成的搜索上下文也无法用于修正。
+
+官方依据与结论：Codex App Server 把对话组织为 thread 中的 turn；`thread/start` 返回 `threadId`，后续可以继续对同一 ID 调用 `turn/start`，而 `outputSchema` 属于每个 turn 的参数。项目因此只在第一次输出未通过现有解析或校验时继续同一个 ephemeral thread，把原错误消息回填一次，并为第二轮重新附上相同 `outputSchema`。不新增错误分类器、字段级校验、第二模型、持久 thread、跨进程恢复或网络重试：https://developers.openai.com/codex/app-server/
+
+验证：fake App Server 断言一个 `thread/start`、最多两个同 thread `turn/start`、两轮均携带 `outputSchema`；第二次仍失败即停止。真实电视 Planning Run `crawl-planning-run-288a0f9f-9c5b-4769-994c-488543a1c090` 首轮触发现有“海信电视产品目录缺少说明书正文 target”错误，第二轮只补该目标并成功保存 draft plan，证明搜索上下文和原校验错误能完成有界修正。
+
+边界：这项修正只提高大结构化输出的可恢复性，不代表计划数量已经满足任务范围。该真实 plan 有 16 个来源、25 个 target，但 `jd.catalog-product@1.0.0` 仍固定每个入口只抓一个首个匹配商品；“主流品牌全系在售”需要单独扩展 Provider 的覆盖分母与遍历能力，见 Issue 03，不能用本 repair 冒充完成。
 
 ### R-007 依赖复现与安全升级
 

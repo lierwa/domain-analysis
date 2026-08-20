@@ -56,6 +56,48 @@ describe("Codex 抓取规划运行时", () => {
     } satisfies Partial<CodexAppServerError>);
   });
 
+  it("现有校验失败时在同一个 thread 回填错误并只修正一次", async () => {
+    const runtime = createCodexCrawlPlanningRuntime({
+      repositoryRoot: process.cwd(), model: "gpt-5.6-terra", reasoningEffort: "medium",
+      executable: await fakeExecutable(true),
+    });
+    runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
+    let validations = 0;
+
+    const events = await collect(runtime.run({
+      task: task(), previousPlans: [],
+      validateOutput: async () => {
+        validations += 1;
+        if (validations === 1) throw new Error("抓取计划遗漏了任务中必须覆盖的京东来源");
+      },
+    }));
+
+    expect(validations).toBe(2);
+    expect(events).toContainEqual({
+      type: "text_delta",
+      delta: "第一次计划未通过现有校验，已回填错误并修正一次：抓取计划遗漏了任务中必须覆盖的京东来源",
+    });
+    expect(events.at(-1)).toMatchObject({ type: "completed" });
+  });
+
+  it("第二次仍未通过现有校验时直接失败，不继续增加重试", async () => {
+    const runtime = createCodexCrawlPlanningRuntime({
+      repositoryRoot: process.cwd(), model: "gpt-5.6-terra", reasoningEffort: "medium",
+      executable: await fakeExecutable(true),
+    });
+    runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
+    let validations = 0;
+
+    await expect(collect(runtime.run({
+      task: task(), previousPlans: [],
+      validateOutput: async () => {
+        validations += 1;
+        throw new Error("抓取计划遗漏了任务中必须覆盖的京东来源");
+      },
+    }))).rejects.toThrow("抓取计划遗漏了任务中必须覆盖的京东来源");
+    expect(validations).toBe(2);
+  });
+
   it("把 Crawl Planning 的独立单轮预算传给 App Server client", async () => {
     const runtime = createCodexCrawlPlanningRuntime({
       repositoryRoot: process.cwd(), model: "gpt-5.6-terra", reasoningEffort: "medium",
@@ -104,6 +146,8 @@ import { createInterface } from "node:readline";
 const emit = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const lines = createInterface({ input: process.stdin });
+let threadCount = 0;
+let turnCount = 0;
 lines.on("line", (line) => void handle(JSON.parse(line)));
 async function handle(message) {
   if (message.method === "initialize") {
@@ -111,6 +155,8 @@ async function handle(message) {
     return;
   }
   if (message.method === "thread/start") {
+    threadCount += 1;
+    if (threadCount !== 1) process.exit(13);
     if (message.params.ephemeral !== true || !String(message.params.cwd).endsWith("domain-analysis-crawl-planning")) process.exit(5);
     emit({ id: message.id, result: { thread: { id: "thread-1", ephemeral: true } } });
     emit({ method: "thread/started", params: {} });
@@ -122,13 +168,16 @@ async function handle(message) {
     return;
   }
   if (message.method !== "turn/start") return;
+  turnCount += 1;
+  if (turnCount > 2 || message.params.threadId !== "thread-1") process.exit(14);
   const prompt = message.params.input.find((item) => item.type === "text")?.text ?? "";
   const skill = message.params.input.find((item) => item.type === "skill");
-  if (!prompt.includes("$plan-product-crawl") || !prompt.includes("Required task topics") || !prompt.includes("严禁 provider_missing") || !prompt.includes("Candidate execution checklist") || !prompt.includes("requiredProvider") || !prompt.includes("search.jd.com is public.web-resource") || !prompt.includes("Every exact public target configuration url MUST appear in that same source.entryUrls") || !prompt.includes("Topic coverage checklist") || !prompt.includes("Provider binding checklist") || !prompt.includes("never represent a PDF URL as an HTML target") || !prompt.includes("Final answer local validation JSON Schema")) process.exit(6);
+  if (turnCount === 1 && (!prompt.includes("$plan-product-crawl") || !prompt.includes("Required task topics") || !prompt.includes("严禁 provider_missing") || !prompt.includes("Candidate execution checklist") || !prompt.includes("requiredProvider") || !prompt.includes("search.jd.com is public.web-resource") || !prompt.includes("Every exact public target configuration url MUST appear in that same source.entryUrls") || !prompt.includes("Topic coverage checklist") || !prompt.includes("Provider binding checklist") || !prompt.includes("never represent a PDF URL as an HTML target") || !prompt.includes("Final answer local validation JSON Schema"))) process.exit(6);
+  if (turnCount === 2 && !prompt.includes("现有校验错误：")) process.exit(15);
   if (message.params.outputSchema?.type !== "object" || !message.params.outputSchema?.properties?.planCandidate) process.exit(8);
   const normalizedSkillPath = String(skill?.path).replaceAll("\\\\", "/");
   if (skill?.name !== "plan-product-crawl" || !normalizedSkillPath.endsWith(".agents/skills/plan-product-crawl/SKILL.md")) process.exit(7);
-  emit({ id: message.id, result: { turn: { id: "turn-1" } } });
+  emit({ id: message.id, result: { turn: { id: "turn-" + turnCount } } });
   emit({ method: "turn/started", params: {} });
   ${includeSearch ? `emit({ method: "item/started", params: { item: { id: "search-1", type: "webSearch", query: "京东 冰箱" } } });
   emit({ method: "item/completed", params: { item: { id: "search-1", type: "webSearch", query: "京东 冰箱", results: [{ url: "https://www.jd.com/" }] } } });` : ""}

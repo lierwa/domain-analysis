@@ -43,6 +43,7 @@ export interface CodexAppServerClientOptions {
 
 export interface CodexAppServerResult {
   interrupted: boolean;
+  threadId?: string;
   outputText?: string;
   observedEvents: string[];
   observedItemTypes: string[];
@@ -74,7 +75,7 @@ export class CodexAppServerError extends Error {
 }
 
 export interface CodexAppServerClient {
-  run(prompt: string, signal?: AbortSignal): AsyncIterable<CodexAppServerStreamItem>;
+  run(prompt: string, signal?: AbortSignal, threadId?: string): AsyncIterable<CodexAppServerStreamItem>;
   close(): Promise<void>;
 }
 
@@ -102,7 +103,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
 
   constructor(private readonly options: CodexAppServerClientOptions) {}
 
-  async *run(prompt: string, signal?: AbortSignal): AsyncIterable<CodexAppServerStreamItem> {
+  async *run(prompt: string, signal?: AbortSignal, threadId?: string): AsyncIterable<CodexAppServerStreamItem> {
     if (this.active) {
       throw new CodexAppServerError(
         "execution_failed",
@@ -117,7 +118,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     this.active = true;
     try {
       const transport = await this.ensureTransport();
-      yield* this.runTurn(transport, prompt, signal);
+      yield* this.runTurn(transport, prompt, signal, threadId);
     } finally {
       this.active = false;
     }
@@ -157,17 +158,18 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     transport: CodexAppServerTransport,
     prompt: string,
     signal?: AbortSignal,
+    continuationThreadId?: string,
   ): AsyncIterable<CodexAppServerStreamItem> {
     const observedEvents = new Set<string>();
     const observedItemTypes = new Set<string>();
     const observedErrors = new Set<string>();
     const messagePhases = new Map<string, "commentary" | "final_answer" | null>();
     const streamedCommentaryItems = new Set<string>();
-    let threadId: string | undefined;
+    let threadId = continuationThreadId;
     let turnId: string | undefined;
     let finalOutputText: string | undefined;
     let turnStatus: "completed" | "interrupted" | "failed" | undefined;
-    const threadRequestId = ++this.requestSequence;
+    const threadRequestId = threadId ? undefined : ++this.requestSequence;
     const turnRequestId = ++this.requestSequence;
     let interruptRequestId: number | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -184,7 +186,11 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
       timedOut = true;
       interrupt();
     }, this.options.timeoutMs ?? 180_000);
-    transport.send("thread/start", threadRequestId, threadStartParams(this.options));
+    if (threadId) {
+      transport.send("turn/start", turnRequestId, turnStartParams(this.options, threadId, prompt));
+    } else {
+      transport.send("thread/start", threadRequestId!, threadStartParams(this.options));
+    }
 
     try {
       for (;;) {
@@ -194,7 +200,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
           observedErrors.add(JSON.stringify(response.data.error));
           throw failedAppServerError(undefined, "", observedEvents, observedErrors);
         }
-        if (response.success && response.data.id === threadRequestId) {
+        if (response.success && threadRequestId !== undefined && response.data.id === threadRequestId) {
           const parsed = threadStartResultSchema.safeParse(response.data.result);
           if (!parsed.success) throw protocolError("thread/start 没有返回 ephemeral thread", parsed.error.message);
           threadId = parsed.data.thread.id;
@@ -293,6 +299,7 @@ function completedResult(input: {
   }
   return { type: "result", result: {
     interrupted: false,
+    threadId: input.threadId,
     outputText: input.finalOutputText,
     observedEvents: [...input.observedEvents],
     observedItemTypes: [...input.observedItemTypes],

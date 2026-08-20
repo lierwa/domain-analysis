@@ -43,6 +43,7 @@ export interface CrawlPlanningRuntime {
     instruction?: string;
     previousPlans: CrawlPlan[];
     signal?: AbortSignal;
+    validateOutput?: (output: CrawlPlanningRuntimeOutput) => Promise<void>;
   }): AsyncIterable<CrawlPlanningRuntimeEvent>;
   close?(): Promise<void>;
 }
@@ -68,7 +69,6 @@ interface CrawlPlanningModuleOptions {
   now?: () => Date;
   createId?: (kind: string) => string;
   validateSource?: SourceCheck;
-  preflightSource?: SourceCheck;
 }
 
 export class CrawlPlanningError extends Error {
@@ -95,8 +95,7 @@ export function createCrawlPlanningModule(
       return task ? loadView(db, task) : null;
     },
     run: (input) => runPlanning(db, captureTasks, runtime, input, now, createId, options.validateSource),
-    confirm: (input) => confirmPlan(db, captureTasks, input, now,
-      options.preflightSource ?? options.validateSource),
+    confirm: (input) => confirmPlan(db, captureTasks, input, now, options.validateSource),
   };
 }
 
@@ -125,10 +124,15 @@ async function* runPlanning(
 
   let partialText = "";
   let timelineParts: InterviewMessageTimelinePart[] = [];
+  let validatedContent: CrawlPlanContent | undefined;
   try {
     const previousPlans = (await loadView(db, task)).plans;
     for await (const event of runtime.run({
       task, instruction: request.instruction, previousPlans, signal: input.signal,
+      validateOutput: async (output) => {
+        const content = await validatePlanningOutput(task, output, now().toISOString(), validateSource);
+        validatedContent = content;
+      },
     })) {
       if (event.type === "activity") {
         timelineParts = appendInterviewTimelineActivity(timelineParts, event.activity);
@@ -147,8 +151,10 @@ async function* runPlanning(
         yield parseEvent({ type: "run.interrupted", taskId: task.id, runId, run });
         return;
       }
-      const completed = await finishCompleted(db, task, runId, event.output,
-        completeInterviewTimeline(timelineParts, event.output.assistantText), now, createId, validateSource);
+      const content = validatedContent
+        ?? await validatePlanningOutput(task, event.output, now().toISOString(), validateSource);
+      const completed = await finishCompleted(db, task, runId, content,
+        completeInterviewTimeline(timelineParts, event.output.assistantText), now, createId);
       yield parseEvent({ type: "run.completed", taskId: task.id, runId, ...completed });
       return;
     }
@@ -171,26 +177,12 @@ async function finishCompleted(
   db: WorkbenchDb,
   task: CaptureTask,
   runId: string,
-  rawOutput: CrawlPlanningRuntimeOutput,
+  content: CrawlPlanContent,
   timelineParts: InterviewMessageTimelinePart[],
   now: () => Date,
   createId: (kind: string) => string,
-  validateSource?: SourceCheck,
 ) {
-  const output = crawlPlanningRuntimeOutputSchema.parse(rawOutput);
   const timestamp = now().toISOString();
-  const content = crawlPlanContentSchema.parse({
-    ...output.planCandidate,
-    // WHY：当前运行只证明 App Server 搜索发生过；模型不能自行提升观察等级、可访问性或伪造观察时间。
-    sources: output.planCandidate.sources.map((source) => ({
-      ...source, observationLevel: "search_discovered", accessState: "unknown", observedAt: timestamp,
-    })),
-    taskId: task.id,
-    taskRevision: task.revision,
-  });
-  requireCompleteChecklist(task, content);
-  // WHY：草稿展示前先过 Provider 的纯结构校验，保证“可确认”不再只是模型 JSON 合法。
-  await checkSources(content.sources, validateSource, "来源执行校验失败");
   const planId = createId("crawl-plan");
   await db.transaction(async (transaction) => {
     const rows = await transaction.select({ version: sourceCollectionPlans.version })
@@ -215,6 +207,28 @@ async function finishCompleted(
   return { run, plan };
 }
 
+async function validatePlanningOutput(
+  task: CaptureTask,
+  rawOutput: CrawlPlanningRuntimeOutput,
+  timestamp: string,
+  validateSource?: SourceCheck,
+) {
+  const output = crawlPlanningRuntimeOutputSchema.parse(rawOutput);
+  const content = crawlPlanContentSchema.parse({
+    ...output.planCandidate,
+    // WHY：当前运行只证明 App Server 搜索发生过；模型不能自行提升观察等级、可访问性或伪造观察时间。
+    sources: output.planCandidate.sources.map((source) => ({
+      ...source, observationLevel: "search_discovered", accessState: "unknown", observedAt: timestamp,
+    })),
+    taskId: task.id,
+    taskRevision: task.revision,
+  });
+  requireCompleteChecklist(task, content);
+  // WHY：生产 Runtime 复用这一既有校验回填错误；这里不增加第二套规则。
+  await checkSources(content.sources, validateSource, "来源执行校验失败");
+  return content;
+}
+
 async function finishAbnormal(
   db: WorkbenchDb,
   runId: string,
@@ -236,7 +250,7 @@ async function confirmPlan(
   captureTasks: CaptureTaskModule,
   input: { taskId: string; planId: string; expectedTaskRevision: number },
   now: () => Date,
-  preflightSource?: SourceCheck,
+  validateSource?: SourceCheck,
 ) {
   const confirmation = confirmCrawlPlanSchema.parse({ expectedTaskRevision: input.expectedTaskRevision });
   const task = await requireTask(captureTasks, input.taskId);
@@ -253,7 +267,8 @@ async function confirmPlan(
   for (const source of parsed.sources) {
     if (source.executionBlockers.length > 0) throw new CrawlPlanningError("invalid_state", `计划仍有执行阻塞：${source.executionBlockers.join("；")}`);
   }
-  await checkSources(parsed.sources, preflightSource, "来源执行预检失败");
+  // WHY：确认只冻结业务计划；浏览器与登录属于可变化的运行准备，放到显式 Prepare/Start 门处理。
+  await checkSources(parsed.sources, validateSource, "来源执行校验失败");
   const timestamp = now().toISOString();
   await db.transaction(async (transaction) => {
     await transaction.update(sourceCollectionPlans).set({ status: "superseded" })
@@ -379,10 +394,6 @@ function requireCompleteChecklist(task: CaptureTask, content: CrawlPlanContent) 
   const missingCandidates = task.content.sourceCandidates.filter((candidate) => !candidateUsage.has(candidate.id));
   if (missingCandidates.length > 0) {
     throw new CrawlPlanningError("invalid_state", `抓取计划遗漏了采访已调查来源：${missingCandidates.map((item) => item.name).join("、")}`);
-  }
-  if (task.content.jd.disposition === "included"
-    && !content.sources.some((source) => source.provider.key === "jd.catalog-product")) {
-    throw new CrawlPlanningError("invalid_state", "抓取计划遗漏了任务中必须覆盖的京东来源");
   }
 }
 

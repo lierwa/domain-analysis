@@ -1,8 +1,8 @@
 # 数据抓取与清洗平台开发进度
 
-更新日期：2026-08-20
-当前阶段：`ROADMAP.md` 1B 完整清单已确认；1C/1D 京东纵切片部分通过，1E 多来源执行尚未启动
-总体状态：采访 → Markdown 确认 → Capture Task → 完整可执行 Crawl Plan → 显式 Start → Source Dataset 已形成生产主链。真实冰箱 v6 已以 8 个来源、12 个 target 覆盖品牌官网/说明书、标准/监管附件、底层原理、零售入口与 13 个 task topic，并通过确认预检；本轮未点击 Start。历史京东目录 HTML 已持久化，商品详情仍被登录门 truthful 阻塞。
+更新日期：2026-08-21
+当前阶段：`ROADMAP.md` 1B 完整清单已确认；1C/1D 抓取前准备已接入，京东纵切片部分通过；1E 多来源执行尚未完整验收
+总体状态：采访 → Markdown 确认 → Capture Task → 完整可执行 Crawl Plan → 运行准备 → 显式 Start → Source Dataset 已形成生产主链。计划确认不再依赖 Chrome；运行准备可以自动启动项目专用 Chrome、校验 9222 并把京东登录/验证投影为人工动作，只有 ready 后 Web 才开放 Start。真实准备已到达登录门，本轮没有启动新的 Source Run。
 当前积分：85.5（以 `AGENT-SCORECARD.md` 为准）
 
 ## 1. 本轮目标
@@ -822,3 +822,79 @@ Patch Disposition:
 本轮架构影响：澄清。改变的是同一个无状态采访 Agent 的 Skill/Prompt 语义纪律和误导性测试数据；Category Interview/PostgreSQL 事实源、App Server ephemeral turn、现有 typed contract、四类来源覆盖门、Capture Task/Crawl Plan/Source Dataset/Source Run 边界与依赖方向均未改变，因此不更新 ARCHITECTURE、RESEARCH 或 ADR。
 
 实现、测试、迁移、Skill、Issue 与权威文档已提交为 `f359e4d2a293f2fce7760aef92609f9f73f686d6` 并合入 `master`，随本次远端交付形成代码层面的跨电脑接续点。本机 API/Web 服务已在交付前停止。两条真实回归会话、搜索时间线与未确认草案仍只存在于本机 PostgreSQL；Cookie、Profile、认证材料和来源内容均未进入 Git，其他电脑需要使用相同输入重新执行真实页面验收。
+
+## 17. 2026-08-20 新建采访记录选中态修复
+
+- 新会话创建后同步左侧 Session ID；点击当前记录不再重建 Timeline；恢复 ID 只在实例首次读取。
+- 聚焦测试 4/4、Web 类型检查和真实首轮页面均通过；测试会话已删除。架构影响：无变化。
+- 当前改动未提交、未推送；`package-lock.json` 是用户执行 `npm install` 产生的独立既有改动。
+
+## 18. 2026-08-21 Crawl Planning 来源密度、京东契约与一次同线程修正
+
+简单说明：采访不再把四类最低来源门当作搜索完成；京东候选只要按真实 URL 进入可执行 target，就不再被错误要求必须使用某一个 Provider。大计划 JSON 第一次没过原有校验时，系统会保留同一次搜索上下文，把原错误交回模型修正一次；没有新增更细的 JSON 检查。真实验收同时证明当前京东 Provider 每入口只抓一个商品，仍不足以兑现“主流品牌全系在售”，该能力缺口已单独登记，未混进本次补丁。
+
+```text
+Baseline Impact:
+- touched modules: Interview Skill/Prompt、Crawl Planning Module/Codex runtime、Codex App Server client、AGENTS 最小开发规则、测试与 Issue/RESEARCH/ARCHITECTURE/PROGRESS
+- owning fact source: Capture Task、Planning Run 与 Crawl Plan 的既有事实归属不变
+- public interface changed: no；HTTP/SSE/shared schema/PostgreSQL schema 不变，只有 Workbench 内部 runtime/client seam 支持同 thread 后续 turn
+- new protocol/adapter/fallback: yes；同一 ephemeral thread 最多一次 validation repair turn，不增加模型、Provider、持久 Session 或网络 fallback
+- compatibility or legacy path changed: 删除 jd.disposition 与特定 Provider 绑定的错误全局假设；历史 task/run/plan 不改写
+- research update required: yes；R-038 登记官方同 thread 多 turn 和逐 turn outputSchema 结论
+- architecture or ADR update required: ARCHITECTURE 澄清一次修正回合；事实源和依赖方向不变，不新增 ADR
+- tests and real-surface validation: repair/JD/来源 Prompt 红绿测试、全量 test/typecheck/build、真实电视采访与 Planning API 对账；未确认计划、未 Start
+```
+
+```text
+Patch Disposition:
+- delete: “京东 included 必须出现 jd.catalog-product”的错误全局检查
+- keep: 现有 Zod、候选/topic、附件正文、Provider validate/preflight 及历史运行事实
+- rewrite: 单次 Planning 输出直接成败改为同一 ephemeral thread 最多两轮；四类来源改为最低失败门而非完成标准
+- reason: 业务来源覆盖与 Provider 选择被混淆；可修正的大 JSON 错误又被当成终局失败
+```
+
+实现与验证：
+
+- `AGENTS.md` 已写入最小规则：LLM 大型结构化输出的错误回填只能复用现有解析/校验错误，不得新增、细化或复制校验。
+- App Server client 首轮仍创建一个 ephemeral thread；只有现有输出解析或校验失败时，Planning runtime 才复用该 `threadId` 发起第二个 `turn/start`，两轮都携带相同 `outputSchema`。第二轮仍失败即结束，传输、认证、取消不进入该路径。
+- 真实电视草案由上一版 6 个链接提高为 15 个：4 个京东、6 个品牌官方、4 个标准/监管、1 个技术入口。确认后的 Planning 重新搜索 3 轮并增加 LG Display OLED 官方技术来源。
+- 真实 Planning Run `crawl-planning-run-288a0f9f-9c5b-4769-994c-488543a1c090` 首轮触发现有“海信电视产品目录缺少说明书正文 target”错误；第二轮在同 thread 只补该正文目标后成功，保存 draft plan `crawl-plan-0401714f-e534-40fe-88f6-31a43b4d1335`：16 sources、25 targets、16 unique entry URLs、总请求预算 37。计划未确认，也没有调用 Start。
+- 该计划的 4 个 `jd.catalog-product` 来源仍各只有 1 个商品详情 target，不能满足已确认 Capture Task 的“主流品牌全系在售”。Issue 03 已把它归因为 Provider 固定 `catalog + first_matching_product` 的能力缺口；本轮不偷加分页、枚举或后端数量检查。
+- 最终 `npm test`：31 files passed、1 skipped，118 tests passed、1 skipped；`npm run typecheck` 六 workspace 通过；`npm run build` 通过，Web 2301 modules、594.75 kB / gzip 175.87 kB，仅有既存大 chunk warning。
+- 验收任务 `capture-task-3a404f9e-4ede-414d-9eaa-bc834303a5a5` 已归档，第一轮稀疏草案会话已删除；任务列表和独立采访列表均不再显示这些临时记录。API/Web 验收进程已停止，PostgreSQL 保持运行。
+
+本轮架构影响：澄清。Planning Run 仍只拥有生成历史，Crawl Plan 仍独占来源/内容/数量；新增的是现有 App Server seam 内的一次同线程修正，不增加第二事实源。当前修改未提交、未推送，只在本机工作树，不构成跨电脑接续点。
+
+## 19. 2026-08-21 抓取计划确认、运行准备与 Start 分离
+
+简单说明：网页确认计划不再因为 9222 没启动而报错。确认成功后系统进入抓取准备：端口不存在就用项目独立 Profile 启动 Chrome，检查京东是否登录；未登录时打开登录页并提示扫码，重新检查通过后才显示“开始抓取”。准备本身不生成抓取记录，Start 仍会最终复检。
+
+```text
+Baseline Impact:
+- touched modules: shared preparation contract、Crawl Planning、Source Execution、JD Provider、API/Web、ADR/ARCHITECTURE/ROADMAP/RESEARCH/PROGRESS
+- owning fact source: Crawl Plan 继续独占来源/内容/数量；Source Execution 拥有临时运行准备；Source Dataset 只由 Start 创建运行事实
+- public interface changed: yes；新增 typed Prepare HTTP 接口与 ready/action_required 响应
+- new protocol/adapter/fallback: no 新 fallback；扩展既有 Source Provider seam 的 prepare/close 生命周期，复用 Playwright 官方 persistent context
+- compatibility or legacy path changed: 计划确认删除运行态 preflight；Start 保留 confirmed plan 重读和最终 preflight；历史 plan/run/snapshot 不改写
+- research update required: yes；R-036 补充 Playwright/Chrome 官方独立 Profile 与 remote debugging 约束
+- architecture or ADR update required: yes；运行准备职责从 Crawl Planning 确认移动到 Source Execution，ADR-0013 已追加修订
+- tests and real-surface validation: full test/typecheck/build；真实 9222-off Prepare；用户扫码后的 ready 和 Start 留给页面人工验收
+```
+
+```text
+Patch Disposition:
+- delete: 确认按钮中的 CDP/runtime preflight、底层 connectOverCDP 原始错误直出页面
+- keep: Provider 纯结构 validate、confirmed plan 重读、Start 最终 preflight、登录/验证/风控失败即停、SSRF 公网地址拒绝、独立本机 Profile
+- rewrite: JD 浏览器生命周期和 Web Start 门改为 Confirm → Prepare → ready → Start
+- reason: 计划业务确认不应由易变本机运行态阻断；运行准备又必须在创建 Source Run 前完成
+```
+
+实现与验证：
+
+- `POST /api/capture-tasks/:taskId/crawl-plans/:planId/prepare` 重读精确 task revision/plan version；每个 source 仍逐项 validate，Provider 会话准备只执行一次，不在正式抓取前无频控重复访问同一站点。
+- `jd.catalog-product@1.0.0` 先连接 loopback CDP；9222 不存在时调用 Playwright `launchPersistentContext`，使用 Git 忽略的 `data/jd-cdp-profile` 和系统 Chrome，再通过 CDP 确认端口。未登录/验证只返回 typed 人工动作并把页面置前，不保存受限页面和认证材料。
+- Web 确认成功后自动调用 Prepare；已有 confirmed plan 显示“准备抓取环境”。`action_required` 只显示“已完成，重新检查”，`ready` 才显示“开始抓取”。Start 内仍有服务端最终 preflight，不能只信页面状态。
+- 真实本机验收先确认 9222 关闭，再调用正式 Prepare：系统启动 Chrome/151 并开放 `127.0.0.1:9222`，返回 `action_required/login_required` 和扫码提示；未创建新的 Source Run。本轮没有代替用户扫码，也没有调用 Start。
+- `npm test`：32 files passed、1 skipped，121 tests passed、1 skipped；`npm run typecheck` 六个 workspace 通过；`npm run build` 通过，Web 2301 modules、596.39 kB / gzip 176.26 kB，仅有既存大 chunk warning；`git diff --check` 通过。
+
+本轮架构影响：改变。Crawl Plan 的事实归属没有变化，但运行态 preflight 从计划确认职责移到 Source Execution 的显式 Prepare/Start 门；新增一个 typed HTTP contract，不新增数据库状态、队列或第二事实源。当前修改未提交、未推送，只在本机工作树，不构成跨电脑接续点。

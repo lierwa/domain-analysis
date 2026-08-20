@@ -9,6 +9,7 @@ import {
   interviewTurnRequestSchema,
   sourceCollectionRunSchema,
   sourceDatasetRunViewSchema,
+  sourcePreparationSchema,
   sourceRunEventSchema,
   startCrawlPlanSchema,
   type CaptureTask,
@@ -21,6 +22,7 @@ import {
   type InterviewTurnRequest,
   type SourceCollectionRun,
   type SourceDatasetRunView,
+  type SourcePreparation,
   type SourceRunEvent,
 } from "@domain-analysis/shared";
 import { createParser } from "eventsource-parser";
@@ -157,6 +159,18 @@ export async function confirmCrawlPlan(
     { method: "POST", body: JSON.stringify(body) },
   );
   return crawlPlanningViewSchema.parse(data.item);
+}
+
+export async function prepareCrawlPlan(
+  taskId: string,
+  planId: string,
+  input: { expectedTaskRevision: number; expectedPlanVersion: number },
+): Promise<SourcePreparation> {
+  const data = await request<{ item: unknown }>(
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-plans/${encodeURIComponent(planId)}/prepare`,
+    { method: "POST", body: JSON.stringify(startCrawlPlanSchema.parse(input)) },
+  );
+  return sourcePreparationSchema.parse(data.item);
 }
 
 export async function streamSourceRun(taskId: string, planId: string, input: { expectedTaskRevision: number; expectedPlanVersion: number }, onEvent: (event: SourceRunEvent) => void, signal?: AbortSignal) {

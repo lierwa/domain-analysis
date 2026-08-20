@@ -150,15 +150,17 @@ function useInterviewConfirmations({
 }
 
 function useInterviewStore(initialSessionId?: string) {
+  // WHY：该参数只描述当前 Timeline 实例首次恢复哪个会话；新建会话获得 ID 后不能反向触发恢复并覆盖正在到达的实时事件。
+  const restoreSessionId = useRef(initialSessionId).current;
   const [view, setView] = useState<CategoryInterviewView>();
   const [messages, setMessages] = useState<InterviewUiMessage[]>([]);
-  const [isRestoring, setIsRestoring] = useState(() => Boolean(initialSessionId
+  const [isRestoring, setIsRestoring] = useState(() => Boolean(restoreSessionId
     ?? (typeof window === "undefined" ? undefined : window.localStorage
       .getItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY))));
   const viewRef = useRef(view);
   viewRef.current = view;
   useEffect(() => {
-    const sessionId = initialSessionId
+    const sessionId = restoreSessionId
       ?? window.localStorage.getItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY);
     if (!sessionId) {
       setIsRestoring(false);
@@ -178,7 +180,7 @@ function useInterviewStore(initialSessionId?: string) {
       if (active) setIsRestoring(false);
     });
     return () => { active = false; };
-  }, [initialSessionId]);
+  }, [restoreSessionId]);
   const refresh = useCallback(async (sessionId: string) => {
     const next = await fetchCategoryInterview(sessionId);
     setView(next);

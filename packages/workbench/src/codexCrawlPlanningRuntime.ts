@@ -70,42 +70,62 @@ async function* runPlanning(
   let eventSequence = 0;
   let finalizingStarted = false;
   const commentaryProjection: PlanningCommentaryProjection = { mode: "new", buffer: "", messageCount: 0 };
-  // WHY：规划运行时复用自己的 stdio 连接；每次规划仍是独立 ephemeral thread，不持久化 Codex 对话。
-  for await (const item of client.run(planningPrompt(input), input.signal)) {
-    if (item.type === "text_delta") {
-      const delta = projectPlanningCommentaryDelta(commentaryProjection, item.delta);
-      if (delta) yield { type: "text_delta", delta };
-      continue;
-    }
-    if (item.type === "event") {
-      eventSequence += 1;
-      const activity = projectCodexAppServerActivity(item, eventSequence, {
-        lifecycle: "启动抓取计划 Agent",
-        analysis: "核对任务范围并规划来源",
-        finalizing: "整理并校验抓取计划",
-      });
-      if (activity?.id === "turn-finalizing") {
-        if (finalizingStarted && activity.status === "running") continue;
-        finalizingStarted = true;
+  let prompt = planningPrompt(input);
+  let threadId: string | undefined;
+  let hasWebResearch = false;
+  // WHY：大结构化结果只把既有校验错误回填一次；同一 ephemeral thread 保留首轮搜索，不引入新校验或新会话事实。
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    result = undefined;
+    for await (const item of client.run(prompt, input.signal, threadId)) {
+      if (item.type === "text_delta") {
+        const delta = projectPlanningCommentaryDelta(commentaryProjection, item.delta);
+        if (delta) yield { type: "text_delta", delta };
+        continue;
       }
-      if (activity) yield { type: "activity", activity };
-      continue;
+      if (item.type === "event") {
+        eventSequence += 1;
+        const activity = projectCodexAppServerActivity(item, eventSequence, {
+          lifecycle: "启动抓取计划 Agent",
+          analysis: "核对任务范围并规划来源",
+          finalizing: "整理并校验抓取计划",
+        });
+        if (activity?.id === "turn-finalizing") {
+          if (finalizingStarted && activity.status === "running") continue;
+          finalizingStarted = true;
+        }
+        if (activity) yield { type: "activity", activity };
+        continue;
+      }
+      result = item.result;
     }
-    result = item.result;
+    if (!result) throw new Error("Codex 抓取规划流未返回结果");
+    if (result.interrupted) {
+      yield { type: "interrupted" };
+      return;
+    }
+    hasWebResearch ||= result.observedItemTypes.includes("web_search");
+    try {
+      if (!hasWebResearch) requireWebResearch(result);
+      const output = parseOutput(result.outputText ?? "", result.observedEvents);
+      normalizeDirectDocumentCandidates(output, input.task);
+      await input.validateOutput?.(output);
+      if (!finalizingStarted) {
+        yield { type: "activity", activity: finalizingActivity("整理并校验抓取计划", "running") };
+      }
+      yield { type: "activity", activity: finalizingActivity("整理并校验抓取计划", "completed") };
+      yield { type: "completed", output };
+      return;
+    } catch (error) {
+      if (attempt === 1 || !result.threadId) throw error;
+      const message = existingValidationMessage(error);
+      yield { type: "text_delta",
+        delta: `第一次计划未通过现有校验，已回填错误并修正一次：${message}` };
+      threadId = result.threadId;
+      prompt = repairPrompt(message);
+      commentaryProjection.mode = "new";
+      commentaryProjection.buffer = "";
+    }
   }
-  if (!result) throw new Error("Codex 抓取规划流未返回结果");
-  if (result.interrupted) {
-    yield { type: "interrupted" };
-    return;
-  }
-  requireWebResearch(result);
-  const output = parseOutput(result.outputText ?? "", result.observedEvents);
-  normalizeDirectDocumentCandidates(output, input.task);
-  if (!finalizingStarted) {
-    yield { type: "activity", activity: finalizingActivity("整理并校验抓取计划", "running") };
-  }
-  yield { type: "activity", activity: finalizingActivity("整理并校验抓取计划", "completed") };
-  yield { type: "completed", output };
 }
 
 interface PlanningCommentaryProjection {
@@ -176,6 +196,18 @@ function planningPrompt(input: Parameters<CrawlPlanningRuntime["run"]>[0]) {
     "Provider binding checklist: follow Candidate execution checklist.requiredProvider exactly and leave every executionBlockers array empty. In particular, search.jd.com is public.web-resource and MUST NOT use jd.catalog-product. jd.catalog-product only accepts one www.jd.com HTTPS entry per source; each such candidate stays in its own source with exactly two targets whose sole configurations are operation=catalog and operation=first_matching_product, each target_count=1, source requestBudget=2, source raw formats=[html], and source configuration keys mode=cdp/include_text/exclude_text. mall.jd.com and every other non-www.jd.com exact HTTPS entry use public.web-resource@1.0.0. A public source configuration is exactly mode=exact_https plus integer maximum_bytes (no url key there). Every exact public target configuration url MUST appear in that same source.entryUrls, and every source.entryUrls value has exactly one exact target; never borrow or duplicate another candidate's URL as a target in this source. When an expected manual/table attachment URL is only present in the entry HTML, add a later linked target whose configuration is exactly from_target=<earlier target key> plus link_text=<complete unique anchor text>; it may follow only once and same-origin. Every public target is target_count=1, and requestBudget is at least total target count plus unique exact-entry origin count for robots.txt. Never emit provider_missing.",
     "Attachment completeness checklist: inspect every source candidate expectedContents, observedFormats and exactEntryUrl. If the exactEntryUrl itself is a PDF or another binary document, that exact target must declare document in rawFormats, and its source must declare document in rawOutputPolicy.formats with retainAssets=true; never represent a PDF URL as an HTML target. If expectedContents or observedFormats include 说明书、PDF or 附件表格 while the entry is HTML, an entry HTML target alone is insufficient: add an exact child target or the controlled same-origin linked target. An H5 manual remains html and need not enable asset retention; PDF or table attachments must enable retainAssets and declare document output. For GB 12021.2—2025, keep the official current-standard metadata entry and, if only an official 编制说明/征求意见稿 PDF is publicly discoverable, add it with that exact label and never call it the final normative text.",
   ].join("\n\n");
+}
+
+function repairPrompt(message: string) {
+  return [
+    "上一轮抓取计划没有通过 Workbench 现有校验。保留同一 thread 已完成的搜索和上一轮输出，只修正计划 JSON。",
+    `现有校验错误：${message}`,
+    "不要改变 Capture Task，不要增加新的解释层或校验规则。final_answer 仍只返回符合本轮 outputSchema 的完整对象。",
+  ].join("\n\n");
+}
+
+function existingValidationMessage(error: unknown) {
+  return (error instanceof Error ? error.message : String(error)).replace(/[\r\n]+/g, " ").trim().slice(0, 2_000);
 }
 
 function requireWebResearch(result: CodexAppServerResult) {

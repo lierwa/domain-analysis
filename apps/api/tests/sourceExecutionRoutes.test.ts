@@ -4,6 +4,28 @@ import { describe, expect, it } from "vitest";
 import { buildServer } from "../src/server";
 
 describe("来源执行路由", () => {
+  it("确认后的准备接口返回人工登录动作且不建立 SSE", async () => {
+    const execution = {
+      prepare: async () => ({ status: "action_required", action: "login_required",
+        sourceKey: "jd.refrigerator", message: "请扫码登录后重新检查" }),
+    } as unknown as SourceExecutionModule;
+    const workbench = {
+      captureTasks: {}, sourceDatasets: {}, sourceExecution: execution, close: async () => undefined,
+    } as unknown as DataCollectionWorkbench;
+    const app = await buildServer({ logger: false, workbench });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/capture-tasks/task-1/crawl-plans/plan-1/prepare",
+      payload: { expectedTaskRevision: 1, expectedPlanVersion: 2 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ item: { status: "action_required", action: "login_required",
+      sourceKey: "jd.refrigerator", message: "请扫码登录后重新检查" } });
+    await app.close();
+  });
+
   it("在 SSE 建立前把 Provider 预检失败返回为可读的 422", async () => {
     const execution = {
       start: async function* () {

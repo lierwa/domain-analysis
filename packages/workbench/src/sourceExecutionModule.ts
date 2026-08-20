@@ -2,10 +2,12 @@ import type {
   CrawlPlan,
   CrawlPlanSource,
   CrawlPlanTarget,
+  SourcePreparation,
   SourceProviderEvent,
   SourceRunEvent,
 } from "@domain-analysis/shared";
 import {
+  sourcePreparationSchema,
   sourceProviderEventSchema,
   sourceRunEventSchema,
   startCrawlPlanSchema,
@@ -18,11 +20,15 @@ export interface SourceProvider {
   readonly key: string;
   readonly version: string;
   validate(source: CrawlPlanSource): void;
+  prepare?(source: CrawlPlanSource): Promise<SourcePreparation>;
   preflight(source: CrawlPlanSource): Promise<void>;
   collect(source: CrawlPlanSource, runId: string, signal?: AbortSignal): AsyncIterable<SourceProviderEvent>;
+  close?(): Promise<void>;
 }
 
 export interface SourceExecutionModule {
+  prepare(input: { taskId: string; planId: string; expectedTaskRevision: number;
+    expectedPlanVersion: number }): Promise<SourcePreparation>;
   start(input: { taskId: string; planId: string; expectedTaskRevision: number;
     expectedPlanVersion: number; signal?: AbortSignal }): AsyncIterable<SourceRunEvent>;
   validateSource(source: CrawlPlanSource): void;
@@ -46,13 +52,40 @@ export function createSourceExecutionModule(
   const resolve = (source: CrawlPlanSource) => resolveProvider(providers, source);
   return {
     validateSource: (source) => { resolve(source); },
+    prepare: async (raw) => {
+      const request = startCrawlPlanSchema.parse({ expectedTaskRevision: raw.expectedTaskRevision,
+        expectedPlanVersion: raw.expectedPlanVersion });
+      const view = await planning.get(raw.taskId);
+      const plan = view?.plans.find((item) => item.id === raw.planId);
+      requireExecutablePlan(view, plan, request);
+      const preparedProviders = new Set<string>();
+      for (const source of plan.content.sources) {
+        const provider = resolve(source);
+        requireNoExecutionBlockers(source);
+        const identity = `${provider.key}@${provider.version}`;
+        if (preparedProviders.has(identity)) continue;
+        const result = await prepareSource(source, provider);
+        if (result.status === "action_required") return result;
+        preparedProviders.add(identity);
+      }
+      return sourcePreparationSchema.parse({ status: "ready", message: "抓取环境已准备完成，可以开始抓取。" });
+    },
     start: async function* (raw) {
       const request = startCrawlPlanSchema.parse({ expectedTaskRevision: raw.expectedTaskRevision,
         expectedPlanVersion: raw.expectedPlanVersion });
       const view = await planning.get(raw.taskId);
       const plan = view?.plans.find((item) => item.id === raw.planId);
       requireExecutablePlan(view, plan, request);
-      for (const source of plan.content.sources) await preflightSource(source, resolve(source));
+      const preflightedProviders = new Set<string>();
+      for (const source of plan.content.sources) {
+        const provider = resolve(source);
+        requireNoExecutionBlockers(source);
+        const identity = `${provider.key}@${provider.version}`;
+        // WHY：浏览器和登录是 Provider 会话级准备；每个来源仍逐项 validate，但不在 Start 前无频控重复访问同一站点。
+        if (preflightedProviders.has(identity)) continue;
+        await preflightSource(source, provider);
+        preflightedProviders.add(identity);
+      }
       for (const source of plan.content.sources) {
         if (raw.signal?.aborted) return;
         yield* executeSource(plan, source, resolve(source), datasets, raw.signal);
@@ -158,13 +191,26 @@ function resolveProvider(providers: ReadonlyMap<string, SourceProvider>, source:
 }
 
 async function preflightSource(source: CrawlPlanSource, provider: SourceProvider) {
-  if (source.executionBlockers.length > 0) {
-    throw new SourceExecutionError("invalid_state", `来源仍有执行阻塞：${source.executionBlockers.join("；")}`);
-  }
   try {
     await provider.preflight(source);
   } catch (error) {
     throw new SourceExecutionError("preflight_failed", boundedProviderError(source, error));
+  }
+}
+
+async function prepareSource(source: CrawlPlanSource, provider: SourceProvider) {
+  try {
+    if (provider.prepare) return sourcePreparationSchema.parse(await provider.prepare(source));
+    await provider.preflight(source);
+    return sourcePreparationSchema.parse({ status: "ready", message: `${source.name} 已通过运行准备检查。` });
+  } catch (error) {
+    throw new SourceExecutionError("preflight_failed", boundedProviderError(source, error));
+  }
+}
+
+function requireNoExecutionBlockers(source: CrawlPlanSource) {
+  if (source.executionBlockers.length > 0) {
+    throw new SourceExecutionError("invalid_state", `来源仍有执行阻塞：${source.executionBlockers.join("；")}`);
   }
 }
 

@@ -7,7 +7,7 @@ date: 2026-08-20
 
 ## 简单说明
 
-计划不再只是说明文字。每个来源必须指向仓库里真实存在的 Provider，并冻结入口、品类筛选、请求预算、频率、停止条件和原始输出。用户确认计划后仍不会访问网站；只有再点击“开始抓取”，系统才从 PostgreSQL 重读该版本并执行。最终得到可查看、可导出的 Source Run、对象和不可变快照。登录、验证码、拒绝或风控会如实停止，不会绕过。
+计划不再只是说明文字。每个来源必须指向仓库里真实存在的 Provider，并冻结入口、品类筛选、请求预算、频率、停止条件和原始输出。用户确认计划后，系统先准备项目专用浏览器并检查端口与登录；准备不创建抓取记录，完成后才允许点击“开始抓取”。最终得到可查看、可导出的 Source Run、对象和不可变快照。登录、验证码、拒绝或风控会如实要求人工处理或停止，不会绕过。
 
 ## 背景
 
@@ -18,8 +18,9 @@ date: 2026-08-20
 - 版本化 Crawl Plan 是唯一 active plan 事实源；旧 plan 只读，不参与确认或启动。
 - 每个 active source 冻结 Provider key/version、Provider 已校验配置、真实入口、访问政策、请求预算、停止政策和原始输出政策。
 - composition root 只注入当前真实 Provider map，不建设动态 registry/plugin discovery。
-- 计划确认先解析最新 task revision、拒绝 blockers，再由对应 Provider 校验配置并 preflight；确认不创建 Source Run。
-- Start 只接受 plan identity、task revision 与 plan version；服务端从 PostgreSQL 重读 confirmed plan，重复 preflight 后才创建 Source Run。
+- 计划确认先解析最新 task revision、拒绝 blockers，再由对应 Provider 做纯结构校验；确认不依赖浏览器运行态，也不创建 Source Run。
+- Prepare 只接受 plan identity、task revision 与 plan version；服务端重读 confirmed plan，启动或连接项目专用浏览器并返回临时 readiness，不持久化第二套状态。
+- Start 使用同一 identity/revision/version 重读 confirmed plan，重复最终 preflight 后才创建 Source Run。
 - 首版使用前台 SSE。连接关闭或取消记为 `stopped`；不增加后台队列、自动恢复或模型调用。
 - Provider 只负责来源 mechanics。首个 `jd.catalog-product@1.0.0` 使用 loopback CDP、明确 `include_text/exclude_text`、请求预算 2、最小间隔 10 秒和零重试；不读取日常 Profile，不保存登录页内容。
 - Source Dataset 通过一个事务写入口创建/复用 Source Object、追加不可变 Snapshot、更新计数；Web/API 只读取和投影。
@@ -30,3 +31,7 @@ date: 2026-08-20
 - 通用 contract 不出现冰箱、京东、SKU 或价格字段；品类词和排除词只存在于计划中的 Provider 配置，JD 页面机制只存在于 Provider。
 - 自动化必须覆盖 preflight、confirmed plan 重读、显式 Start、幂等写入、停止与导出；真实验收必须独立报告 passed/failed/blocked/untested。
 - 阶段 1C/1D 的首个纵切片只证明一个京东目录页和一个详情页，不代表完整京东平台覆盖。
+
+## 2026-08-21 修订：确认与运行准备分离
+
+原“确认时执行运行态 preflight”被本修订替代。原因是 9222 和登录状态会随本机环境变化，不是 Crawl Plan 的业务事实；把它放在确认按钮会让一个合法计划因为 Chrome 未启动而无法确认。Source Execution 现通过显式 Prepare 管理这段临时生命周期：用 Playwright `launchPersistentContext` 和 Git 忽略的独立 Profile 启动系统 Chrome，校验 loopback CDP，再返回 `ready` 或登录/验证人工动作。Start 仍保留最终 preflight，因此准备完成后状态发生变化也不会带病创建运行记录。

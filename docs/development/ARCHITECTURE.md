@@ -110,23 +110,24 @@ Codex 不拥有产品 thread、任务或来源数据。每个采访 runtime 只�
 
 ### 5.4 Crawl Planning Module
 
-读取一个当前 Capture Task revision，通过注入式 Codex runtime 生成并校验版本化 Crawl Plan Draft，保存 Planning Run 有序时间线，并在用户显式确认时推进 plan version 状态。它独占“来源、内容、数量”的计划事实；active 清单必须逐项对账全部采访来源候选和全部原文 topic，每个 target 必须绑定真实 Provider 配置。Draft 保存前调用 Provider 的纯结构 `validate`，确认时再调用依赖本机运行态的 `preflight`，不能把“JSON 可解析”冒充“可直接开始”。说明书、PDF 和附件表格不能用入口页中的链接文字冒充正文；精确入口本身为 PDF/Office 文档时，该 exact target 就是正文并按原始附件留存。API/Web 不复制 Planner 规则，Codex 不写 task ID/revision，也不启动 Source Run。
+读取一个当前 Capture Task revision，通过注入式 Codex runtime 生成并校验版本化 Crawl Plan Draft，保存 Planning Run 有序时间线，并在用户显式确认时推进 plan version 状态。它独占“来源、内容、数量”的计划事实；active 清单必须逐项对账全部采访来源候选和全部原文 topic，每个 target 必须绑定真实 Provider 配置。Draft 保存和确认只调用 Provider 的纯结构 `validate`；浏览器、端口和登录等可变化运行条件不属于计划确认事实。说明书、PDF 和附件表格不能用入口页中的链接文字冒充正文；精确入口本身为 PDF/Office 文档时，该 exact target 就是正文并按原始附件留存。API/Web 不复制 Planner 规则，Codex 不写 task ID/revision，也不启动 Source Run。
 
-规划运行复用现有 App Server `stdio`、ephemeral thread、Skill input、web search、官方 `outputSchema` 和 typed SSE；本地 Zod 再校验领域 contract。一个规划 runtime 复用一条已初始化连接，每次运行新建 ephemeral thread；连接关闭则中止，官方 `turn/interrupt` 负责取消，已完成结果可刷新恢复。不为最长十分钟的有界规划引入 DBOS、后台队列或第二套 Session。
+规划运行复用现有 App Server `stdio`、ephemeral thread、Skill input、web search、官方 `outputSchema` 和 typed SSE；本地 Zod 再校验领域 contract。一个规划 runtime 复用一条已初始化连接，每次运行新建一个 ephemeral thread；首次结构化输出未通过现有解析、清单或 Provider 校验时，只把原错误回填到同一 thread 修正一次，并在第二个 turn 继续附同一 `outputSchema`。它不新增或复制校验，不重开 thread、不换模型、不处理传输/认证失败；第二次仍失败即关闭 Planning Run。连接关闭则中止，官方 `turn/interrupt` 负责取消，已完成结果可刷新恢复。不为最长十分钟的有界规划引入 DBOS、后台队列或第二套 Session。
 
 ### 5.5 Source Access
 
-保留 Crawlee 临时存储配置以及 `p-queue`、`cockatiel` 的频控、取消和熔断。composition root 以显式 map 注入 Provider，不建设动态插件系统。`jd.catalog-product@1.0.0` 只接受 loopback CDP、一个 `www.jd.com` 入口和计划中的 `include_text/exclude_text`，固定产生目录与首个合格详情两个 target。`public.web-resource@1.0.0` 复用 Got、robots-parser、Cheerio 与 Node DNS/net，只访问计划冻结的公网 HTTPS 443 精确 URL，或从已保存前序 HTML 按完整文字唯一跟进一次同源链接；精确 URL 比较先走标准 URL 规范化，不能把根 URL 与其尾斜杠形式误判成两个资源；拒绝 redirect、私网地址、自由发现、递归、Cookie/认证和自动重试。Provider 纯结构校验在 Draft 保存前执行，preflight 在确认和启动时重复执行；登录、验证码、拒绝或风控产生 typed stop，不保存受限页面内容、不读取日常 Profile。
+保留 Crawlee 临时存储配置以及 `p-queue`、`cockatiel` 的频控、取消和熔断。composition root 以显式 map 注入 Provider，不建设动态插件系统。`jd.catalog-product@1.0.0` 只接受 loopback CDP、一个 `www.jd.com` 入口和计划中的 `include_text/exclude_text`，固定产生目录与首个合格详情两个 target。它在显式 Prepare 时优先连接 9222；端口不存在则由 Playwright 用项目独立 Profile 启动系统 Chrome，再检查端口和京东登录。未登录或出现验证页只返回 typed 人工动作并把页面置前，不保存页面、Cookie 或认证材料。`public.web-resource@1.0.0` 复用 Got、robots-parser、Cheerio 与 Node DNS/net，只访问计划冻结的公网 HTTPS 443 精确 URL，或从已保存前序 HTML 按完整文字唯一跟进一次同源链接；精确 URL 比较先走标准 URL 规范化，不能把根 URL 与其尾斜杠形式误判成两个资源；拒绝 redirect、私网地址、自由发现、递归、Cookie/认证和自动重试。Provider 纯结构校验在 Draft 保存和确认时执行，运行准备与 Start 最终 preflight 属于 Source Execution；登录、验证码、拒绝或风控产生 typed stop，不读取日常 Profile。
 
 ### 5.6 Source Execution
 
-读取 confirmed Crawl Plan 的精确 task revision/version，为每个 source 和 target 创建可对账运行事实，并把带 `targetKey` 的 Provider observation 通过 Source Dataset 单一事务入口持久化。未知、重复、未完成 target 或数量不一致失败关闭；source 完成不能由一个笼统 Provider 结束事件推导。首版复用 SSE 前台运行；断开或取消记为 stopped。运行中不调用 Codex，不解释自然语言 traversal，不自建队列、恢复或第二套计划事实源。
+读取 confirmed Crawl Plan 的精确 task revision/version。显式 Prepare 只协调 Provider 的临时运行准备并返回 `ready` 或 `action_required`，不持久化另一套业务状态、不创建 Source Run；Web 只有在当前页面拿到 `ready` 后才开放 Start。Start 仍重读同一 confirmed plan 并执行最终 preflight，随后才为每个 source 和 target 创建可对账运行事实，并把带 `targetKey` 的 Provider observation 通过 Source Dataset 单一事务入口持久化。未知、重复、未完成 target 或数量不一致失败关闭；source 完成不能由一个笼统 Provider 结束事件推导。首版复用 SSE 前台运行；断开或取消记为 stopped。运行中不调用 Codex，不解释自然语言 traversal，不自建队列、恢复或第二套计划事实源。
 
 ## 6. 物理边界
 
 - PostgreSQL `workbench` schema：对话、任务、计划元数据、运行、来源对象和快照索引；
 - 原始附件内容存储：本地 cacache CAS；PostgreSQL 只保存 digest、大小、媒体类型、来源 URL 与 snapshot 关系；
 - Cookie、Profile、密码、认证 Header 和验证码信息不得入库、日志、Git 或导出；
+- 项目专用浏览器 Profile 只位于 Git 忽略的本机 `data/`，由 Source Access 生命周期使用；
 - 不使用结束即删除的隔离数据库冒充正式数据；
 - 本地两台电脑的数据不通过 Git 同步。
 

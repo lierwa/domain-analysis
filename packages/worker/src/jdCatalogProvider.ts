@@ -1,25 +1,39 @@
 import { createHash } from "node:crypto";
-import type { CrawlPlanSource, SourceProviderEvent } from "@domain-analysis/shared";
-import { chromium, type Browser, type Page } from "playwright-core";
+import type { CrawlPlanSource, SourcePreparation, SourceProviderEvent } from "@domain-analysis/shared";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { createPacedAccessGate } from "./pacedAccessGate";
+import { SourceAccessError } from "./sourceAccessError";
 
-export interface JdCatalogProviderOptions { endpointUrl: string; }
+export interface JdCatalogProviderOptions { endpointUrl: string; userDataDir: string; }
 
 export interface JdCatalogProvider {
   readonly key: string;
   readonly version: string;
   validate(source: CrawlPlanSource): void;
+  prepare(source: CrawlPlanSource): Promise<SourcePreparation>;
   preflight(source: CrawlPlanSource): Promise<void>;
   collect(source: CrawlPlanSource, runId: string, signal?: AbortSignal): AsyncIterable<SourceProviderEvent>;
+  close(): Promise<void>;
 }
 
-export function createJdCatalogProvider(options: JdCatalogProviderOptions): JdCatalogProvider {
+export function createJdCatalogProvider(
+  options: JdCatalogProviderOptions,
+  browserType: Pick<typeof chromium, "connectOverCDP" | "launchPersistentContext"> = chromium,
+): JdCatalogProvider {
   const endpoint = new URL(options.endpointUrl);
   if (endpoint.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname)) {
     throw new Error("JD CDP endpoint 必须是本机 loopback HTTP");
   }
+  if (!endpoint.port) throw new Error("JD CDP endpoint 必须显式配置本机端口");
   let browser: Browser | undefined;
-  const connect = async () => browser ??= await chromium.connectOverCDP(options.endpointUrl);
+  let ownedContext: BrowserContext | undefined;
+  let loginPage: Page | undefined;
+  const context = () => ensureBrowserContext(options, endpoint, browserType, {
+    get browser() { return browser; },
+    set browser(value) { browser = value; },
+    get ownedContext() { return ownedContext; },
+    set ownedContext(value) { ownedContext = value; },
+  });
   return {
     key: "jd.catalog-product",
     version: "1.0.0",
@@ -58,21 +72,28 @@ export function createJdCatalogProvider(options: JdCatalogProviderOptions): JdCa
       }
       if (source.stopPolicy.requestBudget !== 2) throw new Error("JD 首个有界来源请求预算必须为 2");
     },
+    async prepare(source) {
+      this.validate(source);
+      const readiness = await checkReadiness(await context(), source.key, source.entryUrls[0]!, loginPage);
+      loginPage = readiness.page;
+      return readiness.result;
+    },
     async preflight(source) {
       this.validate(source);
-      const connected = await connect();
-      if (!connected.contexts()[0]) throw new Error("已连接 Chrome 没有可用上下文");
+      const readiness = await checkReadiness(await context(), source.key, source.entryUrls[0]!, loginPage);
+      loginPage = readiness.page;
+      if (readiness.result.status === "action_required") {
+        throw new SourceAccessError(readiness.result.action, readiness.result.message);
+      }
     },
     async *collect(source, _runId, signal) {
-      const connected = await connect();
-      const context = connected.contexts()[0];
-      if (!context) throw new Error("已连接 Chrome 没有可用上下文");
+      const browserContext = await context();
       const entry = source.entryUrls[0]!;
       const catalogTarget = source.targets.find((target) => targetOperation(target) === "catalog")!;
       const detailTarget = source.targets.find((target) => targetOperation(target) === "first_matching_product")!;
       const gate = createPacedAccessGate({ ...source.accessPolicy, jitterMs: { min: 0, max: 0 }, batchSize: 1, batchCooldownMs: 1 });
       if (signal) signal.addEventListener("abort", () => gate.cancel("operator_cancelled"), { once: true });
-      const catalog = await gate.schedule("catalog", () => capture(context.newPage(), entry, signal));
+      const catalog = await gate.schedule("catalog", () => capture(browserContext.newPage(), entry, signal));
       yield captureEvent(catalogTarget.key, "catalog", source.key, entry, catalog);
       if (catalog.state !== "accessible") return;
       yield { type: "target.completed", targetKey: catalogTarget.key };
@@ -81,12 +102,82 @@ export function createJdCatalogProvider(options: JdCatalogProviderOptions): JdCa
       const detailUrl = catalog.cards.find((card) => card.text.includes(configuration.include_text!)
         && excluded.every((term) => !card.text.includes(term)))?.url;
       if (!detailUrl) throw new Error("京东目录没有符合 include_text/exclude_text 的商品详情链接");
-      const detail = await gate.schedule("detail", () => capture(context.newPage(), detailUrl, signal));
+      const detail = await gate.schedule("detail", () => capture(browserContext.newPage(), detailUrl, signal));
       yield captureEvent(detailTarget.key, "product", new URL(detailUrl).pathname, detailUrl, detail);
       if (detail.state === "accessible") yield { type: "target.completed", targetKey: detailTarget.key };
       await gate.onIdle();
     },
+    async close() {
+      await loginPage?.close().catch(() => undefined);
+      if (ownedContext) await ownedContext.close().catch(() => undefined);
+      loginPage = undefined;
+      ownedContext = undefined;
+      browser = undefined;
+    },
   };
+}
+
+async function ensureBrowserContext(
+  options: JdCatalogProviderOptions,
+  endpoint: URL,
+  browserType: Pick<typeof chromium, "connectOverCDP" | "launchPersistentContext">,
+  state: { browser?: Browser; ownedContext?: BrowserContext },
+) {
+  if (state.ownedContext?.browser()?.isConnected()) return state.ownedContext;
+  state.ownedContext = undefined;
+  const connected = state.browser?.isConnected() ? state.browser.contexts()[0] : undefined;
+  if (connected) return connected;
+  try {
+    state.browser = await browserType.connectOverCDP(options.endpointUrl, { timeout: 3_000 });
+    const connectedContext = state.browser.contexts()[0];
+    if (connectedContext) return connectedContext;
+  } catch {
+    // 端口未启动时进入下面的项目专用 Chrome 启动路径。
+  }
+  try {
+    state.ownedContext = await browserType.launchPersistentContext(options.userDataDir, {
+      channel: "chrome",
+      headless: false,
+      args: [`--remote-debugging-address=${endpoint.hostname === "localhost" ? "127.0.0.1" : endpoint.hostname}`,
+        `--remote-debugging-port=${endpoint.port}`],
+    });
+    state.browser = await browserType.connectOverCDP(options.endpointUrl, { timeout: 5_000 });
+    if (!state.browser.contexts()[0]) throw new Error("9222 没有可用浏览器上下文");
+    // WHY：CDP 只证明端口可用；页面操作继续走 Playwright 自己启动的高保真 persistent context。
+    return state.ownedContext;
+  } catch {
+    await state.ownedContext?.close().catch(() => undefined);
+    state.ownedContext = undefined;
+    throw new Error(`无法启动或连接项目专用 Chrome（${endpoint.host}），请关闭占用该端口的其他程序后重试`);
+  }
+}
+
+async function checkReadiness(context: BrowserContext, sourceKey: string, entryUrl: string, previousPage?: Page) {
+  const page = previousPage && !previousPage.isClosed() ? previousPage : await context.newPage();
+  try {
+    const response = await page.goto(entryUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page.waitForTimeout(2_000);
+    const text = await page.locator("body").innerText().catch(() => "");
+    const state = classify(page.url(), response?.status(), text);
+    if (state === "accessible") {
+      await page.close();
+      return { page: undefined, result: { status: "ready", message: "项目专用 Chrome、9222 端口和京东登录状态均已就绪。" } } as const;
+    }
+    if (state === "login_required" || state === "verification_required") {
+      await page.bringToFront();
+      return { page, result: { status: "action_required", action: state, sourceKey,
+        message: state === "login_required"
+          ? "项目专用 Chrome 已打开京东登录页，请扫码登录后点击“已完成，重新检查”。"
+          : "项目专用 Chrome 出现京东验证页，请人工完成后点击“已完成，重新检查”。" } } as const;
+    }
+    await page.close();
+    throw new SourceAccessError(state === "source_error" ? "source_abnormal" : state,
+      "京东入口当前不可访问，未开始抓取");
+  } catch (error) {
+    if (error instanceof SourceAccessError) throw error;
+    await page.close().catch(() => undefined);
+    throw new Error("京东登录状态检查失败，请在项目专用 Chrome 中确认页面可访问后重试");
+  }
 }
 
 async function capture(pagePromise: Promise<Page>, url: string, signal?: AbortSignal) {

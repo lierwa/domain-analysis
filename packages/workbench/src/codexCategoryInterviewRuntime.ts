@@ -191,7 +191,7 @@ function interviewPrompt(input: CategoryInterviewRuntimeInput) {
     "来源平台、网站与渠道是系统调查事实，不能提出给负责人选择；京东适用时按 Skill 默认覆盖，淘宝等平台只能按当前真实能力记录为后续候选。不得把默认采集内容改写成采集深度问题。若本轮把当前品类切换为另一品类，必须先调用 web search 完成新调查，再提出该品类的负责人问题或形成草案。只要本轮仍有新的 proposedDecision 或 user unresolved item，就必须省略 draftMarkdown；本轮 decisionResolution 已明确解决最后一个旧问题时可以同时形成草案。",
     "生成 draftMarkdown 前，必须逐项检查会改变纳入商品集合、市场范围或观察时间范围的边界依据。只有用户当前或历史原文、confirmed Interview Decision、Skill 明确批准的系统默认，或不包含负责人选择的客观调查事实，才能直接成为草案边界。其余会改变结果的边界必须选择影响最大的一个形成 proposedDecision，并省略 draftMarkdown；推荐答案只是 proposal，不等于用户确认。这不是最低问题数要求，用户已完整给出必要范围时允许零问题生成草案。",
     "draftMarkdown 是给人审阅的采访范围草案，不是 CaptureTask 数据结构。它只能使用普通 Markdown，总结用户原始要求、已确认范围、纳入/排除项、采访回答和调查事实；来源可以用自然语言和链接记录。严禁在这里输出 JSON、taskCandidate、sourceCandidates、observedAt、decisionIds 或正式 Crawl Plan。",
-    "生成 draftMarkdown 时必须同时返回 draftCoverage：零售/市场入口至少 1 个，品牌官网至少 2 个且属于不同官方站点，标准/监管至少 1 个，技术原理至少 1 个。每个 URL 必须来自本会话时间线里已完成的 web_search，并原样写进 draftMarkdown；一个 URL 不能重复或跨角色复用。draftCoverage 只是 Workbench 校验 Markdown 与搜索记录的四组 URL，不是 Capture Task、来源清单或抓取计划；不生成草案时必须省略它。",
+    "生成 draftMarkdown 时必须同时返回 draftCoverage：零售/市场入口至少 1 个，品牌官网至少 2 个且属于不同官方站点，标准/监管至少 1 个，技术原理至少 1 个。每个 URL 必须来自本会话时间线里已完成的 web_search，并原样写进 draftMarkdown；一个 URL 不能重复或跨角色复用。draftCoverage 只是 Workbench 校验 Markdown 与搜索记录的四组 URL；四组 URL 只是最低失败门，不是来源调查的完成标准。每组必须列出草案中该角色的全部 URL，不得只提交最低数量的代表入口；草案必须保留本轮发现且与任务相关的全部独立权威原始入口，包括同一发布者下内容和执行入口不同的资料，直到继续搜索只得到重复、转载、不可执行或明显低权威来源。draftCoverage 不是 Capture Task、来源清单或抓取计划；不生成草案时必须省略它。",
     `Final answer JSON Schema: ${JSON.stringify(codexOutputSchema())}`,
     `Workbench state: ${JSON.stringify(input.session)}`,
     "Current turn 始终是未经预先解释的用户原文，可能同时包含回答、事实补充、纠正、否定或问题；必须逐项承接后再决定本轮状态增量。",

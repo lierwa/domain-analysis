@@ -17,7 +17,10 @@ const sourceProviders = new Map();
 const publicProvider = createPublicWebResourceProvider();
 sourceProviders.set(publicProvider.key, publicProvider);
 if (config.jdCdpEndpoint) {
-  const provider = createJdCatalogProvider({ endpointUrl: config.jdCdpEndpoint });
+  const provider = createJdCatalogProvider({
+    endpointUrl: config.jdCdpEndpoint,
+    userDataDir: path.join(repositoryRoot, "data", "jd-cdp-profile"),
+  });
   sourceProviders.set(provider.key, provider);
 }
 const workbench = await openDataCollectionWorkbench({

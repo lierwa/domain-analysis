@@ -6,6 +6,7 @@ import {
   type CrawlPlan,
   type CrawlPlanningEvent,
   type InterviewMessageTimelinePart,
+  type SourcePreparation,
 } from "@domain-analysis/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronRight, LoaderCircle, RefreshCw, Square } from "lucide-react";
@@ -14,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   confirmCrawlPlan,
   fetchCrawlPlanning,
+  prepareCrawlPlan,
   streamCrawlPlanningRun,
   streamSourceRun,
 } from "../lib/api";
@@ -30,10 +32,14 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
   const [runError, setRunError] = useState<string>();
   const [isRunning, setIsRunning] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
+  const [preparation, setPreparation] = useState<SourcePreparation>();
+  const [isPreparing, setIsPreparing] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
   const abortRef = useRef<AbortController>();
 
   useEffect(() => () => abortRef.current?.abort(), []);
+  const activePlanId = planning.data?.plans[0]?.id;
+  useEffect(() => setPreparation(undefined), [task.id, activePlanId]);
 
   async function runPlanning() {
     setRunError(undefined);
@@ -76,17 +82,40 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
   async function confirm(plan: CrawlPlan) {
     setRunError(undefined);
     setIsConfirming(true);
+    let confirmed: CrawlPlan | undefined;
     try {
       const view = await confirmCrawlPlan(task.id, plan.id, task.revision);
       queryClient.setQueryData(queryKey, view);
+      confirmed = view.plans.find((item) => item.id === plan.id && item.status === "confirmed");
     } catch (error) {
       setRunError(error instanceof Error ? error.message : "抓取计划确认失败");
     } finally {
       setIsConfirming(false);
     }
+    if (confirmed) await prepareEnvironment(confirmed);
+  }
+
+  async function prepareEnvironment(plan: CrawlPlan) {
+    setRunError(undefined);
+    setPreparation(undefined);
+    setIsPreparing(true);
+    try {
+      setPreparation(await prepareCrawlPlan(task.id, plan.id, {
+        expectedTaskRevision: task.revision,
+        expectedPlanVersion: plan.version,
+      }));
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "抓取环境准备失败");
+    } finally {
+      setIsPreparing(false);
+    }
   }
 
   async function execute(plan: CrawlPlan) {
+    if (preparation?.status !== "ready") {
+      setRunError("请先完成抓取环境准备和登录检查");
+      return;
+    }
     setRunError(undefined); setIsExecuting(true);
     const controller = new AbortController(); abortRef.current = controller;
     try {
@@ -152,6 +181,9 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
           currentTaskRevision={task.revision}
           isConfirming={isConfirming}
           onConfirm={() => void confirm(latestPlan)}
+          preparation={preparation}
+          isPreparing={isPreparing}
+          onPrepare={() => void prepareEnvironment(latestPlan)}
           isExecuting={isExecuting}
           onExecute={() => void execute(latestPlan)}
         />
@@ -198,6 +230,9 @@ export function CrawlPlanCard({
   currentTaskRevision,
   isConfirming,
   onConfirm,
+  preparation,
+  isPreparing,
+  onPrepare,
   isExecuting,
   onExecute,
 }: {
@@ -205,6 +240,9 @@ export function CrawlPlanCard({
   currentTaskRevision: number;
   isConfirming: boolean;
   onConfirm: () => void;
+  preparation?: SourcePreparation;
+  isPreparing: boolean;
+  onPrepare: () => void;
   isExecuting: boolean;
   onExecute: () => void;
 }) {
@@ -247,7 +285,17 @@ export function CrawlPlanCard({
             该计划不是无阻塞的完整执行清单，不能确认；请按阻塞项重新规划。
           </p>
         )}
-        {plan.status === "confirmed" && current && !hasExecutionBlockers && isExecutionChecklist && (
+        {plan.status === "confirmed" && current && !hasExecutionBlockers && isExecutionChecklist
+          && preparation?.status !== "ready" && (
+          <button type="button" className="button-primary" disabled={isPreparing} onClick={onPrepare}>
+            {isPreparing
+              ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+              : <RefreshCw className="h-4 w-4" aria-hidden="true" />}
+            {isPreparing ? "正在准备…" : preparation?.status === "action_required" ? "已完成，重新检查" : "准备抓取环境"}
+          </button>
+        )}
+        {plan.status === "confirmed" && current && !hasExecutionBlockers && isExecutionChecklist
+          && preparation?.status === "ready" && (
           <button type="button" className="button-primary" disabled={isExecuting} onClick={onExecute}>
             {isExecuting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             {isExecuting ? "正在抓取…" : "开始抓取"}
@@ -259,6 +307,12 @@ export function CrawlPlanCard({
         <p className="text-xs leading-5 text-muted">
           确认只冻结来源、内容和数量，不创建 Source Run，也不开始抓取。
         </p>
+        {plan.status === "confirmed" && preparation && (
+          <p className={`w-full text-sm leading-6 ${preparation.status === "ready" ? "text-emerald-700" : "text-amber-800"}`}
+            role={preparation.status === "action_required" ? "alert" : "status"}>
+            {preparation.message}
+          </p>
+        )}
       </div>
     </section>
   );

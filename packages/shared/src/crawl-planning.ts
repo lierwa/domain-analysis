@@ -263,6 +263,19 @@ export const startCrawlPlanSchema = z.object({
   expectedPlanVersion: z.number().int().positive(),
 }).strict();
 
+export const sourcePreparationSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("ready"),
+    message: z.string().trim().min(1).max(1_000),
+  }).strict(),
+  z.object({
+    status: z.literal("action_required"),
+    action: z.enum(["login_required", "verification_required"]),
+    sourceKey: keySchema,
+    message: z.string().trim().min(1).max(1_000),
+  }).strict(),
+]);
+
 export const crawlPlanningRuntimeOutputSchema = z.object({
   assistantText: z.string().trim().min(1).max(40_000),
   planCandidate: crawlPlanCandidateSchema,
@@ -293,6 +306,7 @@ export type CrawlPlanningView = z.infer<typeof crawlPlanningViewSchema>;
 export type CrawlPlanningRunRequest = z.infer<typeof crawlPlanningRunRequestSchema>;
 export type CrawlPlanningRuntimeOutput = z.infer<typeof crawlPlanningRuntimeOutputSchema>;
 export type CrawlPlanningEvent = z.infer<typeof crawlPlanningEventSchema>;
+export type SourcePreparation = z.infer<typeof sourcePreparationSchema>;
 
 function addExactConfigurationIssues(
   configuration: Array<{ key: string }>,

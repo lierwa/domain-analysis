@@ -58,14 +58,9 @@ export async function openDataCollectionWorkbench(
   const providerValidation = resolveSourceProvider ? (source: Parameters<SourceProvider["validate"]>[0]) => {
     resolveSourceProvider(source).validate(source);
   } : undefined;
-  const providerPreflight = resolveSourceProvider ? async (source: Parameters<SourceProvider["validate"]>[0]) => {
-    const provider = resolveSourceProvider(source);
-    provider.validate(source);
-    await provider.preflight(source);
-  } : undefined;
   const crawlPlanning = options.crawlPlanningRuntime
     ? createCrawlPlanningModule(db, captureTasks, options.crawlPlanningRuntime,
-      { ...options.crawlPlanningModule, validateSource: providerValidation, preflightSource: providerPreflight })
+      { ...options.crawlPlanningModule, validateSource: providerValidation })
     : undefined;
   return {
     captureTasks,
@@ -81,6 +76,7 @@ export async function openDataCollectionWorkbench(
       await Promise.all([
         categoryInterviewRuntime?.close?.(),
         crawlPlanningRuntime?.close?.(),
+        ...[...new Set(options.sourceProviders?.values() ?? [])].map((provider) => provider.close?.()),
       ]);
       await db.$client.end();
     },

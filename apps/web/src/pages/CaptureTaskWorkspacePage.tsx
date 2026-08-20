@@ -57,8 +57,9 @@ export function CaptureTaskWorkspacePage() {
 
   function showInterview(sessionId: string) {
     window.localStorage.setItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY, sessionId);
-    setEditingSessionId(sessionId);
     setRevisionError(undefined);
+    if (mode === "new" && editingSessionId === sessionId) return;
+    setEditingSessionId(sessionId);
     setNewTaskKey((value) => value + 1);
     setMode("new");
   }
@@ -68,13 +69,16 @@ export function CaptureTaskWorkspacePage() {
     queryClient.setQueryData(["capture-task", task.id], task);
     void queryClient.invalidateQueries({ queryKey: ["capture-tasks"] });
     void queryClient.invalidateQueries({ queryKey: ["category-interviews"] });
-    setEditingSessionId(undefined);
     showTask(task.id);
   }
 
   const handleInterviewChanged = useCallback((session: InterviewSession) => {
     queryClient.setQueryData<InterviewSession[]>(["category-interviews"], (current = []) =>
       upsertInterviewPreservingOrder(current, session));
+    if (session.phase !== "confirmed") {
+      window.localStorage.setItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY, session.id);
+      setEditingSessionId(session.id);
+    }
   }, [queryClient]);
 
   function startNewTask() {
@@ -161,7 +165,7 @@ export function CaptureTaskWorkspacePage() {
       <main className={`flex min-h-0 min-w-0 flex-col ${mode === "new" ? "lg:overflow-hidden" : "lg:overflow-y-auto"}`}>
         {mode === "new" ? (
           <InterviewWorkspace
-            instanceKey={`${newTaskKey}-${editingSessionId ?? "new"}`}
+            instanceKey={`${newTaskKey}`}
             sessionId={editingSessionId}
             onTaskCreated={handleTaskCreated}
             onSessionChanged={handleInterviewChanged}

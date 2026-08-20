@@ -109,11 +109,10 @@ describeWithPostgres("抓取计划版本与确认", () => {
     expect(view.runs[0]).toMatchObject({ status: "failed" });
   });
 
-  it("Provider 结构校验在草稿保存前执行，运行态预检只在确认时执行", async () => {
+  it("草稿保存和确认只执行 Provider 结构校验，不依赖运行态预检", async () => {
     const phases: string[] = [];
     const opened = await openModules(taskContent(), {
       validateSource: (source) => { phases.push(`validate:${source.key}`); },
-      preflightSource: async (source) => { phases.push(`preflight:${source.key}`); },
     });
     db = opened.db;
     taskId = opened.task.id;
@@ -127,7 +126,7 @@ describeWithPostgres("抓取计划版本与确认", () => {
 
     await opened.planning.confirm({ taskId, planId: view.plans[0]!.id, expectedTaskRevision: 1 });
     expect(phases.slice(5)).toEqual([
-      "preflight:jd", "preflight:brand", "preflight:brand-secondary", "preflight:standard", "preflight:technical",
+      "validate:jd", "validate:brand", "validate:brand-secondary", "validate:standard", "validate:technical",
     ]);
   });
 
@@ -217,6 +216,31 @@ describeWithPostgres("抓取计划版本与确认", () => {
         { key: "link_text", value: "查看说明书" },
       ] as never,
     } as never);
+    opened.runtime.push(output);
+
+    const events = await collect(opened.planning.run({ taskId, expectedTaskRevision: 1 }));
+
+    expect(events).toContainEqual(expect.objectContaining({ type: "run.completed" }));
+    expect((await opened.planning.get(taskId))!.plans).toHaveLength(1);
+  });
+
+  it("京东搜索入口作为真实 target 时不再被强制要求使用 JD catalog Provider", async () => {
+    const content = taskContent();
+    const entryUrl = "https://search.jd.com/Search?keyword=%E5%86%B0%E7%AE%B1";
+    content.sourceCandidates[0] = candidate("candidate-jd", "京东搜索", entryUrl, "retailer");
+    const opened = await openModules(content);
+    db = opened.db;
+    taskId = opened.task.id;
+    const output = validOutput(1);
+    const jd = output.planCandidate.sources[0]!;
+    jd.entryUrls = [entryUrl];
+    jd.provider = { key: "public.web-resource", version: "1.0.0", configuration: [
+      { key: "mode", value: "exact_https" }, { key: "maximum_bytes", value: 5_000_000 },
+    ] };
+    jd.targets = [{
+      ...target("jd-search", "品牌与型号"), taskTopics: ["品牌与型号", "配置参数"],
+      providerConfiguration: [{ key: "url", value: entryUrl }],
+    }];
     opened.runtime.push(output);
 
     const events = await collect(opened.planning.run({ taskId, expectedTaskRevision: 1 }));

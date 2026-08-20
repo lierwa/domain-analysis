@@ -12,6 +12,9 @@ describe("抓取计划投影", () => {
         currentTaskRevision={2}
         isConfirming={false}
         onConfirm={vi.fn()}
+        preparation={undefined}
+        isPreparing={false}
+        onPrepare={vi.fn()}
         isExecuting={false}
         onExecute={vi.fn()}
       />,
@@ -29,17 +32,34 @@ describe("抓取计划投影", () => {
     expect(html).not.toContain(">开始抓取<");
   });
 
-  it("已确认计划显示独立开始动作与 Provider 事实", () => {
+  it("已确认计划必须先准备环境，通过后才显示开始动作", () => {
     const html = renderToString(<CrawlPlanCard plan={plan("confirmed")} currentTaskRevision={2}
-      isConfirming={false} onConfirm={vi.fn()} isExecuting={false} onExecute={vi.fn()} />);
+      isConfirming={false} onConfirm={vi.fn()} preparation={undefined} isPreparing={false}
+      onPrepare={vi.fn()} isExecuting={false} onExecute={vi.fn()} />);
     expect(html).toContain("jd.catalog-product@1.0.0");
-    expect(html).toContain("开始抓取");
+    expect(html).toContain("准备抓取环境");
+    expect(html).not.toContain(">开始抓取<");
     expect(html).not.toContain("确认此计划");
+
+    const loginHtml = renderToString(<CrawlPlanCard plan={plan("confirmed")} currentTaskRevision={2}
+      isConfirming={false} onConfirm={vi.fn()} preparation={{ status: "action_required",
+        action: "login_required", sourceKey: "jd", message: "请扫码登录" }} isPreparing={false}
+      onPrepare={vi.fn()} isExecuting={false} onExecute={vi.fn()} />);
+    expect(loginHtml).toContain("已完成，重新检查");
+    expect(loginHtml).toContain("请扫码登录");
+    expect(loginHtml).not.toContain(">开始抓取<");
+
+    const readyHtml = renderToString(<CrawlPlanCard plan={plan("confirmed")} currentTaskRevision={2}
+      isConfirming={false} onConfirm={vi.fn()} preparation={{ status: "ready", message: "已就绪" }}
+      isPreparing={false} onPrepare={vi.fn()} isExecuting={false} onExecute={vi.fn()} />);
+    expect(readyHtml).toContain("开始抓取");
+    expect(readyHtml).toContain("已就绪");
   });
 
   it("来源和内部抓取项默认全部折叠", () => {
     const html = renderToString(<CrawlPlanCard plan={plan("confirmed")} currentTaskRevision={2}
-      isConfirming={false} onConfirm={vi.fn()} isExecuting={false} onExecute={vi.fn()} />);
+      isConfirming={false} onConfirm={vi.fn()} preparation={undefined} isPreparing={false}
+      onPrepare={vi.fn()} isExecuting={false} onExecute={vi.fn()} />);
     const sourceDetails = html.match(/<details[^>]*data-crawl-plan-source="true"[^>]*>/g) ?? [];
     const targetDetails = html.match(/<details[^>]*data-crawl-plan-target="true"[^>]*>/g) ?? [];
 
@@ -50,7 +70,8 @@ describe("抓取计划投影", () => {
 
   it("存在执行阻塞时不把纸面候选显示为可确认计划", () => {
     const html = renderToString(<CrawlPlanCard plan={plan("draft", ["provider_missing"])} currentTaskRevision={2}
-      isConfirming={false} onConfirm={vi.fn()} isExecuting={false} onExecute={vi.fn()} />);
+      isConfirming={false} onConfirm={vi.fn()} preparation={undefined} isPreparing={false}
+      onPrepare={vi.fn()} isExecuting={false} onExecute={vi.fn()} />);
     expect(html).toContain("有执行阻塞");
     expect(html).toContain("不能确认；请按阻塞项重新规划");
     expect(html).not.toContain("确认此计划");

@@ -309,6 +309,8 @@ async function handle(message) {
     if (!prompt.includes("不得把默认采集内容改写成采集深度问题")) process.exit(10);
     if (!prompt.includes("draftCoverage 只是 Workbench 校验 Markdown 与搜索记录的四组 URL")) process.exit(11);
     if (!prompt.includes("逐项检查会改变纳入商品集合、市场范围或观察时间范围的边界依据")) process.exit(12);
+    if (!prompt.includes("四组 URL 只是最低失败门，不是来源调查的完成标准")) process.exit(13);
+    if (!prompt.includes("不得只提交最低数量的代表入口")) process.exit(14);
     const skill = message.params.input.find((item) => item.type === "skill");
     const normalizedSkillPath = String(skill?.path).replaceAll("\\\\", "/");
     const normalizedCwd = productInterviewCwd.replaceAll("\\\\", "/");
