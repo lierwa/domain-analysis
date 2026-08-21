@@ -52,7 +52,9 @@
   -> 版本化 Crawl Plan Draft
   -> 用户确认 Crawl Plan
   -> 用户显式开始（服务端重读 confirmed plan）
-  -> Provider preflight / 前台 Source Run
+  -> PostgreSQL 持久 Graphile job（HTTP 202 后与页面生命周期分离）
+  -> 持久 Source Collection Batch
+  -> Provider preflight / 服务端 Source Run
   -> Source Dataset (raw)
   -> Workbench 查看 / JSONL、CSV 导出
 ```
@@ -70,9 +72,13 @@
 | 当前已确认抓取范围 | Capture Task | 指向最新确认版本；Crawl Planner 只读指定版本 |
 | 规划过程、搜索活动和结果状态 | Crawl Planning Run | Codex 只交付候选；Web 只投影 |
 | 每个来源抓什么、抓多少、何时停止 | 版本化 Crawl Plan | 用户确认前不能执行；Provider 只执行冻结版本 |
+| 一次 Start 的计划版本、开始/结束与总结果 | Source Collection Batch / PostgreSQL | UI 按批次展示；不能用 Source Run 时间戳推导 |
 | 清单中每个 target 的尝试、状态与计数 | Source Target Attempt | Source Run 汇总只能由 target 事实对账，不从 Provider 结束事件猜测 |
+| 动态发现对象的待抓、运行、完成与终止状态 | Capture Work Item / PostgreSQL | Crawlee 只按稳定 work key 派发，不拥有用户可见完成事实 |
+| 每个实际 HTTP hop 与跨进程访问门状态 | Source Request Attempt / Source Access Gate / PostgreSQL | Source Access 先预留再出网；UI 只投影预算、冷却与熔断事实 |
 | 一次访问发生了什么 | Raw Source Observation | UI 与导出读取 |
 | 来源当时返回的原始内容 | Source Snapshot / Source Asset | 后续清洗只读，不覆盖 |
+| 快照中观察到但未下载的外部资源 URL | Source Resource Reference | Provider 提交原始 URL 与定位关系；不冒充附件或已取得字节 |
 
 Codex 不拥有产品 thread、任务或来源数据。每个采访 runtime 只建立并初始化一次 App Server `stdio` 连接；每个业务轮次仍创建新的 `ephemeral: true` 内存 thread，不 `resume`、不持久化 Codex 产品会话，Workbench 关闭时结束该连接。每轮先把仓库内权威采访 Skill 同步到不继承工程 `AGENTS.md` 的隔离目录标准 `.agents/skills/` 位置，再通过官方 `skill` input 显式注入该副本；该产品运行时关闭官方 `shell_tool` 和 `unified_exec` feature，只保留采访所需的网页搜索。Workbench 先持久化用户原文，再重放 PostgreSQL 中的采访工作资料；Codex 解释本轮完整原文并只返回推进采访所需的最小增量：说明、决定、未决项、可选 `draftMarkdown`，以及仅在生成草案时出现的四组 URL `draftCoverage` 校验凭证，不返回完整任务 schema。Workbench 将凭证逐条对照已完成的会话搜索活动和 Markdown 原文；凭证不持久化为第二份来源事实，只保存“本版本已通过覆盖门”的布尔结果。运行中的 commentary 通过官方 delta 协议展示，最终机器 JSON 只在进程边界由 Zod 校验。用户确认 Markdown 后，同一 runtime 另起 ephemeral 纯转换回合生成正式 Capture Task；该回合禁止搜索和新增事实。首次调查回合必须观察到已完成的 `web_search` item；只有 started/failed 不满足调查门。后续纯解释或范围未变回合不重复强制搜索。
 
@@ -101,30 +107,36 @@ Codex 不拥有产品 thread、任务或来源数据。每个采访 runtime 只�
 
 ### 5.3 Source Dataset Module
 
-保存来源运行、逐 target attempt、来源对象、不可变快照和附件。每个快照冻结计划 `targetKey`；未知、重复或遗漏 target 不能被 source 级完成状态掩盖。新数据只允许两种原始载荷：
+保存抓取批次、来源运行及其恢复关联、逐 target attempt、Capture Work Item、逐请求 attempt、访问 gate、来源对象、不可变快照、资源引用和附件。每次 Start 先持久化 Batch，再让本轮全部 Source Run 引用同一批次；历史无批次运行保持可读并明确隔离，禁止按时间窗口回填。每个快照冻结计划 `targetKey`；未知、重复、遗漏 target 或仍未终结的 work item 不能被 source 级完成状态掩盖。Provider 的一次 capture 通过同一事务提交 Snapshot 与 Resource Reference；图片 URL 引用不创建图片工作项，也不访问图片服务器。新数据只允许两种原始载荷：
 
 - `inline_text`：HTML、JSON、CSV、纯文本等可安全内联的源站响应；
 - `asset`：PDF、XLSX、图片、视频等原文件。
 
-原始附件字节进入本地 cacache 内容寻址存储，相同字节可复用，但每个 snapshot/asset 的来源关系独立保留并可下载。旧来源记录不删除，读取时明确标成 `legacy_structured_json`，不得冒充新原始捕获。
+原始附件字节进入本地 cacache 内容寻址存储，相同字节可复用，但每个 snapshot/asset 的来源关系独立保留并可下载。Resource Reference 只保存源响应中观察到的 URL、原值、locator、用途、区块和顺序，不进入 cacache。旧来源记录不删除，读取时明确标成 `legacy_structured_json`，不得冒充新原始捕获。
 
 ### 5.4 Crawl Planning Module
 
-读取一个当前 Capture Task revision，通过注入式 Codex runtime 生成并校验版本化 Crawl Plan Draft，保存 Planning Run 有序时间线，并在用户显式确认时推进 plan version 状态。它独占“来源、内容、数量”的计划事实；active 清单必须逐项对账全部采访来源候选和全部原文 topic，每个 target 必须绑定真实 Provider 配置。Draft 保存和确认只调用 Provider 的纯结构 `validate`；浏览器、端口和登录等可变化运行条件不属于计划确认事实。说明书、PDF 和附件表格不能用入口页中的链接文字冒充正文；精确入口本身为 PDF/Office 文档时，该 exact target 就是正文并按原始附件留存。API/Web 不复制 Planner 规则，Codex 不写 task ID/revision，也不启动 Source Run。
+读取一个当前 Capture Task revision，通过注入式 Codex runtime 生成并校验版本化 Crawl Plan Draft，保存 Planning Run 有序时间线，并在用户显式确认时推进 plan version 状态。它独占“来源、内容、数量”的计划事实；active 清单必须逐项对账全部采访来源候选和全部原文 topic，每个 target 必须绑定真实 Provider 配置。Capture Task 已确认纳入京东时，计划必须包含 `jd.catalog-product@2.0.0` 动态商品来源；保留一个 `search.jd.com` 通用网页 target 不能代替目录、详情、媒体 URL 与评价覆盖。Draft 保存和确认只调用 Provider 的纯结构 `validate`；浏览器、端口和登录等可变化运行条件不属于计划确认事实。说明书、PDF 和附件表格不能用入口页中的链接文字冒充正文；精确入口本身为 PDF/Office 文档时，该 exact target 就是正文并按原始附件留存。API/Web 不复制 Planner 规则，Codex 不写 task ID/revision，也不启动 Source Run。
 
 规划运行复用现有 App Server `stdio`、ephemeral thread、Skill input、web search、官方 `outputSchema` 和 typed SSE；本地 Zod 再校验领域 contract。一个规划 runtime 复用一条已初始化连接，每次运行新建一个 ephemeral thread；首次结构化输出未通过现有解析、清单或 Provider 校验时，只把原错误回填到同一 thread 修正一次，并在第二个 turn 继续附同一 `outputSchema`。它不新增或复制校验，不重开 thread、不换模型、不处理传输/认证失败；第二次仍失败即关闭 Planning Run。连接关闭则中止，官方 `turn/interrupt` 负责取消，已完成结果可刷新恢复。不为最长十分钟的有界规划引入 DBOS、后台队列或第二套 Session。
 
 ### 5.5 Source Access
 
-保留 Crawlee 临时存储配置以及 `p-queue`、`cockatiel` 的频控、取消和熔断。composition root 以显式 map 注入 Provider，不建设动态插件系统。`jd.catalog-product@1.0.0` 只接受 loopback CDP、一个 `www.jd.com` 入口和计划中的 `include_text/exclude_text`，固定产生目录与首个合格详情两个 target。它在显式 Prepare 时优先连接 9222；端口不存在则由 Playwright 用项目独立 Profile 启动系统 Chrome，再检查端口和京东登录。未登录或出现验证页只返回 typed 人工动作并把页面置前，不保存页面、Cookie 或认证材料。`public.web-resource@1.0.0` 复用 Got、robots-parser、Cheerio 与 Node DNS/net，只访问计划冻结的公网 HTTPS 443 精确 URL，或从已保存前序 HTML 按完整文字唯一跟进一次同源链接；精确 URL 比较先走标准 URL 规范化，不能把根 URL 与其尾斜杠形式误判成两个资源；拒绝 redirect、私网地址、自由发现、递归、Cookie/认证和自动重试。Provider 纯结构校验在 Draft 保存和确认时执行，运行准备与 Start 最终 preflight 属于 Source Execution；登录、验证码、拒绝或风控产生 typed stop，不读取日常 Profile。
+`PacedSessionHttpAccess` 复用 Playwright `APIRequestContext`、`p-queue` 与 Cockatiel，只发送显式 HTTP；关闭自动 redirect，每个手工 hop 必须先由 PostgreSQL 原子预留 request attempt，数据库拒绝时网络请求为零。PostgreSQL gate 是跨进程预算、最小间隔、窗口、冷却、首次受限熔断和人工继续要求的唯一事实源；进程内队列/circuit 只负责当前执行的串行、取消和尽快停机。登录、401/403/429、验证、风险/频控正文、未知跨源跳转和异常响应均失败关闭，不自动 retry、换代理、换账号或绕过。
+
+composition root 仍以显式 map 注入 Provider，不建设动态插件系统。历史 `jd.catalog-product@1.0.0` 不再注入；`jd.catalog-product@2.0.0` 只接受五类显式 HTTP target，Prepare 固定零请求，并只在 `JD_REAL_HTTP_ENABLED=true` 时注入匿名、无 Cookie/Profile 的 HTTP access。配置 schema 在未提供环境值时仍失败关闭；项目本地开发配置已在 I0～I4 通过且负责人明确要求真实抓取后显式开启。能力装配不触发请求，只有 confirmed Crawl Plan 上的显式 Start 才出网。当前已验证能力从真实目录商品卡保存商品与图片 URL 引用，图片字节请求为零；匿名详情只返回客户端骨架时首错停止，未取得的详情、店铺和评价 target 不得标记完成。`public.web-resource@1.0.0` 复用 Node 24 官方 HTTPS 代理 Agent、Google Public DNS DoH、robots-parser、Cheerio 与 Node DNS/net；只访问计划冻结的公网 HTTPS 443 精确 URL，或从已保存前序 HTML 按完整文字唯一跟进一次同源链接。系统 DNS 返回 Fake-IP 时，只有环境已显式配置 HTTPS 代理才经可信 DoH 取得公网 IP；通过校验的 IP 固定为 CONNECT 目标，原域名只用于 Host/SNI。每个 robots/target 请求都先由 PostgreSQL `SourceRequestAdmissionPort` 创建 work/attempt 并按 Provider 版本＋origin 共享 gate；拒绝 redirect、私网地址、自由发现、递归、Cookie/认证和自动重试。Provider 纯结构校验在 Draft 保存和确认时执行，运行准备与 Start 最终 preflight 属于 Source Execution。
 
 ### 5.6 Source Execution
 
-读取 confirmed Crawl Plan 的精确 task revision/version。显式 Prepare 只协调 Provider 的临时运行准备并返回 `ready` 或 `action_required`，不持久化另一套业务状态、不创建 Source Run；Web 只有在当前页面拿到 `ready` 后才开放 Start。Start 仍重读同一 confirmed plan 并执行最终 preflight，随后才为每个 source 和 target 创建可对账运行事实，并把带 `targetKey` 的 Provider observation 通过 Source Dataset 单一事务入口持久化。未知、重复、未完成 target 或数量不一致失败关闭；source 完成不能由一个笼统 Provider 结束事件推导。首版复用 SSE 前台运行；断开或取消记为 stopped。运行中不调用 Codex，不解释自然语言 traversal，不自建队列、恢复或第二套计划事实源。
+读取 confirmed Crawl Plan 的精确 task revision/version，并复用 Crawl Planning 的当前完整性门；任务已纳入京东但历史计划没有 JD v2 时，在创建批次、Provider preflight 和网络访问前拒绝。显式 Prepare 只协调 Provider 的临时运行准备，不创建 Batch/Source Run，也不访问来源；JD v2 Prepare 固定零请求。Start 先持久化一个绑定 task revision、plan ID/version 和来源总数的 Source Collection Batch，再执行最终 preflight；一个 Provider 的运行态失败只为使用该 Provider 的来源创建属于该批次的 failed Source Run，不阻断已经独立通过 preflight 的其他 Provider。批次按全部来源终态结算为 completed/partial/failed/stopped。可执行来源先为每个 source 和 target 创建运行事实，再由 Provider 按动态 Capture Work Item 派发；未知、重复、未终结 work、遗漏 target 或数量不一致都失败关闭。
+
+Start/Resume 不再以 SSE 连接承载执行。API 在校验当前 task/plan revision 后向 Graphile Worker 0.17.3 的 PostgreSQL job queue 提交 typed command 并立即返回 202；嵌入 API 进程的单并发 worker 消费完整 Source Execution 流。页面关闭、刷新或切换标签只停止 UI 投影，不发送取消，也不结束 Batch；Workbench 从 Source Dataset 轮询持久 Batch/Run 进度。Graphile 只拥有通用任务派发，payload 只含非秘密 ID/revision，不能从其内部表投影用户状态；领域限制和 Provider 失败仍由 Batch/Run 终态表达，job `maxAttempts=1`，不会把 403/429/登录/频控变成自动重抓。
+
+每个运行持有 PostgreSQL session advisory lease；活动进程存在时拒绝重复继续，进程被强杀后连接断开自动释放 lease。负责人只能对 stopped/failed run 显式“继续”，系统先把遗留 running attempt/work/target 结算为 unknown/stopped，再创建带 `resumedFromRunId` 的新 Source Run；请求预算与冷却沿恢复链累计，不能通过继续重置。Crawlee 3.18.1 命名 RequestQueue/MemoryStorage 只拥有 Provider 内捕获工作的本机持久派发和 stable uniqueKey 去重，不拥有 Batch 或 Source Dataset 完成事实，也不自动 reclaim 失败项。Graphile 已证明未领取 job 在 runner 重启后继续；正在执行一半的整批进程强杀仍需依赖现有 Work/Request 幂等和后续专门恢复门，当前不得宣称任意步骤 exactly once。
 
 ## 6. 物理边界
 
-- PostgreSQL `workbench` schema：对话、任务、计划元数据、运行、来源对象和快照索引；
+- PostgreSQL `workbench` schema：对话、任务、计划元数据、运行与恢复关联、target/work/request/gate、来源对象、快照与资源引用索引；Graphile 官方 schema 只保存通用 job 派发，不作为业务查询面；
 - 原始附件内容存储：本地 cacache CAS；PostgreSQL 只保存 digest、大小、媒体类型、来源 URL 与 snapshot 关系；
 - Cookie、Profile、密码、认证 Header 和验证码信息不得入库、日志、Git 或导出；
 - 项目专用浏览器 Profile 只位于 Git 忽略的本机 `data/`，由 Source Access 生命周期使用；
@@ -170,4 +182,4 @@ Web 不推导任务状态；API 只适配 Workbench；Worker 不拥有任务事�
 10. 未完成采访显示在任务记录中；刷新恢复当前会话、规范化消息及消息内搜索/工具时间线；删除未完成采访和归档正式任务均需用户确认，且不能误删正式任务历史或原始数据。
 11. 首轮和形成换品类草稿时必须完成网页搜索，模型来源时间不可信；失败/中断只允许重试最近一条对应用户原文，不能重放更早历史消息。
 
-1B 的当前通过门：完整计划必须对账全部采访候选与 topic；每个入口/正文/附件都是有数量、分母、唯一键、Provider 配置和停止条件的 target；无 Provider、占位配置、入口-only 附件或 blocker 都不能保存/确认。2026-08-20 的真实家用冰箱 v6 已以 8 个来源、12 个 target 覆盖 7/7 候选与 13/13 topic，并通过确认预检。确认不等于执行；本轮没有点击 Start，多来源真实访问结果仍未验收。
+1B 的当前通过门：完整计划必须对账全部采访候选与 topic；每个入口/正文/附件都是有数量、分母、唯一键、Provider 配置和停止条件的 target；无 Provider、占位配置、入口-only 附件或 blocker 都不能保存/确认。2026-08-20 的真实家用冰箱 v6 已以 8 个来源、12 个 target 覆盖 7/7 候选与 13/13 topic，并通过确认预检。确认不等于执行；2026-08-21 微波炉计划已显式 Start，6 个公共来源中 4 个完成、2 个按京东 robots 302 与格兰仕 NXDOMAIN 真实失败，证明公共出网和 Source Dataset 闭环，但不代表计划来源质量或京东 v2 已通过。

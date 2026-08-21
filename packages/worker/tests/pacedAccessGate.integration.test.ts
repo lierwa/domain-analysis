@@ -44,6 +44,26 @@ describe("PacedAccessGate local HTTP fixture", () => {
     expect(gate.state).toBe("idle");
   });
 
+  it("频控窗口与最小间隔只取更严格者，不把一分钟策略叠成两分钟", async () => {
+    fixture = await openFixture();
+    const gate = createPacedAccessGate(policy({
+      maxRequestsPerMinute: 1,
+      minimumIntervalMs: 60,
+      batchSize: 1,
+      batchCooldownMs: 60,
+    }), { rateWindowMs: 120, testOnlyAllowScaledMinute: true, random: () => 0 });
+
+    await Promise.all([0, 1].map((index) => gate.schedule(
+      `request-${index}`,
+      (signal) => fetch(`${fixture!.origin}/ok/${index}`, { signal }),
+    )));
+    await gate.onIdle();
+
+    const elapsed = fixture.timestamps[1]! - fixture.timestamps[0]!;
+    expect(elapsed).toBeGreaterThanOrEqual(110);
+    expect(elapsed).toBeLessThan(160);
+  });
+
   it("第一次限流即打开熔断并终止全部待派发请求", async () => {
     fixture = await openFixture();
     const gate = createPacedAccessGate(policy(), {

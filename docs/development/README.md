@@ -1,7 +1,7 @@
 # 数据抓取与清洗平台开发文档导航
 
 状态：开发入口
-更新日期：2026-08-19
+更新日期：2026-08-21
 
 ## 1. 用途
 
@@ -39,6 +39,7 @@
 | `RESEARCH.md` | 技术问题、候选开源方案、证据与处置状态 | 产品需求、实施进度 |
 | `CRAWL-PLANNING-DESIGN.md` | Capture Task 到版本化 Crawl Plan 的产品流程、contract、UI 和验收门 | Provider 实现、真实来源抓取和阶段进度 |
 | `JD-COLLECTION-DESIGN.md` | 京东分类、旗舰店、商品详情、评价采集的详细开发与验收方案 | 全局架构、当前完成度；用户复核通过前不作为实施完成证明 |
+| `JD-COLLECTION-ITERATION.md` | ROADMAP 1D 下一轮最小但完整的工程范围、Patch Disposition、实施切片和验收门 | 平行 roadmap/progress/architecture；代码已实现或真实抓取已通过的证明 |
 | `PROGRESS.md` | 当前阶段、已验证事实、阻塞项、下一步和验证记录 | 详细架构和重复产品资料 |
 | `HANDOFF.md` | 跨电脑环境恢复、启动门和下一工作入口 | 充当进度、路线图或架构事实源 |
 | `AGENT-SCORECARD.md` | 用户明确加减分、原因、纠正和当前积分 | 项目开发进度和技术决策 |

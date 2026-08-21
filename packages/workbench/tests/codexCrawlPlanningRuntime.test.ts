@@ -172,7 +172,7 @@ async function handle(message) {
   if (turnCount > 2 || message.params.threadId !== "thread-1") process.exit(14);
   const prompt = message.params.input.find((item) => item.type === "text")?.text ?? "";
   const skill = message.params.input.find((item) => item.type === "skill");
-  if (turnCount === 1 && (!prompt.includes("$plan-product-crawl") || !prompt.includes("Required task topics") || !prompt.includes("严禁 provider_missing") || !prompt.includes("Candidate execution checklist") || !prompt.includes("requiredProvider") || !prompt.includes("search.jd.com is public.web-resource") || !prompt.includes("Every exact public target configuration url MUST appear in that same source.entryUrls") || !prompt.includes("Topic coverage checklist") || !prompt.includes("Provider binding checklist") || !prompt.includes("never represent a PDF URL as an HTML target") || !prompt.includes("Final answer local validation JSON Schema"))) process.exit(6);
+  if (turnCount === 1 && (!prompt.includes("$plan-product-crawl") || !prompt.includes("Required task topics") || !prompt.includes("严禁 provider_missing") || !prompt.includes("Candidate execution checklist") || !prompt.includes("requiredProvider") || !prompt.includes("generic JD search/root snapshot does not satisfy JD product coverage") || !prompt.includes("search.jd.com is public.web-resource") || !prompt.includes("Every exact public target configuration url MUST appear in that same source.entryUrls") || !prompt.includes("Topic coverage checklist") || !prompt.includes("Provider binding checklist") || !prompt.includes("never represent a PDF URL as an HTML target") || !prompt.includes("Final answer local validation JSON Schema"))) process.exit(6);
   if (turnCount === 2 && !prompt.includes("现有校验错误：")) process.exit(15);
   if (message.params.outputSchema?.type !== "object" || !message.params.outputSchema?.properties?.planCandidate) process.exit(8);
   const normalizedSkillPath = String(skill?.path).replaceAll("\\\\", "/");
@@ -206,30 +206,36 @@ function runtimeOutput(): CrawlPlanningRuntimeOutput {
         key: "jd", name: "京东", publisher: "京东", sourceKind: "retailer",
         sourceCandidateIds: [],
         role: "覆盖商品详情", entryUrls: ["https://www.jd.com/"],
-        provider: { key: "jd.catalog-product", version: "1.0.0", configuration: [
-          { key: "mode", value: "cdp" }, { key: "include_text", value: "冰箱" }, { key: "exclude_text", value: "二手|冷柜|冰吧" },
+        provider: { key: "jd.catalog-product", version: "2.0.0", configuration: [
+          { key: "mode", value: "explicit_http" }, { key: "include_text", value: "冰箱" }, { key: "exclude_text", value: "二手|冷柜|冰吧" },
         ] },
-        accessPolicy: { kind: "paced_http", version: "jd-low-frequency-v1", maxRequestsPerMinute: 2, minimumIntervalMs: 10_000, maximumRunMs: 180_000 },
-        stopPolicy: { requestBudget: 2, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true },
-        rawOutputPolicy: { formats: ["html"], retainAssets: false },
+        accessPolicy: { kind: "paced_http", version: "jd-explicit-http-v2", maxRequestsPerMinute: 1, minimumIntervalMs: 60_000, maximumRunMs: 3_600_000 },
+        stopPolicy: { requestBudget: 12, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true },
+        rawOutputPolicy: { formats: ["html", "source_json"], retainAssets: false },
         observationLevel: "search_discovered", accessState: "unknown",
         observedAt: "2026-08-19T00:00:00.000Z",
-        targets: [runtimeTarget("catalog"), runtimeTarget("first_matching_product")],
+        targets: [runtimeTarget("catalog_pages"), runtimeTarget("store_catalogs"),
+          runtimeTarget("product_details"), runtimeTarget("review_summaries"),
+          runtimeTarget("review_samples")],
         executionBlockers: [],
       }],
     },
   });
 }
 
-function runtimeTarget(operation: "catalog" | "first_matching_product") {
+function runtimeTarget(operation: "catalog_pages" | "store_catalogs" | "product_details"
+  | "review_summaries" | "review_samples") {
+  const review = operation === "review_summaries" || operation === "review_samples";
   return {
-    key: operation, name: operation === "catalog" ? "目录" : "首个商品", taskTopics: ["品牌与型号"],
-    providerConfiguration: [{ key: "operation" as const, value: operation }],
-    captureUnit: "HTML 响应", rawFormats: ["html" as const],
-    quantity: { mode: "target_count" as const, targetCount: 1, unit: "份",
-      denominator: "计划冻结抓取项", rationale: "形成有界原始响应" },
-    uniqueKey: operation === "catalog" ? "目录 URL" : "SKU",
-    traversal: "按固定 Provider 操作执行", stopCondition: "保存一份响应或遇访问限制",
+    key: operation, name: operation, taskTopics: ["品牌与型号"],
+    providerConfiguration: operation === "review_samples"
+      ? [{ key: "operation" as const, value: operation }, { key: "samples_per_product" as const, value: 100 as const }]
+      : [{ key: "operation" as const, value: operation }],
+    captureUnit: "源站响应", rawFormats: review ? ["source_json" as const] : ["html" as const],
+    quantity: { mode: "all_available" as const, unit: "份",
+      denominator: "动态发现工作项", rationale: "逐工作项严格对账" },
+    uniqueKey: "规范化 GET URL", traversal: "只从已保存前序响应发现",
+    stopCondition: "全部工作完成或首次受限",
   };
 }
 

@@ -127,6 +127,41 @@
       "when": 1787219458029,
       "tag": "0017_wandering_arachne",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787288824630,
+      "tag": "0018_flawless_medusa",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787289466942,
+      "tag": "0019_lush_sinister_six",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1787290582942,
+      "tag": "0020_left_daimon_hellstrom",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1787291996903,
+      "tag": "0021_eminent_the_leader",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1787300454138,
+      "tag": "0022_fearless_venom",
+      "breakpoints": true
     }
   ]
 }

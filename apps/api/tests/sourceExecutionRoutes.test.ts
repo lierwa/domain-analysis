@@ -1,7 +1,8 @@
-import { SourceExecutionError, type DataCollectionWorkbench, type SourceExecutionModule } from "@domain-analysis/workbench";
-import { describe, expect, it } from "vitest";
+import { type DataCollectionWorkbench, type SourceExecutionModule } from "@domain-analysis/workbench";
+import { describe, expect, it, vi } from "vitest";
 
 import { buildServer } from "../src/server";
+import type { SourceExecutionQueue } from "../src/sourceExecutionQueue";
 
 describe("来源执行路由", () => {
   it("确认后的准备接口返回人工登录动作且不建立 SSE", async () => {
@@ -12,7 +13,8 @@ describe("来源执行路由", () => {
     const workbench = {
       captureTasks: {}, sourceDatasets: {}, sourceExecution: execution, close: async () => undefined,
     } as unknown as DataCollectionWorkbench;
-    const app = await buildServer({ logger: false, workbench });
+    const queue = { close: async () => undefined } as unknown as SourceExecutionQueue;
+    const app = await buildServer({ logger: false, workbench, sourceExecutionQueue: queue });
 
     const response = await app.inject({
       method: "POST",
@@ -26,16 +28,15 @@ describe("来源执行路由", () => {
     await app.close();
   });
 
-  it("在 SSE 建立前把 Provider 预检失败返回为可读的 422", async () => {
-    const execution = {
-      start: async function* () {
-        throw new SourceExecutionError("preflight_failed", "jd.catalog-product@1.0.0：CDP 未连接");
-      },
-    } as unknown as SourceExecutionModule;
+  it("Start 只提交后台命令并立即返回 202，不在 HTTP 请求内消费抓取流", async () => {
+    const start = vi.fn();
+    const execution = { start } as unknown as SourceExecutionModule;
+    const enqueueStart = vi.fn(async () => ({ status: "accepted" as const, commandId: "source-command-1" }));
+    const queue = { enqueueStart, close: async () => undefined } as unknown as SourceExecutionQueue;
     const workbench = {
       captureTasks: {}, sourceDatasets: {}, sourceExecution: execution, close: async () => undefined,
     } as unknown as DataCollectionWorkbench;
-    const app = await buildServer({ logger: false, workbench });
+    const app = await buildServer({ logger: false, workbench, sourceExecutionQueue: queue });
 
     const response = await app.inject({
       method: "POST",
@@ -43,10 +44,34 @@ describe("来源执行路由", () => {
       payload: { expectedTaskRevision: 1, expectedPlanVersion: 2 },
     });
 
-    expect(response.statusCode).toBe(422);
-    expect(response.json()).toEqual({
-      error: "preflight_failed", message: "jd.catalog-product@1.0.0：CDP 未连接",
-    });
+    expect(response.statusCode).toBe(202);
+    expect(response.headers["content-type"]).toContain("application/json");
+    expect(response.json()).toEqual({ item: { status: "accepted", commandId: "source-command-1" } });
+    expect(enqueueStart).toHaveBeenCalledWith({ taskId: "task-1", planId: "plan-1",
+      expectedTaskRevision: 1, expectedPlanVersion: 2 });
+    expect(start).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("显式 Resume 也只提交后台命令，页面离开不会取消继续任务", async () => {
+    const resume = vi.fn();
+    const execution = { resume } as unknown as SourceExecutionModule;
+    const enqueueResume = vi.fn(async () => ({ status: "accepted" as const,
+      commandId: "source-command-resume-1" }));
+    const queue = { enqueueResume, close: async () => undefined } as unknown as SourceExecutionQueue;
+    const workbench = { captureTasks: {}, sourceDatasets: {}, sourceExecution: execution,
+      close: async () => undefined } as unknown as DataCollectionWorkbench;
+    const app = await buildServer({ logger: false, workbench, sourceExecutionQueue: queue });
+
+    const response = await app.inject({ method: "POST",
+      url: "/api/capture-tasks/task-1/source-runs/run-old/resume",
+      payload: { expectedTaskRevision: 1, expectedPlanVersion: 2 } });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ item: { status: "accepted", commandId: "source-command-resume-1" } });
+    expect(enqueueResume).toHaveBeenCalledWith({ taskId: "task-1", runId: "run-old",
+      expectedTaskRevision: 1, expectedPlanVersion: 2 });
+    expect(resume).not.toHaveBeenCalled();
     await app.close();
   });
 });

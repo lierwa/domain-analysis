@@ -4,7 +4,7 @@ import { stringify } from "csv-stringify/sync";
 const columns = [
   "run_id", "target_key", "snapshot_id", "source_identity", "object_kind", "external_key",
   "requested_url", "final_url", "state", "observed_at", "media_type", "asset_count",
-  "asset_filenames", "payload",
+  "asset_filenames", "resource_reference_count", "resource_references", "payload",
 ] as const;
 
 export async function* serializeSourceDataset(
@@ -31,6 +31,16 @@ export async function* serializeSourceDataset(
       media_type: payload && "mediaType" in payload ? payload.mediaType : payload?.kind ?? "",
       asset_count: String(record.assets.length),
       asset_filenames: record.assets.map((asset) => asset.filename).join(" | "),
+      resource_reference_count: String(record.resourceReferences.length),
+      resource_references: JSON.stringify(record.resourceReferences.map((reference) => ({
+        kind: reference.kind,
+        sourceUrl: reference.sourceUrl,
+        observedValue: reference.observedValue,
+        locator: reference.locator,
+        role: reference.role,
+        section: reference.section,
+        ordinal: reference.ordinal,
+      }))),
       payload: payload?.kind === "inline_text" ? payload.text : JSON.stringify(payload ?? null),
     });
   });

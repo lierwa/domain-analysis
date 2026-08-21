@@ -4,29 +4,42 @@ import type { Readable } from "node:stream";
 
 import type { WorkbenchDb } from "@domain-analysis/db";
 import {
+  sourceAccessGateStates,
   sourceAssets,
+  sourceCaptureWorkItems,
+  sourceCollectionBatches,
   sourceCollectionRuns,
   sourceCollectionTargetRuns,
   sourceObjects,
+  sourceResourceReferences,
+  sourceRequestAttempts,
   sourceSnapshots,
 } from "@domain-analysis/db";
 import {
   rawSourceObservationSchema,
   rawSourcePayloadSchema,
   sourceAssetSchema,
+  sourceCollectionBatchSchema,
   sourceCollectionRunSchema,
   sourceCollectionTargetRunSchema,
   sourceDatasetRunViewSchema,
+  sourceDatasetTaskViewSchema,
   sourceObjectSchema,
   sourceProviderAssetSchema,
+  sourceProviderResourceReferenceSchema,
+  sourceResourceReferenceSchema,
   sourceSnapshotCommitSchema,
   sourceSnapshotSchema,
   type SourceAccessPolicy,
   type SourceAsset,
+  type SourceCollectionBatch,
   type SourceCollectionRun,
   type SourceCollectionTargetRun,
   type SourceDatasetRunView,
+  type SourceDatasetTaskView,
   type SourceProviderAsset,
+  type SourceProviderResourceReference,
+  type SourceRequestAdmissionPort,
   type SourceSnapshotCommit,
 } from "@domain-analysis/shared";
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
@@ -35,17 +48,34 @@ import { contentHash } from "./contentHash";
 import { createCacacheSourceAssetStore, type SourceAssetStore } from "./sourceAssetStore";
 import { serializeSourceDataset } from "./sourceDatasetExport";
 import { SourceDatasetError } from "./sourceDatasetError";
+import {
+  acquireSourceRunLease,
+  createSourceRequestAdmission,
+  loadSourceRequestState,
+  prepareSourceRunForResume,
+} from "./sourceRequestAdmission";
 
-type SnapshotWrite = SourceSnapshotCommit & { assets?: SourceProviderAsset[] };
+type SnapshotWrite = SourceSnapshotCommit & {
+  assets?: SourceProviderAsset[];
+  resourceReferences?: SourceProviderResourceReference[];
+};
 type WorkbenchTransaction = Parameters<Parameters<WorkbenchDb["transaction"]>[0]>[0];
 
-export interface SourceDatasetModule {
-  listTask(taskId: string): Promise<SourceCollectionRun[]>;
+export interface SourceDatasetModule extends SourceRequestAdmissionPort {
+  listTask(taskId: string): Promise<SourceDatasetTaskView>;
   getRun(runId: string): Promise<SourceDatasetRunView | null>;
   exportRun(input: { runId: string; format: "jsonl" | "csv" }): AsyncIterable<string>;
   openAsset(input: { runId: string; assetId: string }): Promise<{ asset: SourceAsset; content: Readable }>;
+  acquireRunLease(runId: string): Promise<{ release(): Promise<void> }>;
+  prepareRunForResume(runId: string): Promise<SourceCollectionRun>;
+  startBatch(input: { taskId: string; planId: string; planVersion: number; taskRevision: number;
+    plannedSourceCount: number }): Promise<SourceCollectionBatch>;
+  finishBatch(input: { batchId: string; status: "completed" | "partial" | "failed" | "stopped";
+    terminationReason?: string }): Promise<SourceCollectionBatch>;
   startRun(input: { taskId: string; planId: string; planVersion: number; sourceKey: string;
-    providerKey: string; providerVersion: string; accessPolicy: SourceAccessPolicy; targetKeys: string[] }): Promise<SourceCollectionRun>;
+    providerKey: string; providerVersion: string; requestBudget: number;
+    accessPolicy: SourceAccessPolicy; targetKeys: string[];
+    batchId?: string; resumedFromRunId?: string }): Promise<SourceCollectionRun>;
   startTarget(input: { runId: string; targetKey: string }): Promise<SourceCollectionTargetRun>;
   commitSnapshot(input: SnapshotWrite): Promise<SourceDatasetRunView>;
   finishTarget(input: { runId: string; targetKey: string; status: "completed" | "failed" | "stopped";
@@ -56,24 +86,54 @@ export interface SourceDatasetModule {
 
 export function createSourceDatasetModule(
   db: WorkbenchDb,
-  options: { assetCachePath?: string; assetStore?: SourceAssetStore } = {},
+  options: { assetCachePath?: string; assetStore?: SourceAssetStore; now?: () => Date } = {},
 ): SourceDatasetModule {
   const store = options.assetStore ?? createCacacheSourceAssetStore(
     options.assetCachePath ?? path.resolve("data", "source-assets"),
   );
+  const admission = createSourceRequestAdmission(db, options.now);
   return {
-    listTask: async (taskId) => (await db.select().from(sourceCollectionRuns)
-      .where(eq(sourceCollectionRuns.taskId, taskId)).orderBy(desc(sourceCollectionRuns.startedAt)))
-      .map(normalizeRun),
+    ...admission,
+    listTask: async (taskId) => sourceDatasetTaskViewSchema.parse({
+      batches: (await db.select().from(sourceCollectionBatches)
+        .where(eq(sourceCollectionBatches.taskId, taskId)).orderBy(desc(sourceCollectionBatches.startedAt)))
+        .map(normalizeBatch),
+      runs: (await db.select().from(sourceCollectionRuns)
+        .where(eq(sourceCollectionRuns.taskId, taskId)).orderBy(desc(sourceCollectionRuns.startedAt)))
+        .map(normalizeRun),
+    }),
     getRun: (runId) => loadRun(db, runId),
     exportRun: (input) => exportRun(db, input),
     openAsset: (input) => openAsset(db, store, input),
+    acquireRunLease: (runId) => acquireSourceRunLease(db, runId),
+    prepareRunForResume: (runId) => prepareSourceRunForResume(db, runId),
+    startBatch: (input) => startBatch(db, input),
+    finishBatch: (input) => finishBatch(db, input),
     startRun: (input) => startRun(db, input),
     startTarget: (input) => startTarget(db, input),
     commitSnapshot: (input) => commitSnapshot(db, store, input),
     finishTarget: (input) => finishTarget(db, input),
     finishRun: (input) => finishRun(db, input),
   };
+}
+
+async function startBatch(db: WorkbenchDb, input: Parameters<SourceDatasetModule["startBatch"]>[0]) {
+  const row = { id: `source-batch-${randomUUID()}`, taskId: input.taskId,
+    sourceCollectionPlanId: input.planId, sourceCollectionPlanVersion: input.planVersion,
+    taskRevision: input.taskRevision, status: "running" as const,
+    plannedSourceCount: input.plannedSourceCount, startedAt: new Date().toISOString(),
+    finishedAt: null, terminationReason: null };
+  await db.insert(sourceCollectionBatches).values(row);
+  return normalizeBatch(row);
+}
+
+async function finishBatch(db: WorkbenchDb, input: Parameters<SourceDatasetModule["finishBatch"]>[0]) {
+  const changed = await db.update(sourceCollectionBatches).set({ status: input.status,
+    finishedAt: new Date().toISOString(), terminationReason: input.terminationReason })
+    .where(and(eq(sourceCollectionBatches.id, input.batchId), eq(sourceCollectionBatches.status, "running")))
+    .returning();
+  if (changed.length !== 1) throw new SourceDatasetError("invalid_state", "抓取批次不存在或已经结束");
+  return normalizeBatch(changed[0]!);
 }
 
 async function startRun(
@@ -85,11 +145,15 @@ async function startRun(
     throw new SourceDatasetError("invalid_state", "来源运行必须包含非空且唯一的 target key");
   }
   const row = { id: `source-run-${randomUUID()}`, taskId: input.taskId,
+    executionBatchId: input.batchId,
+    resumedFromRunId: input.resumedFromRunId,
     sourceCollectionPlanId: input.planId, sourceCollectionPlanSourceKey: input.sourceKey,
     sourceCollectionPlanVersion: input.planVersion, providerKey: input.providerKey,
     providerVersion: input.providerVersion, accessPolicy: input.accessPolicy,
+    requestBudget: input.requestBudget,
     status: "running" as const, startedAt: new Date().toISOString() };
   await db.transaction(async (transaction) => {
+    if (input.resumedFromRunId) await validateAndReleaseResume(transaction, input);
     await transaction.insert(sourceCollectionRuns).values(row);
     await transaction.insert(sourceCollectionTargetRuns).values(targetKeys.map((targetKey) => ({
       id: `source-target-run-${randomUUID()}`, runId: row.id, targetKey, status: "pending" as const,
@@ -98,6 +162,33 @@ async function startRun(
   return normalizeRun((await db.query.sourceCollectionRuns.findFirst({
     where: eq(sourceCollectionRuns.id, row.id),
   }))!);
+}
+
+async function validateAndReleaseResume(
+  transaction: WorkbenchTransaction,
+  input: Parameters<SourceDatasetModule["startRun"]>[0],
+) {
+  const previous = await transaction.query.sourceCollectionRuns.findFirst({
+    where: eq(sourceCollectionRuns.id, input.resumedFromRunId!),
+  });
+  if (!previous || (previous.status !== "failed" && previous.status !== "stopped")
+    || previous.taskId !== input.taskId || previous.sourceCollectionPlanId !== input.planId
+    || previous.sourceCollectionPlanVersion !== input.planVersion
+    || previous.sourceCollectionPlanSourceKey !== input.sourceKey
+    || previous.providerKey !== input.providerKey || previous.providerVersion !== input.providerVersion
+    || previous.requestBudget !== input.requestBudget) {
+    throw new SourceDatasetError("invalid_state", "只能从同一计划、来源、Provider 和预算的已停止运行显式继续");
+  }
+  const attempts = await transaction.select({ gateKey: sourceRequestAttempts.gateKey })
+    .from(sourceRequestAttempts).where(eq(sourceRequestAttempts.runId, previous.id));
+  const gateKeys = [...new Set(attempts.map((attempt) => attempt.gateKey))];
+  if (gateKeys.length === 0) return;
+  // WHY：人工继续只解除持久开路；冷却时间和窗口计数继续保留，不能借恢复绕过频控。
+  await transaction.update(sourceAccessGateStates).set({ circuitState: "closed",
+    blockedAt: null, blockedReason: null, manualResumeRequired: false,
+    updatedAt: new Date().toISOString() })
+    .where(and(inArray(sourceAccessGateStates.key, gateKeys),
+      eq(sourceAccessGateStates.manualResumeRequired, true)));
 }
 
 async function startTarget(db: WorkbenchDb, input: { runId: string; targetKey: string }) {
@@ -119,6 +210,16 @@ async function finishTarget(
   ) });
   if (!row || (row.status !== "running" && !(row.status === "pending" && input.status === "stopped"))) {
     throw new SourceDatasetError("invalid_state", `target 不存在或已经结束：${input.targetKey}`);
+  }
+  if (input.status === "completed") {
+    // WHY：快照数无法表达动态发现队列是否耗尽；target 只能由持久工作账本证明完整完成。
+    const incompleteWork = await db.select({ id: sourceCaptureWorkItems.id }).from(sourceCaptureWorkItems)
+      .where(and(eq(sourceCaptureWorkItems.runId, input.runId),
+        eq(sourceCaptureWorkItems.targetKey, input.targetKey), ne(sourceCaptureWorkItems.status, "completed")))
+      .limit(1);
+    if (incompleteWork.length > 0) {
+      throw new SourceDatasetError("invalid_state", `target 仍有未完成捕获工作：${input.targetKey}`);
+    }
   }
   await db.update(sourceCollectionTargetRuns).set({ status: input.status,
     finishedAt: new Date().toISOString(), terminationReason: input.terminationReason })
@@ -147,9 +248,10 @@ async function finishRun(db: WorkbenchDb, input: Parameters<SourceDatasetModule[
 }
 
 async function commitSnapshot(db: WorkbenchDb, store: SourceAssetStore, raw: SnapshotWrite) {
-  const { assets: rawAssets, ...snapshot } = raw;
+  const { assets: rawAssets, resourceReferences: rawReferences, ...snapshot } = raw;
   const input = sourceSnapshotCommitSchema.parse(snapshot);
   const assets = sourceProviderAssetSchema.array().max(20).parse(rawAssets ?? []);
+  const resourceReferences = sourceProviderResourceReferenceSchema.array().parse(rawReferences ?? []);
   if (input.observation.state === "accessible" && !input.payload) {
     throw new SourceDatasetError("invalid_state", "accessible capture 必须包含原始 payload");
   }
@@ -167,7 +269,7 @@ async function commitSnapshot(db: WorkbenchDb, store: SourceAssetStore, raw: Sna
       throw new SourceDatasetError("invalid_state", "来源运行或 target 不存在，或已经结束");
     }
     const objectId = await upsertObject(transaction, run.taskId, input);
-    const hash = contentHash({ observation: input.observation, payload: input.payload });
+    const hash = contentHash({ observation: input.observation, payload: input.payload, resourceReferences });
     const snapshotId = `source-snapshot-${randomUUID()}`;
     const inserted = await transaction.insert(sourceSnapshots).values({ id: snapshotId,
       runId: run.id, targetKey: input.targetKey, objectId, idempotencyKey: input.idempotencyKey,
@@ -182,6 +284,13 @@ async function commitSnapshot(db: WorkbenchDb, store: SourceAssetStore, raw: Sna
       sourceUrl: asset.sourceUrl, mediaType: asset.mediaType, contentHash: asset.contentHash,
       casIntegrity: asset.casIntegrity, bytes: asset.content.byteLength,
     })));
+    if (resourceReferences.length > 0) {
+      await transaction.insert(sourceResourceReferences).values(resourceReferences.map((reference) => ({
+        id: `source-resource-reference-${randomUUID()}`,
+        snapshotId,
+        ...reference,
+      })));
+    }
     await incrementCounters(transaction, run.id, target.id,
       input.observation.state === "accessible", prepared.length);
   });
@@ -246,28 +355,36 @@ async function incrementCounters(transaction: WorkbenchTransaction, runId: strin
 async function loadRun(db: WorkbenchDb, runId: string): Promise<SourceDatasetRunView | null> {
   const runRow = await db.query.sourceCollectionRuns.findFirst({ where: eq(sourceCollectionRuns.id, runId) });
   if (!runRow) return null;
-  const [targetRows, snapshotRows] = await Promise.all([
+  const [targetRows, snapshotRows, requestState] = await Promise.all([
     db.select().from(sourceCollectionTargetRuns).where(eq(sourceCollectionTargetRuns.runId, runId))
       .orderBy(asc(sourceCollectionTargetRuns.targetKey)),
     db.select().from(sourceSnapshots).where(eq(sourceSnapshots.runId, runId)).orderBy(asc(sourceSnapshots.createdAt)),
+    loadSourceRequestState(db, runId),
   ]);
   const objectIds = [...new Set(snapshotRows.map((item) => item.objectId))];
   const snapshotIds = snapshotRows.map((item) => item.id);
-  const [objectRows, assetRows] = await Promise.all([
+  const [objectRows, assetRows, referenceRows] = await Promise.all([
     objectIds.length > 0 ? db.select().from(sourceObjects).where(inArray(sourceObjects.id, objectIds)) : [],
     snapshotIds.length > 0 ? db.select().from(sourceAssets).where(inArray(sourceAssets.snapshotId, snapshotIds)) : [],
+    snapshotIds.length > 0 ? db.select().from(sourceResourceReferences)
+      .where(inArray(sourceResourceReferences.snapshotId, snapshotIds))
+      .orderBy(asc(sourceResourceReferences.ordinal)) : [],
   ]);
   const objectsById = new Map(objectRows.map((item) => [item.id, item]));
   const assetsBySnapshot = new Map<string, typeof assetRows>();
   for (const asset of assetRows) assetsBySnapshot.set(asset.snapshotId,
     [...(assetsBySnapshot.get(asset.snapshotId) ?? []), asset]);
+  const referencesBySnapshot = new Map<string, typeof referenceRows>();
+  for (const reference of referenceRows) referencesBySnapshot.set(reference.snapshotId,
+    [...(referencesBySnapshot.get(reference.snapshotId) ?? []), reference]);
   const records = snapshotRows.flatMap((row) => {
     const object = objectsById.get(row.objectId);
     return object ? [{ object: sourceObjectSchema.parse({ ...object, createdAt: normalizeTimestamp(object.createdAt) }),
-      snapshot: normalizeSnapshot(row), assets: (assetsBySnapshot.get(row.id) ?? []).map(normalizeAsset) }] : [];
+      snapshot: normalizeSnapshot(row), assets: (assetsBySnapshot.get(row.id) ?? []).map(normalizeAsset),
+      resourceReferences: (referencesBySnapshot.get(row.id) ?? []).map(normalizeResourceReference) }] : [];
   });
   return sourceDatasetRunViewSchema.parse({ run: normalizeRun(runRow),
-    targets: targetRows.map(normalizeTarget), records });
+    targets: targetRows.map(normalizeTarget), ...requestState, records });
 }
 
 async function openAsset(db: WorkbenchDb, store: SourceAssetStore,
@@ -288,10 +405,20 @@ async function* exportRun(db: WorkbenchDb, input: { runId: string; format: "json
 
 function normalizeRun(row: typeof sourceCollectionRuns.$inferSelect) {
   return sourceCollectionRunSchema.parse({ ...row,
+    executionBatchId: row.executionBatchId ?? undefined,
+    resumedFromRunId: row.resumedFromRunId ?? undefined,
     sourceCollectionPlanId: row.sourceCollectionPlanId ?? undefined,
     sourceCollectionPlanSourceKey: row.sourceCollectionPlanSourceKey ?? undefined,
     sourceCollectionPlanVersion: row.sourceCollectionPlanVersion ?? undefined,
-    providerVersion: row.providerVersion ?? undefined, startedAt: normalizeTimestamp(row.startedAt),
+    providerVersion: row.providerVersion ?? undefined, requestBudget: row.requestBudget ?? undefined,
+    startedAt: normalizeTimestamp(row.startedAt),
+    finishedAt: row.finishedAt ? normalizeTimestamp(row.finishedAt) : undefined,
+    terminationReason: row.terminationReason ?? undefined });
+}
+
+function normalizeBatch(row: typeof sourceCollectionBatches.$inferSelect) {
+  return sourceCollectionBatchSchema.parse({ ...row,
+    startedAt: normalizeTimestamp(row.startedAt),
     finishedAt: row.finishedAt ? normalizeTimestamp(row.finishedAt) : undefined,
     terminationReason: row.terminationReason ?? undefined });
 }
@@ -321,6 +448,12 @@ function normalizeSnapshot(row: typeof sourceSnapshots.$inferSelect) {
 
 function normalizeAsset(row: typeof sourceAssets.$inferSelect) {
   return sourceAssetSchema.parse({ ...row, createdAt: normalizeTimestamp(row.createdAt) });
+}
+
+function normalizeResourceReference(row: typeof sourceResourceReferences.$inferSelect) {
+  return sourceResourceReferenceSchema.parse({ ...row,
+    observedValue: row.observedValue ?? undefined, locator: row.locator ?? undefined,
+    createdAt: normalizeTimestamp(row.createdAt) });
 }
 
 function normalizeState(value: unknown) {

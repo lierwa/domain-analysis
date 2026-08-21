@@ -1,8 +1,8 @@
 # 数据抓取与清洗平台开发进度
 
 更新日期：2026-08-21
-当前阶段：`ROADMAP.md` 1B 完整清单已确认；1C/1D 抓取前准备已接入，京东纵切片部分通过；1E 多来源执行尚未完整验收
-总体状态：采访 → Markdown 确认 → Capture Task → 完整可执行 Crawl Plan → 运行准备 → 显式 Start → Source Dataset 已形成生产主链。计划确认不再依赖 Chrome；运行准备可以自动启动项目专用 Chrome、校验 9222 并把京东登录/验证投影为人工动作，只有 ready 后 Web 才开放 Start。真实准备已到达登录门，本轮没有启动新的 Source Run。
+当前阶段：`ROADMAP.md` 1B 完整清单已确认；1D 京东纵切片本地工程门通过；1E 首轮真实多来源 4/6 完成，京东真实探针仍未通过
+总体状态：采访 → Markdown 确认 → Capture Task → 完整可执行 Crawl Plan → 零请求 Prepare → 显式 Start/Resume 202 后台派发 → Source Dataset 已形成生产主链。公共 Provider 已在公司 Fake-IP 网络完成真实出网、持久请求对账、Snapshot 与导出闭环；JD v2 生产默认仍失败关闭，本机开发配置已按负责人授权显式开启匿名真实 HTTP，本轮没有登录京东。
 当前积分：85.5（以 `AGENT-SCORECARD.md` 为准）
 
 ## 1. 本轮目标
@@ -898,3 +898,229 @@ Patch Disposition:
 - `npm test`：32 files passed、1 skipped，121 tests passed、1 skipped；`npm run typecheck` 六个 workspace 通过；`npm run build` 通过，Web 2301 modules、596.39 kB / gzip 176.26 kB，仅有既存大 chunk warning；`git diff --check` 通过。
 
 本轮架构影响：改变。Crawl Plan 的事实归属没有变化，但运行态 preflight 从计划确认职责移到 Source Execution 的显式 Prepare/Start 门；新增一个 typed HTTP contract，不新增数据库状态、队列或第二事实源。当前修改未提交、未推送，只在本机工作树，不构成跨电脑接续点。
+
+## 20. 2026-08-21 京东请求级频控审计与登录硬停止
+
+简单说明：昨晚的频控不是“等待不够久”，而是旧系统只给两次页面跳转计时，准备和复检会额外访问京东，页面自己加载的脚本、图片、接口和跳转又完全不计数；程序重启后冷却也会忘掉。当前已经把京东入口关闭：准备、开始和直接调用都不会启动 Chrome、不会检查登录、不会访问京东。本地只对随机端口假站做了请求级原型，证明每次跳转先占预算、首个 429 后不再发请求。正式恢复还需要把持久限速、待抓工作项和逐请求记录接入 PostgreSQL；这会改变当前工作流与公共数据 contract，需人工确认后实施。
+
+```text
+Baseline Impact:
+- touched modules: Source Access、JD Provider、Source Execution、Source Dataset policy projection、公共资源 Provider、Web 多来源失败隔离、RESEARCH/ARCHITECTURE/JD 设计/Issue/PROGRESS
+- owning fact source: Crawl Plan 继续拥有来源与计划级访问政策；Source Dataset 拥有 Source Run/target/snapshot；候选逐请求 observation 仍未获得持久事实归属
+- public interface changed: no；已撤回 Provider accessPolicy 扩展，shared/HTTP/PostgreSQL schema 本轮不变
+- new protocol/adapter/fallback: yes；新增未接入生产的显式会话 HTTP adapter；拒绝 browser route fallback，不增加重试、代理、账号轮换或反检测
+- compatibility or legacy path changed: yes；JD Prepare/Preflight/Collect 从自动启动/页面访问改为统一失败关闭；其他 Provider 可独立继续
+- research update required: yes；R-032/R-036 撤回旧结论并登记 Playwright 请求级审计、当前开放平台排除、Crawlee 持久队列候选与代理/Firefox 边界
+- architecture or ADR update required: ARCHITECTURE 改变当前 JD Source Access 能力状态；持久准入/逐请求 contract 和恢复语义尚未实现，不新增 ADR
+- tests and real-surface validation: 本地随机端口 Chrome fixture、JD 失败关闭、Source Execution 多 Provider 隔离、全量 test/typecheck/build、端口零监听；禁止京东真实页面与登录
+```
+
+```text
+Patch Disposition:
+- delete: Prepare/Preflight 未计量 page.goto、页面型 JD collect、1ms 批次冷却、未计量重定向的 browser route POC
+- keep: p-queue/Cockatiel 显式任务 gate、typed SourceAccessError、Crawl Plan/Source Dataset 单一事实源、独立来源失败隔离 WIP
+- rewrite: 本地候选改为 BrowserContext.request 显式 HTTP，每个 redirect hop 手动预算；生产 JD 三个入口全部失败关闭
+- reason: 旧补丁保护的是导航次数而非真实网络请求，且进程重启后状态丢失，不能继续叠延迟或 UI 反推
+```
+
+调查与原型事实：
+
+- 旧 JD 路径共有四个失效点：Prepare/Preflight 各自绕过 gate 导航；一个 `page.goto` 内的全部子请求不计量；生产把批次冷却硬改为 1ms；403/429 被转成 snapshot 文案而未触发 circuit。
+- Playwright context 事件只能观测已发出的请求；route POC 又在 302 第二跳上出现服务端已收到、计量层未记账的红灯，和官方 redirect issue 一致，因此整个 POC 文件删除。
+- `PacedSessionHttpAccess` 使用与 BrowserContext 共享 Cookie jar 的官方 `APIRequestContext`，关闭自动 redirect，白名单 origin，每一跳先进入现有 gate。随机端口 fixture 已证明共享本地测试 Cookie、最小间隔、批次冷却、预算前停止和首个 429 后零继续派发；没有访问外网。
+- 当前官方入口是 `open.jd.com` 的京东零售开放平台/SP-API，不再引用 JOS。项目没有满足条件的商家/服务商主体、应用和接口权限，公开能力也不能证明覆盖分类筛选、全量详情图文和每 SKU 评价样本；官方 API 已从本轮候选中排除，不再与网页采集形成虚假的二选一。
+- 用户要求下一轮保持最小改动但必须兑现完整范围。已形成 `JD-COLLECTION-ITERATION.md`：保留 Source Dataset/Asset/cacache、target attempt、p-queue/Cockatiel 和显式 HTTP；用 JD v2 计划/动态覆盖语义、PostgreSQL Capture Work Item＋逐请求账本/准入、现有 Crawlee RequestQueue 强杀恢复、图片资源引用与显式继续补齐缺口。负责人随后确认本阶段京东图片只保存 URL，不请求图片字节；通用 Asset/cacache 只保留给计划明确要求下载的其他来源。`rate-limiter-flexible`、DBOS、轮换代理池和 Firefox fallback 均不进入基础实现；Firefox只保留为满足严格前提时的单变量对照。
+
+验证结果：显式开启浏览器 fixture 的 4 个聚焦文件为 12/12 通过，其中请求级 fixture 3/3；全量 `npm test` 为 32 files passed、2 skipped，122 tests passed、4 skipped；六个 workspace `npm run typecheck`、production `npm run build` 与 `git diff --check` 均通过。Vite 只有既存约 596.68 kB chunk warning。验证前后 4000/6173/9222 均无监听；没有启动项目 Chrome、没有登录、没有访问京东或其他外部来源。
+
+当前阻塞：`JD-COLLECTION-ITERATION.md` 已把下一轮范围、旧补丁处置、公共 contract 变化、实现切片和验收门写清，等待负责人复核；本轮只获准出迭代文档，没有修改业务代码、登录京东或运行真实探针。当前修改未提交、未推送，只在本机工作树，不构成跨电脑接续点。
+
+## 21. 2026-08-21 京东完整来源数据闭环迭代文档
+
+简单说明：下一轮不会再把“一个目录＋一个详情”当作完整抓取，也不会用代理池、Firefox 或某个 limiter 的名字代替请求最小化。迭代文档要求同一 JD v2 纵切片覆盖分类/筛选、店铺/商品、完整详情、主图/详情图/参数图 URL、评价汇总和 50/100 条样本；图片 URL 从已有详情响应保存，图片服务器请求数必须为 0。其余真实 HTTP hop 先进入持久准入，受限即全京东停止，强杀后只在负责人显式继续时处理未完成项。
+
+本轮文档产物：
+
+- 新增并修订 `docs/development/JD-COLLECTION-ITERATION.md`，明确完成定义、Baseline Impact、Patch Disposition、JD v2 target、显式 HTTP、逐请求 PostgreSQL 账本、Crawlee RequestQueue 恢复、图片 URL-only/评价语义、代理/Firefox 处置、I0～I5 停止门和自动化验收矩阵；
+- `README.md` 文档地图登记其唯一职责，明确它不是平行 roadmap/progress/architecture；
+- `JD-COLLECTION-DESIGN.md` 指向下一轮迭代说明；
+- `RESEARCH.md` 纠正 JOS 旧入口和 `rate-limiter-flexible + DBOS` 的错误解法，登记当前 `open.jd.com` 条件缺口、Crawlee 持久队列候选、轮换代理池拒绝和 Firefox 条件对照边界。
+- `REQUIREMENTS-ALIGNMENT.md` 新增 D012，确认京东图片当前只保存 URL；`CONTEXT.md` 新增 `Source Resource Reference`，明确 URL 引用不是已下载附件。
+
+本轮架构影响：澄清，无已实现架构变化。文档提出的 JD v2、逐请求公共 contract、数据库 migration 和显式恢复尚未实现；实施时必须先更新/修订 ADR-0013/0016，再按 I0 红灯开始，不能把本文件当作代码完成证据。
+
+验证边界：只运行文档一致性、链接/状态和 diff 检查；没有运行代码测试，因为本轮没有业务代码改动且当前工作区已混有上一轮未提交代码 WIP。没有登录、访问京东或启动真实来源请求。
+
+下一步第一条动作：负责人复核 `JD-COLLECTION-ITERATION.md` 除图片 URL-only 外的完整范围；确认后从 I0 开始，先写多资源、25+ 图片 URL、图片服务器零请求、redirect、403/429 和强杀恢复的本地红灯 fixture，再修改 contract 或生产 Provider。
+
+## 22. 2026-08-21 京东 v2 本地数据闭环与请求级停止门
+
+简单说明：京东抓取路径已经从“打开一个浏览器页面再猜发了多少请求”改成“每个真实 HTTP 跳转先在数据库领一次许可，再发出请求”。系统现在能从目录动态发现店铺和商品，保存详情、评价与图片 URL；图片文件完全不下载。首次遇到登录、验证、403/429、风险/频控正文、未知跳转或异常响应就停止。程序被强杀后，不会重复已完成项，也只有负责人点击“显式继续”才处理剩余工作。当前开关仍是关闭的，所以这些结论全部来自本机假站，没有访问京东。
+
+```text
+Baseline Impact:
+- touched modules: shared Crawl Plan/Source Dataset contract、Drizzle schema/migrations、Source Dataset、Source Access、JD Provider、Source Execution、API/Web、RESEARCH/ADR/ARCHITECTURE/ROADMAP/PROGRESS
+- owning fact source: Crawl Plan 拥有来源/内容/数量/停止政策；Source Dataset/PostgreSQL 拥有 run/target/work/request/gate/snapshot/resource reference；Crawlee 只拥有本机派发 mechanics
+- public interface changed: yes；新增通用 Resource Reference、Capture Work Item、Request Attempt、Access Gate、resumedFromRunId、SourceProvider collection context 和显式 resume HTTP/SSE
+- new protocol/adapter/fallback: yes；新增 PostgreSQL 请求准入、session advisory run lease、Crawlee 持久派发和 JD v2 显式 HTTP adapter；没有 fallback、自动 retry、代理池或浏览器 registry
+- compatibility or legacy path changed: yes；JD v1/CDP 不再注入，新计划只生成 v2；历史计划、运行与快照保持可读
+- research update required: yes；R-032/R-036 接受本地组合并记录 Crawlee 3.18.1 双锁周期、PostgreSQL advisory lease 和真实站点未验证边界
+- architecture or ADR update required: yes；ARCHITECTURE 与 ADR-0013/0016 已更新公共事实源、恢复和访问职责
+- tests and real-surface validation: 强杀子进程、PostgreSQL 集成、本地浏览器 HTTP fixture、JD 全纵向 fixture、API/Web、全量 test/typecheck/build；禁止京东真实请求
+```
+
+```text
+Patch Disposition:
+- delete: v1 page.goto/CDP/自动登录生产路径、图片下载/图片工作项、1ms 冷却、受限后重试和 DBOS/rate-limiter-flexible/代理池/Firefox fallback 结论
+- keep: Crawl Plan/Source Dataset 单一事实源、target attempt、SourceAccessError、p-queue/Cockatiel 进程内调度、PacedSessionHttpAccess 手工 redirect、公共 Asset/cacache 与多 Provider 失败隔离
+- rewrite: JD Provider 升级为 v2 五类动态工作；请求政策改为 PostgreSQL 逐 hop 准入；前台停止改为新 run 显式继续；图片改为 Snapshot Resource Reference
+- reason: 旧实现计量的是导航而不是真实网络请求，进程重启会遗忘冷却，图片下载还增加不必要请求；继续叠延迟无法保护当前业务不变量
+```
+
+实现结果：
+
+- 新增迁移 0018～0021：Resource Reference、Capture Work Item、Request Attempt、Access Gate 和 `resumedFromRunId`。Snapshot 与资源引用同事务提交；JSONL/CSV、API 和 Workbench 同屏读取同一事实。
+- `PacedSessionHttpAccess` 对每个手工 redirect hop 先预留数据库 attempt；数据库失败、预算不足、冷却未到、circuit open、未知跨源跳转都产生零网络。401/403/429、登录/验证/风险/频控正文和其他异常响应完成账本后失败关闭。
+- `jd.catalog-product@2.0.0` 只接受目录、店铺目录、商品详情、评价汇总、评价样本五类 target；Prepare 为零请求。详情解析 Resource Reference，不创建图片工作项。`JD_REAL_HTTP_ENABLED` 严格解析 true/false，默认 false；只有显式 true 才注入匿名、无 Cookie/Profile 的 APIRequestContext。
+- 命名 Crawlee 3.18.1 RequestQueue 以稳定 work key 去重。强杀红灯最终定位为 v2 先锁队头、取请求时再延长一个周期；恢复上限改为 `2 × requestLockSecs + 1s`，真实 SIGKILL 测试通过。失败项不 reclaim、不自动 retry。
+- Source Run 用 PostgreSQL session advisory lease 防止双执行；强杀断连自动释放。恢复前把 started request 结算为 outcome unknown、running work/target 结算为 stopped；新 run 记录 `resumedFromRunId`，预算和冷却沿链累计。
+- Workbench 显示 request ledger、work、gate/circuit、图片 URL 引用和“显式继续”；API resume 复用原 SSE 契约。用户断开连接继续触发取消，不会转成后台自动任务。
+
+本地验证证据：
+
+- 全仓 `npm test`：38 files passed、2 skipped；137 tests passed、7 skipped。默认跳过的 6 条浏览器准入门另以 `RUN_BROWSER_RATE_GATE=1` 执行，6/6 通过。
+- JD 完整本地纵向：2 个目录、1 个店铺目录、3 个商品详情、3 个评价汇总、3 个 50 条评价样本，共 12 个 Snapshot/Work/Request Attempt；每商品 25 个图片 URL，共 75 条 Resource Reference；图片服务器请求 0。
+- 强杀门：Crawlee 子进程 SIGKILL 后已完成项不重复、锁未到期不派发、到期只取得未完成项；Source Run lease 子进程 SIGKILL 后活动继续先被拒绝，连接断开后可恢复。
+- `npm run typecheck` 六个 workspace 通过；`npm run build` 通过，Web 2301 modules、602.06 kB / gzip 177.65 kB，仅有既存大 chunk warning；尚需最终 `git diff --check`。
+
+真实 Workbench 对照：本机 API `127.0.0.1:4000`、Web `127.0.0.1:6173` 启动后，当前家用冰箱 v2 任务的已确认 Crawl Plan 仍绑定历史 `jd.catalog-product@1.0.0`。点击“准备抓取环境”后页面明确显示 `Provider 不可用：jd.catalog-product@1.0.0`，没有开放 Start、没有创建 Source Run，也没有访问京东；原始数据页保持空态。浏览器控制台 0 error / 0 warning。当前数据库没有 v2 Source Run，因此 request/work/gate/resource reference 的真实有数据页面只由组件测试与 API 纵向测试覆盖，本轮没有为截图污染正式数据。
+
+本轮架构影响：改变。Crawl Plan 的来源/内容/数量事实归属不变；Source Dataset/PostgreSQL 新增动态工作、逐请求准入、恢复和 URL 引用事实，Source Access 只执行其准入结果，Crawlee 只负责派发。没有第二套状态机、万能 Provider、代理/浏览器 fallback 或自动绕过。
+
+真实边界：只启动本地 API/Web 验证安全失败与空态，没有登录、访问京东或下载图片。当前修改未提交、未推送，只在本机工作树，不构成跨电脑接续点。下一步必须由负责人另行授权真实匿名最小探针；首个受限信号即停止，不能直接进入登录或扩批。
+
+## 23. 2026-08-21 公司 Fake-IP 网络修复与首轮真实多来源闭环
+
+简单说明：截图中的“6 个来源全部 0 条”不是站点统一反爬，而是公司代理把域名解析成 Fake-IP 后，旧 transport 在发出 HTTP 前把它们全部拒绝；旧公共 Provider 的延迟又只存在于单次运行内，数据库里没有任何请求记录。修复后，同一个微波炉任务已真实抓回美的商品页、两条国家标准页和 FDA 页面，共 4 个不可变快照。美的页含 8 个商品、型号、价格、库存和图片 URL，并能从正式 JSONL/CSV 导出。京东和格兰仕没有伪装成功：前者 robots 被站点 302 到错误页，后者计划域名不存在，必须修计划或使用专用 Provider。
+
+```text
+Baseline Impact:
+- touched modules: Source Access/public.web-resource、公共网络政策、Source Request Admission 接线、Crawl Planning 保存门/Prompt/Skill、worker 依赖、RESEARCH/ADR/ARCHITECTURE/ROADMAP/PROGRESS
+- owning fact source: Crawl Plan 继续拥有来源/入口/请求政策；Source Dataset/PostgreSQL 拥有 work/request/gate/snapshot；部署环境只提供代理地址
+- public interface changed: no；复用既有 SourceRequestAdmissionPort、Capture Work Item、Request Attempt 与 Access Gate contract
+- new protocol/adapter/fallback: yes；新增 Node 24 官方代理 Agent＋可信 DoH＋固定公网 IP/SNI transport；没有自动 fallback、代理池、身份轮换、登录绕过或 retry
+- compatibility or legacy path changed: yes；公共 Provider 不再直接使用 Got 或每次 run 独立的进程内 gate；历史 run/snapshot 保持可读
+- research update required: yes；R-037 登记 Mihomo Fake-IP、官方代理/DoH 候选、原型和真实验收
+- architecture or ADR update required: yes；ADR-0016/ARCHITECTURE 更新公共 Source Access 与持久准入职责
+- tests and real-surface validation: Fake-IP/DoH/pinned IP、SSRF IPv4/IPv6、逐请求准入、同任务真实 Start、PostgreSQL 账本、JSONL/CSV、全量 test/typecheck/build
+```
+
+```text
+Patch Disposition:
+- delete: 公共 Provider 直连 Got 的 Fake-IP 不可用路径、每个 Source Run 独立创建的进程内 paced gate、规划 Skill 残留的 JD v1/CDP 两 target 规则、公共多来源/京东计划已可运行的错误结论
+- keep: HTTPS 443/私网保留地址拒绝、robots 预算、零 redirect/零 retry、最大字节、JD v2 PostgreSQL 请求停止门
+- rewrite: 公共网络改为先识别 Fake-IP，再经显式 HTTPS 代理查询可信 DoH并固定已校验公网 IP；robots/target 每次请求均进入现有 PostgreSQL admission
+- reason: 直接放过 198.18.0.0/15 会破坏 SSRF 边界，继续叠延迟既不能出网也不能跨进程生效
+```
+
+实现结果：
+
+- 新增 `publicResourceTransport`：普通 DNS 地址与 DoH 地址都必须逐个通过公网校验；Fake-IP 仅在存在显式 HTTPS 代理时经 Google Public DNS 解析；真正连接固定到校验过的 IP，原域名只用于 Host/SNI。响应流保持 30 秒超时和计划字节上限。
+- 修正公共网络 BlockList：IPv4 与 IPv6 分开校验，避免 `::ffff:0:0/96` 错误命中全部 IPv4；`8.8.8.8` 正例与私网/保留地址反例均由测试保护。
+- `public.web-resource` 的 robots 和 target 都先创建/启动 Work Item、预留 Request Attempt，并以 `public.web-resource@1.0.0:<origin>` 共享 PostgreSQL gate；401/403/429、5xx、DNS/DoH 与 transport 错误均记账后失败关闭。
+- 移除 worker 对 Got 的直接依赖；Crawlee 的间接依赖不变。没有引入新的 limiter、队列、代理池、浏览器或图片下载。
+- Crawl Planning 新增确定性京东完整性门：任务确认纳入京东时，public-only 搜索页计划直接失败，必须另有 `jd.catalog-product@2.0.0` 五类动态来源。Skill 与 runtime prompt 已统一为 JD v2；找不到可验证目录入口时停止规划，不再让用户确认一份注定抓不到京东商品的计划。
+
+真实 Workbench 验收：任务 `capture-task-7489db28-65aa-48f5-8a25-815efc8a9858`、计划 `crawl-plan-1b00bad8-b5b7-42d1-8bc7-15f610120114` 从正式 Start 路径执行。最新 6 个 Source Run 为 4 completed/2 failed：
+
+- 美的 `source-run-da8eed74-dfac-4d79-9e2d-def0347d2c68`：1 Snapshot、2 Work Item、2 Request Attempt、共享 origin gate；原始 HTML 119623 bytes，包含 8 个微波炉商品、`EM925F4T-SS`、`M3-L234E`、`EG720KG3-NR1`、价格/库存和图片 URL。
+- 国家标准两条与 FDA：各 1 个 accessible Snapshot；所有请求按计划的 60000ms 最小间隔执行。
+- 京东搜索来源：`https://search.jd.com/robots.txt` 真实返回 302，Location 为 `https://h5st.m.jd.com/file-no.2/public/error.html`，按零 redirect 门失败；它证明当前旧计划入口无效，不是 JD v2 商品闭环。
+- 格兰仕来源：可信 DoH 返回 DNS status 3/NXDOMAIN，证明计划域名不存在。
+- 美的正式 API 导出：JSONL 1 条/126312 bytes，CSV 122305 bytes；导出记录可命中上述 3 个型号并包含图片 URL。
+
+当前验证：`npm run typecheck` 六个 workspace 通过；全仓 `npm test` 为 38 files passed、2 skipped，139 tests passed、7 skipped；`npm run build` 六个 workspace 通过，Web 2301 modules、602.06 kB / gzip 177.65 kB，仅有既存大 chunk warning。新增规划硬门先取得 1 个预期红灯，再由聚焦 PostgreSQL/Codex runtime 测试 19/19 通过。真实任务与导出均使用正式本地 PostgreSQL，不是注入 transport 或临时数据库。Workbench 浏览器原始数据页显示最新 6 条运行中 4 条 `1 条 · completed`、2 条明确 failed；点开美的运行可见 1 个不可变快照、请求账本 2/5，并能在页面原文命中三个商品型号。
+
+本轮架构影响：改变。Crawl Plan、Source Dataset 与 Source Execution 的事实归属不变；公共 Source Access 的 transport 由 Got 直连改为 Node 官方代理/DoH/固定 IP，并强制复用既有 PostgreSQL admission；Crawl Planning 保存门新增“京东 included 必须有 JD v2 来源”的产品不变量。没有新增公共 contract、第二事实源、自动恢复/fallback、登录或反检测。本机修改尚未提交、推送，不构成跨电脑接续点。
+
+## 24. 2026-08-21 抓取批次归属、旧计划执行硬门与真实页面修复
+
+简单说明：绿色“准备完成”以前只是检查条件，却看起来像一瞬间抓完；原始数据又只有来源运行，没有“这次点击”这个批次，所以新旧结果混在一起。现在条件检查会明确写“没有创建批次、没有访问来源”；每次真正开始会先建立一个批次，本轮结果全部归到它下面。旧记录不删除，统一放进“历史记录（无批次）”。缺少京东商品 Provider 的旧 v1 计划已经不能再开始。
+
+```text
+Baseline Impact:
+- touched modules: Crawl Planning、Source Execution、Source Dataset/PostgreSQL、API SSE、计划/原始数据 UI、typed contract、迁移 0022、测试与权威文档
+- owning fact source: Crawl Plan 拥有执行范围；Source Collection Batch 拥有一次 Start；Source Run 只拥有一个来源执行
+- public interface changed: yes；新增 Batch/Task View/Execution Event，Source Run 增加可空 executionBatchId
+- new protocol/adapter/fallback: no 新外部协议、retry、代理、登录或 fallback
+- compatibility or legacy path changed: yes；历史 Source Run 保留但明确为无批次，旧无 JD v2 confirmed plan 不得再次 Prepare/Start
+- research update required: yes；R-039 接受显式 PostgreSQL 父事实，拒绝时间戳分组和通用 workflow 扩张
+- architecture or ADR update required: yes；ARCHITECTURE、CONTEXT 与 ADR-0016 已更新批次事实归属和执行门
+- tests and real-surface validation: migration、批次归属、旧计划硬门、SSE、UI 分组、JD fixture、全量 test/typecheck/build、真实 Workbench 页面
+```
+
+```text
+Patch Disposition:
+- delete: Prepare 成功等同抓取完成的绿色反馈、旧计划静默可执行路径、平铺 Source Run 冒充一次 Start
+- keep: 历史 Source Run/Snapshot、不可变原始数据、request/work/gate、显式 Start/Resume、无自动重试
+- rewrite: Start 先创建 Batch，再创建归属本批次的 Source Run；UI 按批次显示计划版本、时间、状态和来源结果
+- reason: 旧实现缺少用户点击这一层事实，导致瞬时无执行和历史混杂都无法被产品准确表达
+```
+
+实现与真实证据：
+
+- 新增 `Source Collection Batch` typed contract、PostgreSQL 表和 migration 0022；Batch 在 Provider preflight 前创建，按全部来源终态结算 completed/partial/failed/stopped。新 Start 的 Source Run 必须带同一 batch ID，历史行保持空关系。
+- `CrawlPlanningModule.requireExecutablePlan` 成为执行前完整性事实门。真实旧计划 `crawl-plan-1b00bad8-b5b7-42d1-8bc7-15f610120114` 的 Prepare 已由本机 API 返回 422：`任务已纳入京东，但抓取计划缺少 jd.catalog-product@2.0.0 商品数据来源`；没有创建 Batch、Source Run 或网络请求。
+- Workbench 真实计划页显示最新重新规划 `interrupted`，明确“没有生成可用的新计划”，并在旧 v1 下显示不能开始的 JD v2 缺口；原始数据页显示 `历史记录（无批次） · 18 个来源运行 · 4 条`。
+- 再次重新规划已经生成待确认的 Crawl Plan v2：7 个来源、11 个 target；独立“京东自营微波炉目录”使用 `jd.catalog-product@2.0.0` 的 5 个动态 target。系统第一次输出因公共 URL 精确绑定校验失败，按原错误有界修正一次后成功；没有绕过校验。
+
+当前停止门：新 v2 仍是“待确认”。抓取计划确认属于负责人决策，本轮没有代替负责人点击确认，所以也没有点击 Start、登录京东或发起真实京东请求。确认后页面将先显示“检查抓取条件”，ready 只说明零数据检查；第二个按钮才是“开始新批次抓取”。
+
+验证状态：六个 workspace `npm run typecheck` 通过；全仓 `npm test` 为 38 files passed、2 skipped，142 tests passed、7 skipped；`npm run build` 六个 workspace 通过，Web 2301 modules、604.85 kB / gzip 178.47 kB，仅有既存大 chunk warning。定向历史恢复测试 2/2 通过，确认数据库 `NULL` 批次在 contract 边界保持“无批次”，不会伪造归属；`git diff --check` 通过。真实页面已核对 v2 的 `jd.catalog-product@2.0.0`、5 个动态 target、9 次预算和登录/验证码/拒绝/风控停止门。
+
+本轮架构影响：改变。新增 Source Collection Batch 作为一次 Start 的唯一事实源；Crawl Plan、Source Run、Snapshot 和请求准入的原有事实归属不变。没有引入第二套工作流、自动恢复、代理池、登录绕过或图片下载。本机修改未提交、未推送，不构成跨电脑接续点。
+
+## 25. 2026-08-21 页面无关的后台抓取、京东真实目录 URL 与页面确认组件
+
+简单说明：现在用户点“开始新批次抓取”后，页面只负责把命令交给服务端，约 0.3 秒就能得到“后台已提交”；关闭、刷新或切到别的页面都不会停止抓取。原始数据页会从数据库持续看到批次、来源、请求和快照进度。真实电视任务已经在离开计划页后继续抓到京东目录 30 个商品和 60 条图片 URL；图片文件没有下载，首个详情若仍只有客户端骨架就按真实限制停止。所有浏览器系统弹窗也已换成页面内可访问确认组件，不再阻塞浏览器控制。
+
+```text
+Baseline Impact:
+- touched modules: Source Execution API composition、Graphile job adapter、shared 202 acceptance contract、计划/原始数据 Web、JD catalog parser/provider、页面确认组件、RESEARCH/ARCHITECTURE/ROADMAP/ADR/PROGRESS
+- owning fact source: Crawl Plan 拥有范围；Source Collection Batch 拥有一次 Start；Source Dataset/PostgreSQL 拥有 Run/Target/Work/Request/Gate/Snapshot/Resource Reference；Graphile 只拥有派发 mechanics
+- public interface changed: yes；Start/Resume 从 SSE 执行流改为 JSON 202 acceptance，Web 后续只读 Source Dataset
+- new protocol/adapter/fallback: yes；Graphile Worker 0.17.3 嵌入 API，单并发 PostgreSQL job；没有自动 retry、代理池、身份轮换、登录绕过或 fallback
+- compatibility or legacy path changed: yes；页面断开不再转换为 operator_cancelled；历史 Batch/Run/Snapshot 保持原样可读
+- research update required: yes；R-041 完成 Graphile/DBOS/pg-boss/Crawlee 候选处置、最小原型和安全边界
+- architecture or ADR update required: yes；ARCHITECTURE 与 ADR-0013 已替代前台 SSE 当前契约；ROADMAP 记录页面断连门与进程强杀剩余边界
+- tests and real-surface validation: task seam、202 route、真实 PostgreSQL/随机端口断连、同队列串行/runner 重启原型、Web 轮询、全量 test/typecheck/build、真实 Workbench 点击后离页
+```
+
+```text
+Patch Disposition:
+- delete: Start/Resume 的 SSE response、HTTP socket close → AbortSignal、抓取页面卸载 abort、UI 长时间“正在抓取”假占有；JD 假 `data-jd-*` 图片/店铺/评价完成规则；全部原生 alert/confirm/prompt
+- keep: Source Collection Batch/Run/Target/Work/Request/Gate/Snapshot、PostgreSQL 请求频控/预算/熔断、Crawlee Provider 内工作队列、首错停止、显式继续关系、图片 URL-only
+- rewrite: API Start/Resume 改为 typed 202 enqueue；服务端 task 消费完整 Source Execution 流；Web 改为短提交＋运行态轮询；JD 目录解析改用真实 `#J_goodsList li.gl-item[data-sku]` 与图片懒加载属性
+- reason: 浏览器/Codex 连接不是业务任务句柄；旧假 DOM 属性和前台连接契约都已被真实页面推翻，不能继续叠 fallback
+```
+
+实现结果：
+
+- 接受并锁定 `graphile-worker@0.17.3`。API 启动时使用官方 migrator和 library runner；`execute_source_collection` task 与 `source_collection` queue 单并发，payload 只含 task/plan/run/revision/command ID，`maxAttempts=1`。Graphile 表不进入 UI、导出或业务状态判断。
+- Start 在入队前重读当前 confirmed plan/Provider readiness，成功返回 `{status:"accepted", commandId}`；后台 task 不带浏览器 `AbortSignal` 并消费完整 async iterable。Resume 使用同一后台契约。服务关闭先停止 runner，再关闭 Workbench/provider。
+- Workbench 按 Batch/Run running 状态每 2 秒读取 Source Dataset；Start/Resume 按钮只在提交期间显示“正在提交”，随后明确提示可以关闭或离开页面。原始数据继续按 Batch 分组，历史无批次记录不混入新批次。
+- 京东真实目录 parser 从 30 个 `data-sku` 商品卡保存 30 个商品工作项和 60 条主图 URL 引用；图片服务器请求为 0。虚构的 `data-jd-image-role`、店铺和评价属性已删除。匿名商品详情只返回骨架时形成 source failure 并停止后续 29 个详情请求，不伪造 target 完成。
+- `ConfirmationDialog` 复用 Radix Alert Dialog，覆盖删除任务、删除采访和显式继续；取消默认获焦、Esc、焦点归还、取消零副作用、确认一次，以及生产源码零 native alert/confirm/prompt 均由测试保护。
+
+真实 Workbench 证据：电视任务 `capture-task-2e069323-caf9-4862-abdf-08fb4448897b` 的 confirmed plan v1 在页面点击 Start 后 307ms 显示 `source-command-c897d3b7-3964-4200-93f0-60b2ac550882` 已交给后台；随即切到“抓取范围”，原 Start 页面已卸载。再进入原始数据时，新批次 `source-batch-6a8bb6b7-0d9f-4774-9daf-63ec1290c298` 仍为 running，已有 1 个 JD Source Run、1 个不可变目录 Snapshot、31 个 Work Item（目录完成＋30 商品待处理）、1 个 Request Attempt 和 60 条图片 URL，证明任务不依赖页面或 Codex 连接。本轮没有登录京东、没有下载图片、没有绕过验证或频控。
+
+验证状态：
+
+- 全仓 `npm test`：40 files passed、3 skipped；150 tests passed、8 skipped。默认跳过的请求级浏览器准入门另以 `RUN_BROWSER_RATE_GATE=1` 执行 6/6 通过。
+- Graphile 最小原型：同 queue 在两个 worker/concurrency 2 下 `maxActive=1`；runner 停止期间入队的 job 在新 runner 启动后完成；HTTP 202 在 48ms 返回后 250ms 任务完成；领域失败只执行一次，非法 payload 零领域调用。生产 adapter 隔离命名空间的 PostgreSQL/随机端口断连集成 1/1 通过。
+- 六个 workspace `npm run typecheck` 通过；`npm run build` 通过，Web 2302 modules、642.53 kB / gzip 190.58 kB，仅有既存大 chunk warning；`git diff --check` 通过。
+- `npm audit --omit=dev` 仍为既有 1 moderate/4 high，报告链没有 Graphile Worker；Fastify 的完整修复要求破坏性大版本，未执行 `audit fix/force`。
+
+本轮架构影响：改变。Source Collection Batch 仍是一次 Start 的唯一领域事实；新增 Graphile Worker 只把执行生命周期从 HTTP 页面移到服务端 PostgreSQL 持久 job，不拥有业务状态。旧 SSE/断连取消补丁已删除，没有保留第二套执行入口。未领取 job 的 runner 重启恢复已证明；正在执行一半的整批 API 强杀 exactly-once 尚未证明，继续作为后续恢复门，不能用本轮页面断连修复冒充完成。
+
+当前修改未提交、未推送，只在本机工作树，不构成跨电脑接续点。下一步第一条动作：保持当前真实后台批次自行运行，不用浏览器或 Codex 持续连接；负责人可随时关闭页面，之后仅通过原始数据页查看持久结果。若要宣称进程级完全恢复，再单独补执行中强杀门，不在本轮继续扩大实现。

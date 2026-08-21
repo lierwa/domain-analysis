@@ -85,14 +85,33 @@ export const sourceCollectionPlanSchema = z.object({
   createdAt: isoDateSchema,
 }).strict();
 
+export const sourceCollectionBatchSchema = z.object({
+  id: idSchema,
+  taskId: idSchema,
+  sourceCollectionPlanId: idSchema,
+  sourceCollectionPlanVersion: z.number().int().positive(),
+  taskRevision: z.number().int().positive(),
+  status: z.enum(["running", "completed", "partial", "failed", "stopped"]),
+  plannedSourceCount: z.number().int().positive(),
+  startedAt: isoDateSchema,
+  finishedAt: isoDateSchema.optional(),
+  terminationReason: z.string().min(1).max(2000).optional(),
+}).strict();
+
 export const sourceCollectionRunSchema = z.object({
   id: idSchema,
   taskId: idSchema,
+  // WHY：批次是一次“开始抓取”的事实；历史行没有该关系，只能显式归为无批次记录。
+  executionBatchId: idSchema.optional(),
+  // WHY：显式恢复产生新运行；前序运行保持不可变，并由关系字段形成可审计链路。
+  resumedFromRunId: idSchema.optional(),
   sourceCollectionPlanId: idSchema.optional(),
   sourceCollectionPlanSourceKey: idSchema.optional(),
   sourceCollectionPlanVersion: z.number().int().positive().optional(),
   providerKey: idSchema,
   providerVersion: idSchema.optional(),
+  // WHY：历史运行未保存计划预算；新运行必须写入，读取旧数据时只能显式缺失而不能猜测。
+  requestBudget: z.number().int().positive().optional(),
   accessPolicy: sourceAccessPolicySchema,
   status: z.enum(["running", "completed", "failed", "stopped"]),
   snapshotCount: z.number().int().nonnegative(),
@@ -102,6 +121,12 @@ export const sourceCollectionRunSchema = z.object({
   startedAt: isoDateSchema,
   finishedAt: isoDateSchema.optional(),
   terminationReason: z.string().min(1).max(2000).optional(),
+}).strict();
+
+export const sourceProviderCollectionContextSchema = z.object({
+  queueRunId: idSchema,
+  resumedFromRunId: idSchema.optional(),
+  accessPolicy: sourceAccessPolicySchema,
 }).strict();
 
 export const sourceCollectionTargetRunSchema = z.object({
@@ -116,6 +141,56 @@ export const sourceCollectionTargetRunSchema = z.object({
   startedAt: isoDateSchema.optional(),
   finishedAt: isoDateSchema.optional(),
   terminationReason: z.string().min(1).max(2000).optional(),
+}).strict();
+
+export const sourceCaptureWorkItemSchema = z.object({
+  id: idSchema,
+  runId: idSchema,
+  targetKey: idSchema,
+  workKey: idSchema,
+  parentObjectKey: idSchema.optional(),
+  captureUnit: idSchema,
+  expectedUnitCount: z.number().int().nonnegative().optional(),
+  observedUnitCount: z.number().int().nonnegative(),
+  status: z.enum(["pending", "running", "completed", "failed", "stopped"]),
+  createdAt: isoDateSchema,
+  startedAt: isoDateSchema.optional(),
+  finishedAt: isoDateSchema.optional(),
+  terminationReason: z.string().min(1).max(2000).optional(),
+}).strict();
+
+export const sourceRequestAttemptSchema = z.object({
+  id: idSchema,
+  runId: idSchema,
+  targetKey: idSchema,
+  workKey: idSchema,
+  gateKey: idSchema,
+  requestedUrl: z.string().url(),
+  origin: z.string().url(),
+  redirectParentAttemptId: idSchema.optional(),
+  startedAt: isoDateSchema,
+  finishedAt: isoDateSchema.optional(),
+  finalUrl: z.string().url().optional(),
+  httpStatus: z.number().int().min(100).max(599).optional(),
+  bytes: z.number().int().nonnegative().optional(),
+  state: z.enum(["started", "completed", "restricted", "failed", "cancelled"]),
+  restrictionReason: z.string().min(1).max(500).optional(),
+}).strict();
+
+export const sourceAccessGateStateSchema = z.object({
+  key: idSchema,
+  providerKey: idSchema,
+  providerVersion: idSchema,
+  policyVersion: idSchema,
+  circuitState: z.enum(["closed", "open"]),
+  lastAttemptAt: isoDateSchema.optional(),
+  nextEligibleAt: isoDateSchema.optional(),
+  windowStartedAt: isoDateSchema.optional(),
+  windowRequestCount: z.number().int().nonnegative(),
+  blockedAt: isoDateSchema.optional(),
+  blockedReason: z.string().min(1).max(500).optional(),
+  manualResumeRequired: z.boolean(),
+  updatedAt: isoDateSchema,
 }).strict();
 
 export const sourceSnapshotSchema = z.object({
@@ -144,10 +219,28 @@ export const sourceAssetSchema = z.object({
   createdAt: isoDateSchema,
 }).strict();
 
+export const sourceProviderResourceReferenceSchema = z.object({
+  kind: z.literal("image"),
+  sourceUrl: z.string().url(),
+  observedValue: z.string().min(1).max(4_000).optional(),
+  locator: z.string().min(1).max(2_000).optional(),
+  role: z.enum(["primary", "detail", "parameter", "review"]),
+  section: idSchema,
+  ordinal: z.number().int().nonnegative(),
+}).strict();
+
+export const sourceResourceReferenceSchema = sourceProviderResourceReferenceSchema.extend({
+  id: idSchema,
+  snapshotId: idSchema,
+  createdAt: isoDateSchema,
+}).strict();
+
 export const sourceSnapshotRecordSchema = z.object({
   object: sourceObjectSchema,
   snapshot: sourceSnapshotSchema,
   assets: z.array(sourceAssetSchema),
+  // WHY：历史 Snapshot 没有资源引用；读取时投影为空数组，不伪造任何已观察 URL。
+  resourceReferences: z.array(sourceResourceReferenceSchema).default([]),
 }).strict();
 
 export const sourceSnapshotCommitSchema = z.object({
@@ -175,6 +268,7 @@ export const sourceProviderEventSchema = z.discriminatedUnion("type", [
     targetKey: idSchema,
     snapshot: providerSnapshotSchema,
     assets: z.array(sourceProviderAssetSchema).max(20).default([]),
+    resourceReferences: z.array(sourceProviderResourceReferenceSchema).default([]),
   }).strict(),
   z.object({ type: z.literal("target.completed"), targetKey: idSchema }).strict(),
 ]).superRefine((event, context) => {
@@ -193,9 +287,35 @@ export const sourceRunEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("run.stopped"), run: sourceCollectionRunSchema }).strict(),
 ]);
 
+export const sourceExecutionEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("batch.started"), batch: sourceCollectionBatchSchema }).strict(),
+  z.object({ type: z.literal("batch.completed"), batch: sourceCollectionBatchSchema }).strict(),
+  z.object({ type: z.literal("batch.partial"), batch: sourceCollectionBatchSchema }).strict(),
+  z.object({ type: z.literal("batch.failed"), batch: sourceCollectionBatchSchema }).strict(),
+  z.object({ type: z.literal("batch.stopped"), batch: sourceCollectionBatchSchema }).strict(),
+  z.object({ type: z.literal("run.started"), run: sourceCollectionRunSchema }).strict(),
+  z.object({ type: z.literal("run.updated"), run: sourceCollectionRunSchema }).strict(),
+  z.object({ type: z.literal("run.completed"), run: sourceCollectionRunSchema }).strict(),
+  z.object({ type: z.literal("run.failed"), run: sourceCollectionRunSchema }).strict(),
+  z.object({ type: z.literal("run.stopped"), run: sourceCollectionRunSchema }).strict(),
+]);
+
+export const sourceExecutionAcceptanceSchema = z.object({
+  status: z.literal("accepted"),
+  commandId: idSchema,
+}).strict();
+
+export const sourceDatasetTaskViewSchema = z.object({
+  batches: z.array(sourceCollectionBatchSchema),
+  runs: z.array(sourceCollectionRunSchema),
+}).strict();
+
 export const sourceDatasetRunViewSchema = z.object({
   run: sourceCollectionRunSchema,
   targets: z.array(sourceCollectionTargetRunSchema),
+  workItems: z.array(sourceCaptureWorkItemSchema).default([]),
+  requestAttempts: z.array(sourceRequestAttemptSchema).default([]),
+  accessGates: z.array(sourceAccessGateStateSchema).default([]),
   records: z.array(sourceSnapshotRecordSchema),
 }).strict();
 
@@ -206,13 +326,43 @@ export type SourceObjectInput = z.infer<typeof sourceObjectInputSchema>;
 export type SourceObject = z.infer<typeof sourceObjectSchema>;
 export type SourceCollectionPlanContent = z.infer<typeof sourceCollectionPlanContentSchema>;
 export type SourceCollectionPlan = z.infer<typeof sourceCollectionPlanSchema>;
+export type SourceCollectionBatch = z.infer<typeof sourceCollectionBatchSchema>;
 export type SourceCollectionRun = z.infer<typeof sourceCollectionRunSchema>;
+export type SourceProviderCollectionContext = z.infer<typeof sourceProviderCollectionContextSchema>;
 export type SourceCollectionTargetRun = z.infer<typeof sourceCollectionTargetRunSchema>;
+export type SourceCaptureWorkItem = z.infer<typeof sourceCaptureWorkItemSchema>;
+export type SourceRequestAttempt = z.infer<typeof sourceRequestAttemptSchema>;
+export type SourceAccessGateState = z.infer<typeof sourceAccessGateStateSchema>;
+export type SourceRequestAdmission =
+  | { status: "admitted"; attempt: SourceRequestAttempt }
+  | { status: "deferred"; reason: "minimum_interval" | "rate_window"; retryAt: string }
+  | { status: "blocked"; reason: string; manualResumeRequired: boolean };
+export interface SourceRequestAdmissionPort {
+  ensureCaptureWorkItem(input: { runId: string; targetKey: string; workKey: string;
+    parentObjectKey?: string; captureUnit: string; expectedUnitCount?: number }): Promise<SourceCaptureWorkItem>;
+  startCaptureWorkItem(input: { runId: string; workKey: string }): Promise<SourceCaptureWorkItem>;
+  finishCaptureWorkItem(input: { runId: string; workKey: string;
+    status: "completed" | "failed" | "stopped"; observedUnitCount: number;
+    terminationReason?: string }): Promise<SourceCaptureWorkItem>;
+  reserveRequest(input: { runId: string; targetKey: string; workKey: string; gateKey: string;
+    providerKey: string; providerVersion: string; policyVersion: string; requestedUrl: string;
+    redirectParentAttemptId?: string; minimumIntervalMs: number;
+    maxRequestsPerMinute: number }): Promise<SourceRequestAdmission>;
+  finishRequest(input: { attemptId: string; state: Exclude<SourceRequestAttempt["state"], "started">;
+    finalUrl?: string; httpStatus?: number; bytes?: number; restrictionReason?: string }): Promise<SourceRequestAttempt>;
+  getAccessGate(gateKey: string): Promise<SourceAccessGateState | null>;
+}
 export type SourceSnapshot = z.infer<typeof sourceSnapshotSchema>;
 export type SourceAsset = z.infer<typeof sourceAssetSchema>;
+export type SourceProviderResourceReference = z.infer<typeof sourceProviderResourceReferenceSchema>;
+export type SourceResourceReference = z.infer<typeof sourceResourceReferenceSchema>;
 export type SourceSnapshotRecord = z.infer<typeof sourceSnapshotRecordSchema>;
 export type SourceDatasetRunView = z.infer<typeof sourceDatasetRunViewSchema>;
+export type SourceDatasetTaskView = z.infer<typeof sourceDatasetTaskViewSchema>;
 export type SourceSnapshotCommit = z.infer<typeof sourceSnapshotCommitSchema>;
 export type SourceProviderAsset = z.infer<typeof sourceProviderAssetSchema>;
-export type SourceProviderEvent = z.infer<typeof sourceProviderEventSchema>;
+// WHY：Provider 产物先经过执行层 parse；默认空集合属于边界规范化，不应强迫所有旧 Provider 重复填充。
+export type SourceProviderEvent = z.input<typeof sourceProviderEventSchema>;
 export type SourceRunEvent = z.infer<typeof sourceRunEventSchema>;
+export type SourceExecutionEvent = z.infer<typeof sourceExecutionEventSchema>;
+export type SourceExecutionAcceptance = z.infer<typeof sourceExecutionAcceptanceSchema>;

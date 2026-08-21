@@ -4,12 +4,14 @@ import { describe, expect, it } from "vitest";
 import { serializeSourceDataset } from "../src/sourceDatasetExport";
 
 describe("Source Dataset 导出", () => {
-  it("CSV 保留 target 归属与附件清单", async () => {
+  it("CSV 保留 target 归属、附件清单与未下载资源 URL", async () => {
     const output = await collect(serializeSourceDataset(view(), "csv"));
 
     expect(output).toContain("run_id,target_key,snapshot_id");
     expect(output).toContain("standard.document");
     expect(output).toContain("standard.pdf");
+    expect(output).toContain("resource_reference_count");
+    expect(output).toContain("https://img.example.com/detail.webp");
   });
 });
 
@@ -34,6 +36,10 @@ function view() {
       id: "asset-1", snapshotId: "snapshot-1", assetKey: "raw", filename: "standard.pdf",
       sourceUrl: "https://example.com/standard.pdf", mediaType: "application/pdf",
       contentHash: "0".repeat(64), casIntegrity: "sha256-test", bytes: 4, createdAt: at,
+    }], resourceReferences: [{
+      id: "resource-reference-1", snapshotId: "snapshot-1", kind: "image",
+      sourceUrl: "https://img.example.com/detail.webp", role: "detail",
+      section: "description", ordinal: 0, createdAt: at,
     }] }],
   });
 }

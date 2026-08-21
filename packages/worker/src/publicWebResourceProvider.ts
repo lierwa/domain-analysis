@@ -1,25 +1,26 @@
 import { createHash } from "node:crypto";
-import { Readable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 
-import type { CrawlPlanSource, SourceProviderEvent } from "@domain-analysis/shared";
+import type {
+  CrawlPlanSource,
+  SourceProviderCollectionContext,
+  SourceProviderEvent,
+  SourceRequestAdmissionPort,
+} from "@domain-analysis/shared";
 import * as cheerio from "cheerio";
-import got from "got";
 import robotsParser from "robots-parser";
 
-import { createPacedAccessGate } from "./pacedAccessGate";
-import { assertPublicHttpsUrl, createPublicDnsLookup } from "./publicNetworkPolicy";
+import { assertPublicHttpsUrl } from "./publicNetworkPolicy";
+import {
+  createPublicResourceTransport,
+  publicWebUserAgent,
+  type RawPublicResponse,
+} from "./publicResourceTransport";
 
 const providerKey = "public.web-resource";
 const providerVersion = "1.0.0";
-const userAgent = "DomainAnalysisBot/0.1";
 const maximumAllowedBytes = 25_000_000;
 const maximumRobotsBytes = 256_000;
-
-export interface RawPublicResponse {
-  statusCode: number;
-  headers: Record<string, string>;
-  body: Uint8Array<ArrayBuffer>;
-}
 
 export interface PublicWebResourceProviderOptions {
   request?: (url: URL, maximumBytes: number, signal?: AbortSignal) => Promise<RawPublicResponse>;
@@ -27,28 +28,32 @@ export interface PublicWebResourceProviderOptions {
 }
 
 export function createPublicWebResourceProvider(options: PublicWebResourceProviderOptions = {}) {
-  const request = options.request ?? requestPublicResource;
+  const request = options.request ?? createPublicResourceTransport();
   const now = options.now ?? (() => new Date());
   return {
     key: providerKey,
     version: providerVersion,
     validate: validatePublicSource,
     async preflight(source: CrawlPlanSource) { validatePublicSource(source); },
-    async *collect(source: CrawlPlanSource, _runId: string, signal?: AbortSignal): AsyncIterable<SourceProviderEvent> {
+    async *collect(source: CrawlPlanSource, runId: string, admission?: SourceRequestAdmissionPort,
+      signal?: AbortSignal, context?: SourceProviderCollectionContext): AsyncIterable<SourceProviderEvent> {
+      if (context?.resumedFromRunId) {
+        throw new Error("public.web-resource 没有持久工作队列，不能从前序运行继续");
+      }
+      if (!admission) throw new Error("public.web-resource 必须通过持久请求准入执行");
       const configuration = sourceConfiguration(source);
       const targets = source.targets.map((target, index) => targetPlan(source, target, index));
       const origins = [...new Set(targets.flatMap((plan) => plan.kind === "exact" ? [plan.url.origin] : []))];
       if (source.stopPolicy.requestBudget < targets.length + origins.length) {
         throw new Error("公共资源请求预算必须包含每个 origin 的 robots.txt 与每个 target 请求");
       }
-      const gate = createPacedAccessGate({ ...source.accessPolicy,
-        jitterMs: { min: 0, max: 0 }, batchSize: 1, batchCooldownMs: 1 });
-      signal?.addEventListener("abort", () => gate.cancel("operator_cancelled"), { once: true });
       const robots = new Map<string, ReturnType<typeof robotsParser> | "blocked">();
       for (const origin of origins) {
         const robotsUrl = new URL("/robots.txt", origin);
-        const response = await gate.schedule(`robots:${origin}`,
-          (policySignal) => request(robotsUrl, maximumRobotsBytes, policySignal));
+        const owner = targets.find((plan) => plan.kind === "exact" && plan.url.origin === origin);
+        if (!owner) throw new Error(`robots.txt 找不到所属 target：${origin}`);
+        const response = await requestPersistently(source, runId, admission, owner.target.key,
+          `robots:${origin}`, "robots_policy", robotsUrl, maximumRobotsBytes, request, signal);
         robots.set(origin, parseRobots(robotsUrl, response));
       }
       const responses = new Map<string, { url: URL; response: RawPublicResponse }>();
@@ -56,64 +61,89 @@ export function createPublicWebResourceProvider(options: PublicWebResourceProvid
         const { target } = plan;
         const url = plan.kind === "exact" ? plan.url : linkedTargetUrl(plan, responses);
         const policy = robots.get(url.origin);
-        if (policy === "blocked" || policy?.isAllowed(url.href, userAgent) === false) {
+        if (policy === "blocked" || policy?.isAllowed(url.href, publicWebUserAgent) === false) {
           yield inaccessible(target.key, url, now(), "access_denied", "robots.txt 不允许访问该资源");
           return;
         }
-        const response = await gate.schedule(`target:${target.key}`,
-          (policySignal) => request(url, configuration.maximumBytes, policySignal));
+        const response = await requestPersistently(source, runId, admission, target.key,
+          `target:${target.key}`, target.captureUnit, url, configuration.maximumBytes, request, signal);
         const event = captureEvent(source, target.key, url, response, now());
         yield event;
         if (event.snapshot.observation.state !== "accessible") return;
         responses.set(target.key, { url, response });
         yield { type: "target.completed", targetKey: target.key };
       }
-      await gate.onIdle();
     },
   };
 }
 
-export function publicRequestOptions(signal?: AbortSignal) {
-  return {
-    signal,
-    followRedirect: false,
-    retry: { limit: 0 },
-    throwHttpErrors: false,
-    timeout: { request: 30_000 },
-    dnsLookup: createPublicDnsLookup(),
-    dnsCache: false,
-    enableUnixSockets: false,
-    http2: false,
-    headers: { "user-agent": userAgent, accept: "*/*" },
-  };
-}
-
-export async function requestPublicResource(url: URL, maximumBytes: number, signal?: AbortSignal) {
-  assertPublicHttpsUrl(url.href);
-  const stream = got.stream(url, publicRequestOptions(signal));
-  let statusCode = 0;
-  let headers: Record<string, string> = {};
-  stream.once("response", (response) => {
-    statusCode = response.statusCode;
-    headers = normalizeHeaders(response.headers);
-  });
-  const body = Uint8Array.from(await readBoundedBody(stream, maximumBytes));
-  return { statusCode, headers, body };
-}
-
-export async function readBoundedBody(stream: Readable, maximumBytes: number) {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const rawChunk of stream) {
-    const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk as Uint8Array);
-    total += chunk.byteLength;
-    if (total > maximumBytes) {
-      stream.destroy();
-      throw new Error(`来源响应超过最大字节：${maximumBytes}`);
-    }
-    chunks.push(chunk);
+async function requestPersistently(
+  source: CrawlPlanSource,
+  runId: string,
+  admission: SourceRequestAdmissionPort,
+  targetKey: string,
+  workKey: string,
+  captureUnit: string,
+  url: URL,
+  maximumBytes: number,
+  request: NonNullable<PublicWebResourceProviderOptions["request"]>,
+  signal?: AbortSignal,
+) {
+  await admission.ensureCaptureWorkItem({ runId, targetKey, workKey, captureUnit, expectedUnitCount: 1 });
+  await admission.startCaptureWorkItem({ runId, workKey });
+  const attempt = await reserveWhenEligible(source, runId, admission, targetKey, workKey, url, signal);
+  try {
+    const response = await request(url, maximumBytes, signal);
+    const restricted = restrictionReason(response.statusCode);
+    await admission.finishRequest({ attemptId: attempt.id,
+      state: restricted ? "restricted" : response.statusCode >= 500 ? "failed" : "completed",
+      finalUrl: url.href, httpStatus: response.statusCode, bytes: response.body.byteLength,
+      ...(restricted ? { restrictionReason: restricted } : {}) });
+    await admission.finishCaptureWorkItem({ runId, workKey,
+      status: restricted ? "stopped" : response.statusCode >= 500 ? "failed" : "completed",
+      observedUnitCount: restricted || response.statusCode >= 500 ? 0 : 1,
+      ...(restricted ? { terminationReason: restricted } : response.statusCode >= 500
+        ? { terminationReason: `HTTP ${response.statusCode}` } : {}) });
+    return response;
+  } catch (error) {
+    await admission.finishRequest({ attemptId: attempt.id, state: "failed" }).catch(() => undefined);
+    await admission.finishCaptureWorkItem({ runId, workKey, status: "failed", observedUnitCount: 0,
+      terminationReason: boundedFailure(error) }).catch(() => undefined);
+    throw error;
   }
-  return Buffer.concat(chunks, total);
+}
+
+async function reserveWhenEligible(
+  source: CrawlPlanSource,
+  runId: string,
+  admission: SourceRequestAdmissionPort,
+  targetKey: string,
+  workKey: string,
+  url: URL,
+  signal?: AbortSignal,
+) {
+  while (true) {
+    const result = await admission.reserveRequest({ runId, targetKey, workKey,
+      gateKey: `${providerKey}@${providerVersion}:${url.origin}`,
+      providerKey, providerVersion, policyVersion: source.accessPolicy.version,
+      requestedUrl: url.href, minimumIntervalMs: source.accessPolicy.minimumIntervalMs,
+      maxRequestsPerMinute: source.accessPolicy.maxRequestsPerMinute });
+    if (result.status === "admitted") return result.attempt;
+    if (result.status === "blocked") throw new Error(`持久请求 gate 阻止访问：${result.reason}`);
+    const waitMs = Math.max(0, new Date(result.retryAt).getTime() - Date.now());
+    if (waitMs > 0) await delay(waitMs, undefined, { signal });
+  }
+}
+
+function restrictionReason(status: number) {
+  if (status === 429) return "rate_limited";
+  if (status === 401) return "login_required";
+  if (status === 403) return "access_denied";
+  return undefined;
+}
+
+function boundedFailure(error: unknown) {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 2000);
 }
 
 function validatePublicSource(source: CrawlPlanSource) {
@@ -290,11 +320,6 @@ function resourceFilename(url: URL, disposition: string | undefined, mediaType: 
   const fallback = decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) ?? "resource");
   const value = (named ?? fallback).replace(/[^\p{L}\p{N}._-]+/gu, "_").slice(0, 200);
   return value || (mediaType === "application/pdf" ? "resource.pdf" : "resource.bin");
-}
-
-function normalizeHeaders(headers: Record<string, string | string[] | undefined>) {
-  return Object.fromEntries(Object.entries(headers).flatMap(([key, value]) => value === undefined
-    ? [] : [[key.toLowerCase(), Array.isArray(value) ? value.join(", ") : value]]));
 }
 
 function safeResponseHeaders(headers: Record<string, string>) {

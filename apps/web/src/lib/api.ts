@@ -7,10 +7,10 @@ import {
   crawlPlanningViewSchema,
   interviewTimelineEventSchema,
   interviewTurnRequestSchema,
-  sourceCollectionRunSchema,
+  sourceDatasetTaskViewSchema,
+  sourceExecutionAcceptanceSchema,
   sourceDatasetRunViewSchema,
   sourcePreparationSchema,
-  sourceRunEventSchema,
   startCrawlPlanSchema,
   type CaptureTask,
   type CategoryInterviewView,
@@ -20,10 +20,10 @@ import {
   type InterviewSession,
   type InterviewTimelineEvent,
   type InterviewTurnRequest,
-  type SourceCollectionRun,
+  type SourceDatasetTaskView,
   type SourceDatasetRunView,
   type SourcePreparation,
-  type SourceRunEvent,
+  type SourceExecutionAcceptance,
 } from "@domain-analysis/shared";
 import { createParser } from "eventsource-parser";
 
@@ -173,24 +173,29 @@ export async function prepareCrawlPlan(
   return sourcePreparationSchema.parse(data.item);
 }
 
-export async function streamSourceRun(taskId: string, planId: string, input: { expectedTaskRevision: number; expectedPlanVersion: number }, onEvent: (event: SourceRunEvent) => void, signal?: AbortSignal) {
-  const response = await fetch(`/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-plans/${encodeURIComponent(planId)}/start`, {
-    method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify(startCrawlPlanSchema.parse(input)), signal,
-  });
-  if (!response.ok || !response.body) throw await apiErrorFromResponse(response);
-  const parser = createParser({ onEvent: (event) => onEvent(sourceRunEventSchema.parse(JSON.parse(event.data))) });
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  while (true) { const { value, done } = await reader.read(); if (done) break; parser.feed(decoder.decode(value, { stream: true })); }
-  parser.feed(decoder.decode());
+export async function startSourceBatch(taskId: string, planId: string,
+  input: { expectedTaskRevision: number; expectedPlanVersion: number }): Promise<SourceExecutionAcceptance> {
+  const data = await request<{ item: unknown }>(
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-plans/${encodeURIComponent(planId)}/start`,
+    { method: "POST", body: JSON.stringify(startCrawlPlanSchema.parse(input)) },
+  );
+  return sourceExecutionAcceptanceSchema.parse(data.item);
 }
 
-export async function fetchSourceCollectionRuns(taskId: string): Promise<SourceCollectionRun[]> {
-  const data = await request<{ items: unknown[] }>(
+export async function resumeSourceRun(taskId: string, runId: string,
+  input: { expectedTaskRevision: number; expectedPlanVersion: number }): Promise<SourceExecutionAcceptance> {
+  const data = await request<{ item: unknown }>(
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs/${encodeURIComponent(runId)}/resume`,
+    { method: "POST", body: JSON.stringify(startCrawlPlanSchema.parse(input)) },
+  );
+  return sourceExecutionAcceptanceSchema.parse(data.item);
+}
+
+export async function fetchSourceCollectionRuns(taskId: string): Promise<SourceDatasetTaskView> {
+  const data = await request<{ item: unknown }>(
     `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs`,
   );
-  return sourceCollectionRunSchema.array().parse(data.items);
+  return sourceDatasetTaskViewSchema.parse(data.item);
 }
 
 export async function fetchSourceCollectionRun(taskId: string, runId: string): Promise<SourceDatasetRunView> {

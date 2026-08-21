@@ -11,6 +11,7 @@ import {
   fetchCaptureTasks,
   fetchCategoryInterviews,
 } from "../lib/api";
+import { ConfirmationDialog } from "../components/ConfirmationDialog";
 import {
   ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY,
   CategoryInterviewTimeline,
@@ -91,7 +92,6 @@ export function CaptureTaskWorkspacePage() {
   }
 
   async function removeInterview(session: InterviewSession) {
-    if (!window.confirm(`删除未完成对话“${session.initialRequest}”？删除后无法恢复。`)) return;
     setDeleteError(undefined);
     setDeletingRecordId(session.id);
     try {
@@ -111,7 +111,6 @@ export function CaptureTaskWorkspacePage() {
   }
 
   async function removeTask(task: CaptureTask) {
-    if (!window.confirm(`从任务记录中删除“${task.name}”？任务历史和原始数据会保留。`)) return;
     setDeleteError(undefined);
     setDeletingRecordId(task.id);
     try {
@@ -286,6 +285,10 @@ function CaptureTaskSidebar({
             deleting={deletingRecordId === session.id}
             onSelect={() => onSelectInterview(session.id)}
             onDelete={() => onDeleteInterview(session)}
+            deleteConfirmation={{
+              title: "删除未完成对话？",
+              description: `“${session.initialRequest}”删除后无法恢复。`,
+            }}
           />
         ))}
         {tasks.map((task) => (
@@ -297,6 +300,10 @@ function CaptureTaskSidebar({
             deleting={deletingRecordId === task.id}
             onSelect={() => onSelect(task.id)}
             onDelete={() => onDeleteTask(task)}
+            deleteConfirmation={{
+              title: "从任务记录中删除？",
+              description: `将删除“${task.name}”的任务记录；任务历史和原始数据会保留。`,
+            }}
           />
         ))}
       </div>
@@ -311,6 +318,7 @@ function TaskRecordRow({
   deleting,
   onSelect,
   onDelete,
+  deleteConfirmation,
 }: {
   title: string;
   meta: string;
@@ -318,6 +326,7 @@ function TaskRecordRow({
   deleting: boolean;
   onSelect: () => void;
   onDelete: () => void;
+  deleteConfirmation: { title: string; description: string };
 }) {
   return (
     <div className={`group flex min-h-12 w-full items-center rounded-lg ${selected ? "bg-ink text-surface" : "hover:bg-surface"}`}>
@@ -328,13 +337,20 @@ function TaskRecordRow({
           <span className={`mt-0.5 block text-xs ${selected ? "text-surface/70" : "text-muted"}`}>{meta}</span>
         </span>
       </button>
-      <button type="button" onClick={onDelete} disabled={deleting}
-        className={`mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-md disabled:cursor-wait disabled:opacity-50 ${selected ? "text-surface/70 hover:bg-surface/15 hover:text-surface" : "text-muted hover:bg-danger/10 hover:text-danger"}`}
-        aria-label={`删除${title}`} title="删除记录">
-        {deleting
-          ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
-          : <Trash2 className="h-4 w-4" aria-hidden="true" />}
-      </button>
+      <ConfirmationDialog
+        trigger={<button type="button" disabled={deleting}
+          className={`mr-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current disabled:cursor-wait disabled:opacity-50 ${selected ? "text-surface/70 hover:bg-surface/15 hover:text-surface" : "text-muted hover:bg-danger/10 hover:text-danger"}`}
+          aria-label={`删除${title}`} title="删除记录">
+          {deleting
+            ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" />
+            : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+        </button>}
+        title={deleteConfirmation.title}
+        description={deleteConfirmation.description}
+        confirmLabel="确认删除"
+        tone="danger"
+        onConfirm={onDelete}
+      />
     </div>
   );
 }
@@ -382,7 +398,7 @@ function TaskWorkspace({
           isRevising={isRevising}
           revisionError={revisionError}
         />
-      ) : section === "plan" ? <CrawlPlanningPanel task={task} /> : <SourceDatasetPanel taskId={task.id} />}</div>
+      ) : section === "plan" ? <CrawlPlanningPanel task={task} /> : <SourceDatasetPanel task={task} />}</div>
     </div>
   );
 }

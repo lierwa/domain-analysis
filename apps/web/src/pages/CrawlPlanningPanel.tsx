@@ -16,8 +16,8 @@ import {
   confirmCrawlPlan,
   fetchCrawlPlanning,
   prepareCrawlPlan,
+  startSourceBatch,
   streamCrawlPlanningRun,
-  streamSourceRun,
 } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { InterviewActivity } from "./InterviewThread";
@@ -35,6 +35,7 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
   const [preparation, setPreparation] = useState<SourcePreparation>();
   const [isPreparing, setIsPreparing] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [executionAccepted, setExecutionAccepted] = useState<string>();
   const abortRef = useRef<AbortController>();
 
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -112,17 +113,23 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
   }
 
   async function execute(plan: CrawlPlan) {
-    if (preparation?.status !== "ready") {
+    if (!canStartAvailableSources(plan, preparation)) {
       setRunError("请先完成抓取环境准备和登录检查");
       return;
     }
     setRunError(undefined); setIsExecuting(true);
-    const controller = new AbortController(); abortRef.current = controller;
     try {
-      await streamSourceRun(task.id, plan.id, { expectedTaskRevision: task.revision, expectedPlanVersion: plan.version },
-        () => queryClient.invalidateQueries({ queryKey: ["source-runs", task.id] }), controller.signal);
-    } catch (error) { if (!controller.signal.aborted) setRunError(error instanceof Error ? error.message : "抓取运行失败"); }
-    finally { setIsExecuting(false); abortRef.current = undefined; }
+      const accepted = await startSourceBatch(task.id, plan.id, {
+        expectedTaskRevision: task.revision, expectedPlanVersion: plan.version,
+      });
+      setExecutionAccepted(`后台抓取已提交（${accepted.commandId}）。现在可以关闭或离开页面，批次不会中止。`);
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: ["source-runs", task.id] }), 500);
+    } catch (error) { setRunError(error instanceof Error ? error.message : "后台抓取提交失败"); }
+    finally {
+      setPreparation(undefined);
+      setIsExecuting(false);
+      await queryClient.invalidateQueries({ queryKey: ["source-runs", task.id] });
+    }
   }
 
   if (planning.isLoading) return <LoadingPanel />;
@@ -175,6 +182,12 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
       {(visibleParts.length > 0 || isRunning) && (
         <PlanningTimeline parts={visibleParts} isRunning={isRunning} />
       )}
+      {!isRunning && latestRun && (latestRun.status === "interrupted" || latestRun.status === "failed") && (
+        <p className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900" role="alert">
+          本次重新规划{latestRun.status === "interrupted" ? "已中断" : "失败"}，没有生成可用的新计划。
+          下方仍是此前保留的计划版本，必须通过当前执行完整性检查后才能开始抓取。
+        </p>
+      )}
       {latestPlan ? (
         <CrawlPlanCard
           plan={latestPlan}
@@ -186,6 +199,8 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
           onPrepare={() => void prepareEnvironment(latestPlan)}
           isExecuting={isExecuting}
           onExecute={() => void execute(latestPlan)}
+          executionBlockReason={planExecutionBlockReason(task, latestPlan)}
+          executionAccepted={executionAccepted}
         />
       ) : (
         <section className="rounded-xl border border-dashed border-line bg-surface p-8 text-center">
@@ -235,6 +250,8 @@ export function CrawlPlanCard({
   onPrepare,
   isExecuting,
   onExecute,
+  executionBlockReason,
+  executionAccepted,
 }: {
   plan: CrawlPlan;
   currentTaskRevision: number;
@@ -245,12 +262,15 @@ export function CrawlPlanCard({
   onPrepare: () => void;
   isExecuting: boolean;
   onExecute: () => void;
+  executionBlockReason?: string;
+  executionAccepted?: string;
 }) {
   const current = plan.taskRevision === currentTaskRevision;
   // WHY：服务端会拒绝任何带 blocker 的计划；页面必须在点击前表达同一事实，避免把纸面候选伪装成可确认计划。
   const hasExecutionBlockers = plan.content.sources.some((source) => source.executionBlockers.length > 0);
   const isExecutionChecklist = plan.content.executionChecklistVersion === 2
     && plan.content.sources.every((source) => source.targets.every((target) => target.providerConfiguration.length > 0));
+  const canStart = canStartAvailableSources(plan, preparation);
   const targetCount = plan.content.sources.reduce((count, source) => count + source.targets.length, 0);
   return (
     <section className="rounded-xl border border-line bg-surface p-5 sm:p-7">
@@ -286,23 +306,27 @@ export function CrawlPlanCard({
           </p>
         )}
         {plan.status === "confirmed" && current && !hasExecutionBlockers && isExecutionChecklist
+          && !executionBlockReason
           && preparation?.status !== "ready" && (
           <button type="button" className="button-primary" disabled={isPreparing} onClick={onPrepare}>
             {isPreparing
               ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
               : <RefreshCw className="h-4 w-4" aria-hidden="true" />}
-            {isPreparing ? "正在准备…" : preparation?.status === "action_required" ? "已完成，重新检查" : "准备抓取环境"}
+            {isPreparing ? "正在检查…" : preparation?.status === "action_required" ? "已完成，重新检查" : "检查抓取条件"}
           </button>
         )}
         {plan.status === "confirmed" && current && !hasExecutionBlockers && isExecutionChecklist
-          && preparation?.status === "ready" && (
+          && !executionBlockReason && canStart && (
           <button type="button" className="button-primary" disabled={isExecuting} onClick={onExecute}>
             {isExecuting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {isExecuting ? "正在抓取…" : "开始抓取"}
+            {isExecuting ? "正在提交…" : preparation?.status === "ready" ? "开始新批次抓取" : "开始其余来源的新批次"}
           </button>
         )}
         {plan.status === "confirmed" && current && (hasExecutionBlockers || !isExecutionChecklist) && (
           <p className="text-xs leading-5 text-amber-800">这是历史技术纵切片，不能继续启动；请生成当前完整执行清单。</p>
+        )}
+        {plan.status === "confirmed" && current && executionBlockReason && (
+          <p className="text-xs leading-5 text-amber-800" role="alert">{executionBlockReason}</p>
         )}
         <p className="text-xs leading-5 text-muted">
           确认只冻结来源、内容和数量，不创建 Source Run，也不开始抓取。
@@ -310,12 +334,36 @@ export function CrawlPlanCard({
         {plan.status === "confirmed" && preparation && (
           <p className={`w-full text-sm leading-6 ${preparation.status === "ready" ? "text-emerald-700" : "text-amber-800"}`}
             role={preparation.status === "action_required" ? "alert" : "status"}>
-            {preparation.message}
+            {preparation.status === "ready"
+              ? "只完成抓取条件检查，尚未创建抓取批次，也没有访问任何来源。"
+              : preparation.message}
           </p>
+        )}
+        {plan.status === "confirmed" && executionAccepted && (
+          <p className="w-full text-sm leading-6 text-emerald-700" role="status">{executionAccepted}</p>
         )}
       </div>
     </section>
   );
+}
+
+function planExecutionBlockReason(task: CaptureTask, plan: CrawlPlan) {
+  if (task.content.jd.applicable && task.content.jd.disposition === "included"
+    && !plan.content.sources.some((source) => source.provider.key === "jd.catalog-product"
+      && source.provider.version === "2.0.0")) {
+    return "这个旧计划没有京东商品抓取 Provider，不能开始；请重新规划并确认包含 jd.catalog-product@2.0.0 的新版本。";
+  }
+  return undefined;
+}
+
+function canStartAvailableSources(plan: CrawlPlan, preparation?: SourcePreparation) {
+  if (preparation?.status === "ready") return true;
+  if (preparation?.status !== "action_required") return false;
+  const blockedSource = plan.content.sources.find((source) => source.key === preparation.sourceKey);
+  if (!blockedSource) return false;
+  // WHY：人工动作只约束同一 Provider 会话；其他 Provider 的公开来源仍应允许形成独立运行事实。
+  return plan.content.sources.some((source) => source.provider.key !== blockedSource.provider.key
+    || source.provider.version !== blockedSource.provider.version);
 }
 
 type CrawlPlanSource = CrawlPlan["content"]["sources"][number];

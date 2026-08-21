@@ -5,11 +5,16 @@ import type {
   RawSourceObservation,
   RawSourcePayload,
   SourceAccessPolicy,
+  SourceAccessGateState,
+  SourceCaptureWorkItem,
   SourceCollectionTargetRun,
   SourceCollectionPlanContent,
+  SourceRequestAttempt,
+  SourceResourceReference,
 } from "@domain-analysis/shared";
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, jsonb, pgSchema, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgSchema, text, timestamp, uniqueIndex,
+  type AnyPgColumn } from "drizzle-orm/pg-core";
 
 export const workbenchSchemaName = "workbench";
 const workbenchSchema = pgSchema(workbenchSchemaName);
@@ -125,14 +130,34 @@ export const sourceCollectionPlans = workbenchSchema.table("source_collection_pl
   index("source_collection_plan_task_time_idx").on(table.taskId, table.createdAt),
 ]);
 
+export const sourceCollectionBatches = workbenchSchema.table("source_collection_batches", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull().references(() => captureTasks.id),
+  sourceCollectionPlanId: text("source_collection_plan_id").notNull().references(() => sourceCollectionPlans.id),
+  sourceCollectionPlanVersion: integer("source_collection_plan_version").notNull(),
+  taskRevision: integer("task_revision").notNull(),
+  status: text("status", { enum: ["running", "completed", "partial", "failed", "stopped"] }).notNull(),
+  plannedSourceCount: integer("planned_source_count").notNull(),
+  startedAt: timestamp("started_at", { mode: "string", withTimezone: true }).notNull(),
+  finishedAt: timestamp("finished_at", { mode: "string", withTimezone: true }),
+  terminationReason: text("termination_reason"),
+}, (table) => [
+  index("source_collection_batch_task_time_idx").on(table.taskId, table.startedAt),
+  index("source_collection_batch_plan_idx").on(table.sourceCollectionPlanId, table.sourceCollectionPlanVersion),
+]);
+
 export const sourceCollectionRuns = workbenchSchema.table("source_collection_runs", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull().references(() => captureTasks.id),
+  executionBatchId: text("execution_batch_id").references(() => sourceCollectionBatches.id),
+  resumedFromRunId: text("resumed_from_run_id")
+    .references((): AnyPgColumn => sourceCollectionRuns.id),
   sourceCollectionPlanId: text("source_collection_plan_id").references(() => sourceCollectionPlans.id),
   sourceCollectionPlanSourceKey: text("source_collection_plan_source_key"),
   sourceCollectionPlanVersion: integer("source_collection_plan_version"),
   providerKey: text("provider_key").notNull(),
   providerVersion: text("provider_version"),
+  requestBudget: integer("request_budget"),
   accessPolicy: jsonb("access_policy_json").$type<SourceAccessPolicy>().notNull(),
   status: text("status", { enum: ["running", "completed", "failed", "stopped"] }).notNull(),
   snapshotCount: integer("snapshot_count").notNull().default(0),
@@ -143,7 +168,9 @@ export const sourceCollectionRuns = workbenchSchema.table("source_collection_run
   finishedAt: timestamp("finished_at", { mode: "string", withTimezone: true }),
   terminationReason: text("termination_reason"),
 }, (table) => [
+  uniqueIndex("source_collection_run_resume_uq").on(table.resumedFromRunId),
   index("source_collection_run_task_time_idx").on(table.taskId, table.startedAt),
+  index("source_collection_run_batch_idx").on(table.executionBatchId),
   index("source_collection_run_plan_batch_idx").on(table.sourceCollectionPlanId, table.sourceCollectionPlanSourceKey),
 ]);
 
@@ -163,6 +190,65 @@ export const sourceCollectionTargetRuns = workbenchSchema.table("source_collecti
 }, (table) => [
   uniqueIndex("source_target_run_key_uq").on(table.runId, table.targetKey),
   index("source_target_run_status_idx").on(table.runId, table.status),
+]);
+
+export const sourceCaptureWorkItems = workbenchSchema.table("source_capture_work_items", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => sourceCollectionRuns.id, { onDelete: "cascade" }),
+  targetKey: text("target_key").notNull(),
+  workKey: text("work_key").notNull(),
+  parentObjectKey: text("parent_object_key"),
+  captureUnit: text("capture_unit").notNull(),
+  expectedUnitCount: integer("expected_unit_count"),
+  observedUnitCount: integer("observed_unit_count").notNull().default(0),
+  status: text("status", { enum: ["pending", "running", "completed", "failed", "stopped"] })
+    .$type<SourceCaptureWorkItem["status"]>().notNull(),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+  startedAt: timestamp("started_at", { mode: "string", withTimezone: true }),
+  finishedAt: timestamp("finished_at", { mode: "string", withTimezone: true }),
+  terminationReason: text("termination_reason"),
+}, (table) => [
+  uniqueIndex("source_capture_work_run_key_uq").on(table.runId, table.workKey),
+  index("source_capture_work_status_idx").on(table.runId, table.status),
+]);
+
+export const sourceAccessGateStates = workbenchSchema.table("source_access_gate_states", {
+  key: text("key").primaryKey(),
+  providerKey: text("provider_key").notNull(),
+  providerVersion: text("provider_version").notNull(),
+  policyVersion: text("policy_version").notNull(),
+  circuitState: text("circuit_state", { enum: ["closed", "open"] })
+    .$type<SourceAccessGateState["circuitState"]>().notNull(),
+  lastAttemptAt: timestamp("last_attempt_at", { mode: "string", withTimezone: true }),
+  nextEligibleAt: timestamp("next_eligible_at", { mode: "string", withTimezone: true }),
+  windowStartedAt: timestamp("window_started_at", { mode: "string", withTimezone: true }),
+  windowRequestCount: integer("window_request_count").notNull().default(0),
+  blockedAt: timestamp("blocked_at", { mode: "string", withTimezone: true }),
+  blockedReason: text("blocked_reason"),
+  manualResumeRequired: boolean("manual_resume_required").notNull().default(false),
+  updatedAt: timestamp("updated_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+});
+
+export const sourceRequestAttempts = workbenchSchema.table("source_request_attempts", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => sourceCollectionRuns.id, { onDelete: "cascade" }),
+  targetKey: text("target_key").notNull(),
+  workKey: text("work_key").notNull(),
+  gateKey: text("gate_key").notNull().references(() => sourceAccessGateStates.key),
+  requestedUrl: text("requested_url").notNull(),
+  origin: text("origin").notNull(),
+  redirectParentAttemptId: text("redirect_parent_attempt_id"),
+  startedAt: timestamp("started_at", { mode: "string", withTimezone: true }).notNull(),
+  finishedAt: timestamp("finished_at", { mode: "string", withTimezone: true }),
+  finalUrl: text("final_url"),
+  httpStatus: integer("http_status"),
+  bytes: integer("bytes"),
+  state: text("state", { enum: ["started", "completed", "restricted", "failed", "cancelled"] })
+    .$type<SourceRequestAttempt["state"]>().notNull(),
+  restrictionReason: text("restriction_reason"),
+}, (table) => [
+  index("source_request_attempt_run_time_idx").on(table.runId, table.startedAt),
+  index("source_request_attempt_gate_time_idx").on(table.gateKey, table.startedAt),
 ]);
 
 export const sourceObjects = workbenchSchema.table("source_objects", {
@@ -205,4 +291,22 @@ export const sourceAssets = workbenchSchema.table("source_assets", {
 }, (table) => [
   uniqueIndex("source_asset_snapshot_key_uq").on(table.snapshotId, table.assetKey),
   index("source_asset_integrity_idx").on(table.casIntegrity),
+]);
+
+export const sourceResourceReferences = workbenchSchema.table("source_resource_references", {
+  id: text("id").primaryKey(),
+  snapshotId: text("snapshot_id").notNull().references(() => sourceSnapshots.id, { onDelete: "cascade" }),
+  kind: text("kind", { enum: ["image"] }).$type<SourceResourceReference["kind"]>().notNull(),
+  sourceUrl: text("source_url").notNull(),
+  observedValue: text("observed_value"),
+  locator: text("locator"),
+  role: text("role", { enum: ["primary", "detail", "parameter", "review"] })
+    .$type<SourceResourceReference["role"]>().notNull(),
+  section: text("section").notNull(),
+  ordinal: integer("ordinal").notNull(),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("source_resource_reference_position_uq")
+    .on(table.snapshotId, table.kind, table.role, table.section, table.ordinal, table.sourceUrl),
+  index("source_resource_reference_snapshot_idx").on(table.snapshotId),
 ]);

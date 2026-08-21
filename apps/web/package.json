@@ -12,10 +12,16 @@
   "dependencies": {
     "@assistant-ui/react": "0.15.14",
     "@domain-analysis/shared": "0.1.0",
+    "@radix-ui/react-alert-dialog": "^1.1.23",
     "@tanstack/react-query": "^5.45.0",
     "eventsource-parser": "4.0.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.5",
+    "jsdom": "^26.1.0"
   }
 }

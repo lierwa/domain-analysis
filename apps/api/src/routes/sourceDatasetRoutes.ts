@@ -12,7 +12,7 @@ const exportQuerySchema = z.object({ format: z.enum(["jsonl", "csv"]).default("j
 export async function registerSourceDatasetRoutes(app: FastifyInstance, datasets: SourceDatasetModule) {
   app.get("/api/capture-tasks/:taskId/source-runs", async (request) => {
     const { taskId } = taskParamsSchema.parse(request.params);
-    return { items: await datasets.listTask(taskId) };
+    return { item: await datasets.listTask(taskId) };
   });
   app.get("/api/capture-tasks/:taskId/source-runs/:runId", async (request, reply) => {
     const { taskId, runId } = runParamsSchema.parse(request.params);

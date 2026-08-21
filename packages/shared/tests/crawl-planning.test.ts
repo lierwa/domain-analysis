@@ -14,8 +14,11 @@ describe("抓取计划 contract", () => {
       sources: [{ sourceCandidateIds: ["candidate-jd"] }],
     });
     expect(parsed.sources[0]?.targets.map((target) => target.providerConfiguration[0])).toEqual([
-      { key: "operation", value: "catalog" },
-      { key: "operation", value: "first_matching_product" },
+      { key: "operation", value: "catalog_pages" },
+      { key: "operation", value: "store_catalogs" },
+      { key: "operation", value: "product_details" },
+      { key: "operation", value: "review_summaries" },
+      { key: "operation", value: "review_samples" },
     ]);
     expect(crawlPlanCandidateSchema.safeParse({
       ...candidate,
@@ -130,56 +133,52 @@ function planCandidate() {
       sourceCandidateIds: ["candidate-jd"],
       role: "覆盖平台商品与参数组织",
       entryUrls: ["https://www.jd.com/"],
-      provider: { key: "jd.catalog-product", version: "1.0.0", configuration: [
-        { key: "mode", value: "cdp" }, { key: "include_text", value: "冰箱" },
+      provider: { key: "jd.catalog-product", version: "2.0.0", configuration: [
+        { key: "mode", value: "explicit_http" }, { key: "include_text", value: "冰箱" },
         { key: "exclude_text", value: "二手|冷柜|酒柜" },
       ] },
-      accessPolicy: { kind: "paced_http" as const, version: "jd-low-frequency-v1",
-        maxRequestsPerMinute: 2, minimumIntervalMs: 10_000, maximumRunMs: 180_000 },
-      stopPolicy: { requestBudget: 2, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true as const },
-      rawOutputPolicy: { formats: ["html" as const], retainAssets: false },
+      accessPolicy: { kind: "paced_http" as const, version: "jd-explicit-http-v2",
+        maxRequestsPerMinute: 1, minimumIntervalMs: 60_000, maximumRunMs: 3_600_000 },
+      stopPolicy: { requestBudget: 12, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true as const },
+      rawOutputPolicy: { formats: ["html" as const, "source_json" as const], retainAssets: false },
       observationLevel: "search_discovered" as const,
       accessState: "unknown" as const,
       observedAt: "2026-08-19T00:00:00.000Z",
       targets: [{
-        key: "products",
-        name: "商品详情",
+        key: "catalog-pages",
+        name: "目录页",
         taskTopics: ["品牌与型号"],
-        providerConfiguration: [{ key: "operation", value: "catalog" }],
-        captureUnit: "商品详情响应",
+        providerConfiguration: [{ key: "operation", value: "catalog_pages" }],
+        captureUnit: "目录响应",
         rawFormats: ["html"],
         quantity: {
-          mode: "target_count" as const,
-          targetCount: 1,
-          unit: "个商品",
-          denominator: "京东冰箱分类当前可见商品",
-          rationale: "形成一个有界原始响应",
+          mode: "all_available" as const, unit: "页", denominator: "计划内目录入口",
+          rationale: "覆盖计划冻结的目录页",
         },
-        uniqueKey: "商品 SKU",
-        traversal: "按分类列表顺序",
-        stopCondition: "保存目录响应或遇访问限制",
-      }, {
-        key: "first-product",
-        name: "首个商品详情",
-        taskTopics: ["品牌与型号"],
-        providerConfiguration: [{ key: "operation", value: "first_matching_product" }],
-        captureUnit: "首个匹配商品详情响应",
-        rawFormats: ["html"],
-        quantity: {
-          mode: "target_count" as const,
-          targetCount: 1,
-          unit: "份响应",
-          denominator: "目录首次发现的合格商品",
-          rationale: "形成目录到详情的有界闭环",
-        },
-        uniqueKey: "商品 SKU",
-        traversal: "按目录链接顺序选择首个合格商品",
-        stopCondition: "保存一份详情响应或遇访问限制",
-      }],
+        uniqueKey: "规范化 GET URL", traversal: "逐入口显式请求", stopCondition: "入口耗尽或首次受限",
+      }, ...jdDynamicTargets()],
       executionBlockers: [],
     }],
     excludedContent: ["用户账户数据"],
   };
+}
+
+function jdDynamicTargets() {
+  return [
+    jdTarget("store-catalogs", "店铺目录", "store_catalogs", ["html"]),
+    jdTarget("product-details", "商品详情", "product_details", ["html", "source_json"]),
+    jdTarget("review-summaries", "评价汇总", "review_summaries", ["source_json"]),
+    { ...jdTarget("review-samples", "评价样本", "review_samples", ["source_json"]),
+      providerConfiguration: [{ key: "operation", value: "review_samples" },
+        { key: "samples_per_product", value: 50 }] },
+  ];
+}
+
+function jdTarget(key: string, name: string, operation: string, rawFormats: string[]) {
+  return { key, name, taskTopics: ["品牌与型号"], providerConfiguration: [{ key: "operation", value: operation }],
+    captureUnit: name, rawFormats, quantity: { mode: "all_available" as const, unit: "个",
+      denominator: "前序捕获发现且接纳的对象", rationale: "逐对象严格对账" }, uniqueKey: "稳定对象键",
+    traversal: "由前序原始响应发现", stopCondition: "全部已发现对象完成或首次受限" };
 }
 
 function publicPlanCandidate() {
@@ -197,7 +196,8 @@ function publicPlanCandidate() {
     accessPolicy: { ...source.accessPolicy, version: "public-exact-v1", maxRequestsPerMinute: 1,
       minimumIntervalMs: 60_000 },
     stopPolicy: { ...source.stopPolicy, requestBudget: 2 },
-    targets: [{ ...source.targets[0]!, key: "standard", providerConfiguration: [
+    targets: [{ ...source.targets[0]!, key: "standard", quantity: { mode: "target_count" as const,
+      targetCount: 1, unit: "份", denominator: "精确 URL", rationale: "单次精确捕获" }, providerConfiguration: [
       { key: "url" as const, value: url },
     ] }],
   }] };

@@ -36,15 +36,18 @@ description: 为已确认的标准商品 Capture Task 调查具体来源，并�
 
 - 当前来源观察等级只能是 `search_discovered`，初步访问状态只能是 `unknown`；Workbench 会覆盖真实发现时间。搜索到 URL 不等于页面已由 Provider 验证。
 - 不批量翻页、不枚举商品、不登录、不下载文件、不读取 Cookie/Profile、不绕过验证码或风控。
-- 当前只有两个生产 Provider：`jd.catalog-product@1.0.0` 与 `public.web-resource@1.0.0`。不得编造其他 Provider。
-- 京东首个有界计划使用单并发、每分钟最多 2 次、请求间隔至少 10 秒、总请求预算 2、最长 3 分钟；首次登录、验证码、拒绝或风控立即停止且零重试。计划必须保留 HTML 原始响应。
+- 当前只有两个生产 Provider：`jd.catalog-product@2.0.0` 与 `public.web-resource@1.0.0`。不得编造其他 Provider。
+- 京东 v2 计划使用显式 HTTP、每分钟最多 1 个 hop、请求间隔至少 60 秒和有界总请求预算；每个 redirect hop 都必须先进入 PostgreSQL 准入。首次登录、验证码、401/403/429、风险/频控正文、未知跨源跳转或异常响应立即停止且零重试。计划保留 HTML/源站 JSON，图片只保存已取得响应中观察到的 URL，不下载图片字节。
 - 每个京东采访候选必须拆成独立 source；一个 source 只能引用一个京东 `sourceCandidateId`、保留一个对应的 `entryUrl`，不得把多个候选入口合并后只访问首项。
-- 京东 source 的 Provider 配置固定为 `mode=cdp`、`include_text=任务品类词`、`exclude_text=用 | 分隔的排除词`。唯一的 `entryUrls[0]` 必须是 `www.jd.com` 的品类目录入口。只能有两个 target：
-  - `providerConfiguration=[{"key":"operation","value":"catalog"}]`，`quantity=target_count 1`，保存目录 HTML；
-  - `providerConfiguration=[{"key":"operation","value":"first_matching_product"}]`，`quantity=target_count 1`，保存首个匹配商品详情 HTML。
-- 京东 target 只能承担这两份 HTML 实际能提供的 topic；不得把评价样本、国家标准、底层原理等并不存在于原始响应中的内容挂上去凑覆盖。
-- `mall.jd.com` 等不满足上述 `www.jd.com` 固定目录协议的京东候选不是 `jd.catalog-product` 来源，必须按精确公网 URL 使用 `public.web-resource`。
-- 对满足上述绑定、入口和固定限制的京东来源，`executionBlockers` 必须为空；CDP 连接由 Workbench 确认时 preflight，登录/验证码/风控是运行时 typed 停止条件。
+- 京东 source 的 Provider 配置固定为 `mode=explicit_http`、`include_text=任务品类词`、`exclude_text=用 | 分隔的排除词`。`entryUrls` 必须是搜索核实到的、无凭证的 `www.jd.com` HTTPS 品类目录入口。必须恰好包含五个 `quantity=all_available` target，operation 各出现一次：
+  - `catalog_pages`：目录/分页原始 HTML；
+  - `store_catalogs`：动态发现的店铺目录原始 HTML；
+  - `product_details`：去重商品详情原始 HTML，图片保存 URL 引用；
+  - `review_summaries`：逐商品评价汇总源站 JSON；
+  - `review_samples`：逐商品评价样本源站 JSON，另配置 `samples_per_product=100`。
+- 京东五类 target 只能承担实际响应可能提供的商品目录、详情、参数、媒体 URL 与评价 topic；不得把国家标准、底层原理等不存在于这些响应中的内容挂上去凑覆盖。`rawOutputPolicy.formats` 固定为 `html`＋`source_json`，`retainAssets=false`；请求预算至少为目录入口数＋4，并写出所有动态工作完成或首次受限的停止口径。
+- `search.jd.com`、`mall.jd.com` 等不满足 `www.jd.com` 目录入口协议的采访候选必须按精确公网 URL 使用 `public.web-resource`，但一份通用搜索页/根页面快照不能兑现 Capture Task 已确认的京东商品覆盖。任务 `jd.applicable=true` 且 `disposition=included` 时，计划还必须通过网页搜索增加一个 `sourceCandidateIds=[]` 的 `jd.catalog-product@2.0.0` 精确目录来源；找不到可验证入口时不得返回伪完整计划。
+- 对满足上述绑定、入口和固定限制的京东来源，`executionBlockers` 必须为空；Prepare 固定零请求，登录/验证码/风控属于 Start 后的 typed 停止条件。
 - 除符合下述固定结构的京东来源外，其他公网 HTTPS 来源（包括其他零售入口、品牌官网、标准/监管、说明书、公开技术原理）统一使用 `public.web-resource@1.0.0`；不得输出 `provider_missing`、`workbench.unconfigured` 或任何占位 Provider：
   - 只允许明确的公网 `https://` 443 URL，不允许凭证、重定向目标、登录页、搜索结果页占位或本机/内网地址；
   - source 配置为 `mode=exact_https` 与正整数 `maximum_bytes`，网页通常用 `5000000`，较大 PDF 可提高但不得超过 `25000000`；

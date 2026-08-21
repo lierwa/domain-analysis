@@ -1,13 +1,14 @@
 import { Readable } from "node:stream";
 
-import type { CrawlPlanSource } from "@domain-analysis/shared";
-import { describe, expect, it } from "vitest";
+import type { CrawlPlanSource, SourceRequestAdmissionPort } from "@domain-analysis/shared";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   assertPublicAddress,
   assertPublicHttpsUrl,
+  createPublicResourceTransport,
   createPublicWebResourceProvider,
-  publicRequestOptions,
+  pinnedHttpsRequestOptions,
   readBoundedBody,
 } from "../src";
 
@@ -23,7 +24,7 @@ describe("公共原始资源 Provider", () => {
       },
     });
     const events = [];
-    for await (const event of provider.collect(source(), "run-1")) events.push(event);
+    for await (const event of provider.collect(source(), "run-1", fakeAdmission())) events.push(event);
 
     expect(requested).toEqual([
       "https://example.com/robots.txt",
@@ -45,7 +46,7 @@ describe("公共原始资源 Provider", () => {
       },
     });
     const events = [];
-    for await (const event of provider.collect(source(), "run-1")) events.push(event);
+    for await (const event of provider.collect(source(), "run-1", fakeAdmission())) events.push(event);
 
     expect(requested).toEqual(["https://example.com/robots.txt"]);
     expect(events).toMatchObject([{ type: "capture", targetKey: "official.manual",
@@ -64,7 +65,7 @@ describe("公共原始资源 Provider", () => {
       },
     });
     const linked = linkedSource();
-    const events = await collect(provider.collect(linked, "run-1"));
+    const events = await collect(provider.collect(linked, "run-1", fakeAdmission()));
 
     expect(requested).toEqual([
       "https://example.com/robots.txt",
@@ -82,10 +83,50 @@ describe("公共原始资源 Provider", () => {
     expect(() => assertPublicHttpsUrl("https://127.0.0.1/manual")).toThrow("非公网地址");
     expect(() => assertPublicHttpsUrl("https://user:secret@example.com/manual")).toThrow("凭证");
     expect(() => assertPublicAddress("::1", 6)).toThrow("非公网地址");
-    expect(publicRequestOptions()).toMatchObject({ followRedirect: false, retry: { limit: 0 },
-      dnsCache: false, enableUnixSockets: false });
+    expect(() => assertPublicAddress("8.8.8.8", 4)).not.toThrow();
+    expect(pinnedHttpsRequestOptions(new URL("https://example.com/manual"), "93.184.216.34"))
+      .toMatchObject({ hostname: "93.184.216.34", servername: "example.com", path: "/manual",
+        headers: { host: "example.com" } });
     await expect(readBoundedBody(Readable.from([Buffer.alloc(3), Buffer.alloc(3)]), 5))
       .rejects.toThrow("超过最大字节");
+  });
+
+  it("Fake-IP 环境通过可信 DoH 取得公网地址，并把代理连接固定到该地址", async () => {
+    const requestPinned = vi.fn(async () => response(200, "ok"));
+    const transport = createPublicResourceTransport({
+      lookup: async () => [{ address: "198.18.0.9", family: 4 }],
+      resolveViaDoh: async () => [{ address: "23.199.232.87", family: 4 }],
+      requestPinned,
+      proxyEnv: { https_proxy: "http://127.0.0.1:7890" },
+    });
+
+    await expect(transport(new URL("https://www.fda.gov/manual"), 10_000))
+      .resolves.toMatchObject({ statusCode: 200 });
+    expect(requestPinned).toHaveBeenCalledWith(expect.objectContaining({
+      url: new URL("https://www.fda.gov/manual"),
+      address: "23.199.232.87",
+      maximumBytes: 10_000,
+    }));
+  });
+
+  it("robots 与 target 每个 HTTP hop 都先进入持久准入，gate 按 origin 共享", async () => {
+    const admission = fakeAdmission();
+    const provider = createPublicWebResourceProvider({
+      request: async (url) => url.pathname === "/robots.txt"
+        ? response(200, "User-agent: *\nAllow: /")
+        : response(200, "<html>ok</html>", "text/html; charset=utf-8"),
+    });
+
+    await collect(provider.collect(source(), "run-1", admission));
+
+    expect(admission.reserveRequest).toHaveBeenCalledTimes(3);
+    expect(admission.reserveRequest.mock.calls.map(([input]) => [input.gateKey, input.requestedUrl]))
+      .toEqual([
+        ["public.web-resource@1.0.0:https://example.com", "https://example.com/robots.txt"],
+        ["public.web-resource@1.0.0:https://example.com", "https://example.com/manual"],
+        ["public.web-resource@1.0.0:https://example.com", "https://example.com/principles"],
+      ]);
+    expect(admission.finishRequest).toHaveBeenCalledTimes(3);
   });
 
   it("拒绝不可对账的 target 数量和计划未声明的附件输出", async () => {
@@ -105,7 +146,8 @@ describe("公共原始资源 Provider", () => {
 
     const undeclaredAsset = source();
     undeclaredAsset.rawOutputPolicy = { formats: ["html"], retainAssets: false };
-    await expect(collect(provider.collect(undeclaredAsset, "run-1"))).rejects.toThrow("未声明 document");
+    await expect(collect(provider.collect(undeclaredAsset, "run-1", fakeAdmission())))
+      .rejects.toThrow("未声明 document");
   });
 
   it("把根 URL 与带尾斜杠的规范化 URL 视为同一个精确入口", () => {
@@ -167,4 +209,20 @@ async function collect<T>(iterable: AsyncIterable<T>) {
   const values: T[] = [];
   for await (const value of iterable) values.push(value);
   return values;
+}
+
+function fakeAdmission() {
+  let attempt = 0;
+  return {
+    ensureCaptureWorkItem: vi.fn(async (input) => input as never),
+    startCaptureWorkItem: vi.fn(async (input) => input as never),
+    finishCaptureWorkItem: vi.fn(async (input) => input as never),
+    reserveRequest: vi.fn(async (input) => ({ status: "admitted" as const, attempt: {
+      id: `attempt-${++attempt}`, runId: input.runId, targetKey: input.targetKey,
+      workKey: input.workKey, requestedUrl: input.requestedUrl,
+      state: "started", startedAt: "2026-08-21T00:00:00.000Z",
+    } as never })),
+    finishRequest: vi.fn(async (input) => input as never),
+    getAccessGate: vi.fn(async () => null),
+  } satisfies SourceRequestAdmissionPort;
 }

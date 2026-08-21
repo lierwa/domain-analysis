@@ -17,9 +17,11 @@ import { registerCrawlPlanningRoutes } from "./routes/crawlPlanningRoutes";
 import { registerHealthRoutes } from "./routes/health";
 import { registerSourceDatasetRoutes } from "./routes/sourceDatasetRoutes";
 import { registerSourceExecutionRoutes } from "./routes/sourceExecutionRoutes";
+import type { SourceExecutionQueue } from "./sourceExecutionQueue";
 
 export interface BuildServerOptions extends FastifyServerOptions {
   workbench?: DataCollectionWorkbench;
+  sourceExecutionQueue?: SourceExecutionQueue;
 }
 
 export async function buildServer(options: BuildServerOptions = {}) {
@@ -40,10 +42,13 @@ export async function buildServer(options: BuildServerOptions = {}) {
   await app.register(cors, { origin: true });
   await registerHealthRoutes(app);
   if (options.workbench) {
-    app.addHook("onClose", () => options.workbench!.close());
+    app.addHook("onClose", async () => {
+      await options.sourceExecutionQueue?.close();
+      await options.workbench!.close();
+    });
     await registerCaptureTaskRoutes(app, options.workbench.captureTasks);
     await registerSourceDatasetRoutes(app, options.workbench.sourceDatasets);
-    if (options.workbench.categoryInterviews || options.workbench.crawlPlanning || options.workbench.sourceExecution) {
+    if (options.workbench.categoryInterviews || options.workbench.crawlPlanning) {
       await app.register(FastifySSEPlugin, { retryDelay: false });
     }
     if (options.workbench.categoryInterviews) {
@@ -52,8 +57,8 @@ export async function buildServer(options: BuildServerOptions = {}) {
     if (options.workbench.crawlPlanning) {
       await registerCrawlPlanningRoutes(app, options.workbench.crawlPlanning);
     }
-    if (options.workbench.sourceExecution) {
-      await registerSourceExecutionRoutes(app, options.workbench.sourceExecution);
+    if (options.workbench.sourceExecution && options.sourceExecutionQueue) {
+      await registerSourceExecutionRoutes(app, options.workbench.sourceExecution, options.sourceExecutionQueue);
     }
   }
   return app;

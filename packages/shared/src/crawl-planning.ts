@@ -32,11 +32,11 @@ const crawlPlanProviderSchema = z.object({
   configuration: providerConfigurationSchema,
 }).strict();
 
-const jdCandidateProviderSchema = z.object({
+const jdV2CandidateProviderSchema = z.object({
   key: z.literal("jd.catalog-product"),
-  version: z.literal("1.0.0"),
+  version: z.literal("2.0.0"),
   configuration: z.array(z.discriminatedUnion("key", [
-    z.object({ key: z.literal("mode"), value: z.literal("cdp") }).strict(),
+    z.object({ key: z.literal("mode"), value: z.literal("explicit_http") }).strict(),
     z.object({ key: z.literal("include_text"), value: boundedText }).strict(),
     z.object({ key: z.literal("exclude_text"), value: boundedText }).strict(),
   ])).length(3),
@@ -67,13 +67,23 @@ export const crawlPlanTargetSchema = z.object({ ...crawlPlanTargetShape,
   providerConfiguration: providerConfigurationSchema.default([]),
 }).strict();
 
-const jdCandidateTargetSchema = z.object({ ...crawlPlanTargetShape,
-  rawFormats: z.array(z.literal("html")).length(1),
+const jdV2BasicTargetSchema = z.object({ ...crawlPlanTargetShape,
+  rawFormats: z.array(z.enum(["html", "source_json"])).min(1).max(2),
   providerConfiguration: z.array(z.object({
     key: z.literal("operation"),
-    value: z.enum(["catalog", "first_matching_product"]),
+    value: z.enum(["catalog_pages", "store_catalogs", "product_details", "review_summaries"]),
   }).strict()).length(1),
 }).strict();
+
+const jdV2ReviewSamplesTargetSchema = z.object({ ...crawlPlanTargetShape,
+  rawFormats: z.array(z.literal("source_json")).length(1),
+  providerConfiguration: z.array(z.union([
+    z.object({ key: z.literal("operation"), value: z.literal("review_samples") }).strict(),
+    z.object({ key: z.literal("samples_per_product"), value: z.union([z.literal(50), z.literal(100)]) }).strict(),
+  ])).length(2),
+}).strict();
+
+const jdV2CandidateTargetSchema = z.union([jdV2BasicTargetSchema, jdV2ReviewSamplesTargetSchema]);
 
 const publicExactTargetSchema = z.object({ ...crawlPlanTargetShape,
   providerConfiguration: z.array(z.object({
@@ -131,25 +141,26 @@ export const crawlPlanSourceSchema = z.object({ ...crawlPlanSourceShape,
   addDuplicateKeyIssues(source.targets, context, ["targets"]);
 });
 
-const jdCandidateSourceSchema = z.object({ ...crawlPlanSourceShape,
-  provider: jdCandidateProviderSchema,
+const jdV2CandidateSourceSchema = z.object({ ...crawlPlanSourceShape,
+  provider: jdV2CandidateProviderSchema,
   accessPolicy: z.object({
-    kind: z.literal("paced_http"), version: z.literal("jd-low-frequency-v1"),
-    maxRequestsPerMinute: z.literal(2), minimumIntervalMs: z.literal(10_000),
-    maximumRunMs: z.literal(180_000),
+    kind: z.literal("paced_http"), version: z.literal("jd-explicit-http-v2"),
+    maxRequestsPerMinute: z.literal(1), minimumIntervalMs: z.literal(60_000),
+    maximumRunMs: z.number().int().min(300_000).max(86_400_000),
   }).strict(),
   stopPolicy: z.object({
-    requestBudget: z.literal(2), noNewUniqueKeysLimit: z.literal(1),
+    requestBudget: z.number().int().min(5).max(100_000), noNewUniqueKeysLimit: z.literal(1),
     stopOnAccessRestriction: z.literal(true),
   }).strict(),
-  rawOutputPolicy: z.object({ formats: z.array(z.literal("html")).length(1), retainAssets: z.literal(false) }).strict(),
+  rawOutputPolicy: z.object({ formats: z.array(z.enum(["html", "source_json"])).length(2),
+    retainAssets: z.literal(false) }).strict(),
   sourceCandidateIds: z.array(idSchema).max(100),
-  targets: z.array(jdCandidateTargetSchema).length(2),
+  targets: z.array(jdV2CandidateTargetSchema).length(5),
   executionBlockers: z.array(boundedText).length(0),
 }).strict().superRefine((source, context) => {
   addDuplicateKeyIssues(source.targets, context, ["targets"]);
   addExactConfigurationIssues(source.provider.configuration, ["mode", "include_text", "exclude_text"], context);
-  addExactJdSourceIssues(source, context);
+  addExactJdV2SourceIssues(source, context);
 });
 
 const publicCandidateSourceSchema = z.object({ ...crawlPlanSourceShape,
@@ -165,7 +176,7 @@ const publicCandidateSourceSchema = z.object({ ...crawlPlanSourceShape,
 
 // WHY：输出 Schema 直接表达两种真实执行协议；模型不能再把 Provider 配置当自由文本猜测。
 const crawlPlanCandidateSourceSchema = z.union([
-  jdCandidateSourceSchema,
+  jdV2CandidateSourceSchema,
   publicCandidateSourceSchema,
 ]);
 
@@ -321,27 +332,39 @@ function addExactConfigurationIssues(
   }
 }
 
-function addExactJdSourceIssues(
+function addExactJdV2SourceIssues(
   source: {
     sourceKind: string;
     entryUrls: string[];
-    targets: Array<{ key: string; providerConfiguration: Array<{ key: string; value: string }>; quantity: CaptureQuantity }>;
+    rawOutputPolicy: { formats: string[] };
+    stopPolicy: { requestBudget: number };
+    targets: Array<{ key: string; providerConfiguration: Array<{ key: string; value: string | number }>;
+      quantity: CaptureQuantity }>;
   },
   context: z.RefinementCtx,
 ) {
-  const entry = source.entryUrls[0];
-  if (source.entryUrls.length !== 1 || !entry || !isExactPublicHttps(entry, "www.jd.com")) {
-    context.addIssue({ code: "custom", path: ["entryUrls"], message: "JD Provider 只接受一个 www.jd.com HTTPS 入口" });
+  if (source.entryUrls.length === 0 || source.entryUrls.some((entry) => !isExactPublicHttps(entry, "www.jd.com"))) {
+    context.addIssue({ code: "custom", path: ["entryUrls"], message: "JD Provider 只接受 www.jd.com HTTPS 目录入口" });
   }
   if (source.sourceKind !== "retailer") {
     context.addIssue({ code: "custom", path: ["sourceKind"], message: "JD Provider 只承担零售来源" });
   }
-  const operations = source.targets.map((target) => target.providerConfiguration[0]?.value).sort();
-  if (operations.join(",") !== "catalog,first_matching_product") {
-    context.addIssue({ code: "custom", path: ["targets"], message: "JD 来源必须各有一个 catalog 和 first_matching_product target" });
+  const operations = source.targets.map((target) => target.providerConfiguration
+    .find((item) => item.key === "operation")?.value).sort();
+  const required = ["catalog_pages", "product_details", "review_samples", "review_summaries", "store_catalogs"];
+  if (operations.join(",") !== required.join(",")) {
+    context.addIssue({ code: "custom", path: ["targets"], message: `JD v2 来源必须各有一个：${required.join("、")}` });
   }
-  if (source.targets.some((target) => target.quantity.mode !== "target_count" || target.quantity.targetCount !== 1)) {
-    context.addIssue({ code: "custom", path: ["targets"], message: "JD 每个 target 必须声明 target_count=1" });
+  if (source.targets.some((target) => target.quantity.mode !== "all_available")) {
+    context.addIssue({ code: "custom", path: ["targets"], message: "JD v2 每个 target 必须声明 all_available 动态覆盖" });
+  }
+  if (![...source.rawOutputPolicy.formats].sort().every((value, index) => value === ["html", "source_json"][index])) {
+    context.addIssue({ code: "custom", path: ["rawOutputPolicy", "formats"],
+      message: "JD v2 必须原样保留 html 与 source_json" });
+  }
+  if (source.stopPolicy.requestBudget < source.entryUrls.length + 4) {
+    context.addIssue({ code: "custom", path: ["stopPolicy", "requestBudget"],
+      message: "JD v2 请求预算至少覆盖目录入口和四类后续捕获" });
   }
 }
 

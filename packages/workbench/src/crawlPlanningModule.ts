@@ -50,6 +50,8 @@ export interface CrawlPlanningRuntime {
 
 export interface CrawlPlanningModule {
   get(taskId: string): Promise<CrawlPlanningView | null>;
+  requireExecutablePlan(input: { taskId: string; planId: string; expectedTaskRevision: number;
+    expectedPlanVersion: number }): Promise<CrawlPlan>;
   run(input: {
     taskId: string;
     expectedTaskRevision: number;
@@ -94,9 +96,36 @@ export function createCrawlPlanningModule(
       const task = await captureTasks.get(taskId);
       return task ? loadView(db, task) : null;
     },
+    requireExecutablePlan: (input) => requireExecutablePlan(db, captureTasks, input),
     run: (input) => runPlanning(db, captureTasks, runtime, input, now, createId, options.validateSource),
     confirm: (input) => confirmPlan(db, captureTasks, input, now, options.validateSource),
   };
+}
+
+async function requireExecutablePlan(
+  db: WorkbenchDb,
+  captureTasks: CaptureTaskModule,
+  input: { taskId: string; planId: string; expectedTaskRevision: number; expectedPlanVersion: number },
+) {
+  const task = await requireTask(captureTasks, input.taskId);
+  requireCurrentTask(task, input.expectedTaskRevision);
+  const row = await db.query.sourceCollectionPlans.findFirst({ where: and(
+    eq(sourceCollectionPlans.id, input.planId), eq(sourceCollectionPlans.taskId, task.id),
+    isNotNull(sourceCollectionPlans.planningRunId),
+  ) });
+  if (!row) throw new CrawlPlanningError("not_found", "已确认计划不存在");
+  const plan = normalizePlan(row);
+  if (plan.version !== input.expectedPlanVersion || plan.taskRevision !== task.revision) {
+    throw revisionConflict(task.id);
+  }
+  if (plan.status !== "confirmed") {
+    throw new CrawlPlanningError("invalid_state", "只有当前已确认计划可以启动");
+  }
+  // WHY：计划确认后任务规则仍可能升级；执行前必须重新使用规划事实源的完整性门，不能让历史计划绕过 JD v2。
+  requireCompleteChecklist(task, plan.content);
+  const blocker = plan.content.sources.flatMap((source) => source.executionBlockers)[0];
+  if (blocker) throw new CrawlPlanningError("invalid_state", `来源仍有执行阻塞：${blocker}`);
+  return plan;
 }
 
 async function* runPlanning(
@@ -343,13 +372,20 @@ function requireCompleteChecklist(task: CaptureTask, content: CrawlPlanContent) 
   if (content.executionChecklistVersion !== 2) {
     throw new CrawlPlanningError("invalid_state", "该计划只是历史技术纵切片，不是当前完整执行清单；请重新规划");
   }
+  if (task.content.jd.applicable && task.content.jd.disposition === "included"
+    && !content.sources.some((source) => source.provider.key === "jd.catalog-product"
+      && source.provider.version === "2.0.0")) {
+    // WHY：通用搜索页只能保留一份网页响应，不能兑现任务已确认的目录、详情、媒体与评价范围。
+    // 保留候选入口不等于完成京东覆盖，计划必须另有 JD v2 动态工作来源。
+    throw new CrawlPlanningError("invalid_state", "任务已纳入京东，但抓取计划缺少 jd.catalog-product@2.0.0 商品数据来源");
+  }
   const requiredTopics = new Set([...task.content.generalTopics, ...task.content.categoryTopics]);
   const coveredTopics = new Set<string>();
   const candidates = new Map(task.content.sourceCandidates.map((candidate) => [candidate.id, candidate]));
   const candidateUsage = new Map<string, string>();
   for (const source of content.sources) {
     if (source.provider.key === "jd.catalog-product" && source.sourceCandidateIds.length > 1) {
-      // WHY：JD Provider 只导航 entryUrls[0]；把多个采访入口合并会制造“清单已覆盖、执行却漏抓”的假象。
+      // WHY：每个采访入口必须独立对账；合并多个候选会让来源级完成状态掩盖某个入口遗漏。
       throw new CrawlPlanningError("invalid_state", `京东采访入口必须拆成独立执行来源：${source.name}`);
     }
     for (const candidateId of source.sourceCandidateIds) {

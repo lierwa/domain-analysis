@@ -6,23 +6,24 @@ import {
   createCodexCrawlPlanningRuntime,
   openDataCollectionWorkbench,
 } from "@domain-analysis/workbench";
-import { createJdCatalogProvider, createPublicWebResourceProvider } from "@domain-analysis/worker";
+import { createAnonymousJdHttpAccessFactory, createJdCatalogProvider,
+  createPublicWebResourceProvider } from "@domain-analysis/worker";
 
 import { loadConfig } from "./config";
 import { buildServer } from "./server";
+import { createSourceExecutionQueue } from "./sourceExecutionQueue";
 
 const config = loadConfig();
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const sourceProviders = new Map();
 const publicProvider = createPublicWebResourceProvider();
 sourceProviders.set(publicProvider.key, publicProvider);
-if (config.jdCdpEndpoint) {
-  const provider = createJdCatalogProvider({
-    endpointUrl: config.jdCdpEndpoint,
-    userDataDir: path.join(repositoryRoot, "data", "jd-cdp-profile"),
-  });
-  sourceProviders.set(provider.key, provider);
-}
+// WHY：能力装配不等于出网；启动和 Prepare 都是零请求，只有已确认计划的显式 Start 才会使用此 access。
+const jdProvider = createJdCatalogProvider({
+  storageDirectory: path.join(repositoryRoot, "data", "jd-request-queues"),
+  ...(config.jdRealHttpEnabled ? { openHttpAccess: createAnonymousJdHttpAccessFactory() } : {}),
+});
+sourceProviders.set(jdProvider.key, jdProvider);
 const workbench = await openDataCollectionWorkbench({
   databaseUrl: config.postgresDatabaseUrl,
   categoryInterviewRuntime: createCodexCategoryInterviewRuntime({
@@ -38,7 +39,12 @@ const workbench = await openDataCollectionWorkbench({
   sourceDatasetModule: { assetCachePath: path.join(repositoryRoot, "data", "source-assets") },
   sourceProviders,
 });
-const app = await buildServer({ workbench });
+if (!workbench.sourceExecution) throw new Error("Source Execution 未完成装配");
+const sourceExecutionQueue = await createSourceExecutionQueue({
+  connectionString: config.postgresDatabaseUrl,
+  execution: workbench.sourceExecution,
+});
+const app = await buildServer({ workbench, sourceExecutionQueue });
 
 try {
   await app.listen({ host: config.host, port: config.port });

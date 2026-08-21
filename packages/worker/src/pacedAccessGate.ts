@@ -49,9 +49,11 @@ export function createPacedAccessGate(
   const queue = new PQueue({
     concurrency: 1,
     intervalCap: policy.maxRequestsPerMinute,
-    // WHY：服务端到达时间会晚于客户端 dispatch；把最小间隔和最大抖动作为窗口安全余量，
-    // 避免客户端刚好合规却在来源端形成边界突发。
-    interval: rateWindowMs + policy.minimumIntervalMs + policy.jitterMs.max,
+    // WHY：cap=1 时固定窗口本身已经等价于滑动窗口，叠加最小间隔会把 1 次/分钟
+    // 错误执行成 1 次/2 分钟；cap>1 仍保留边界安全余量，避免固定窗口边界突发。
+    interval: policy.maxRequestsPerMinute === 1
+      ? rateWindowMs
+      : rateWindowMs + policy.minimumIntervalMs + policy.jitterMs.max,
     strict: true,
   });
   const breaker = circuitBreaker(handleWhen(options.shouldBreak ?? (() => false)), {

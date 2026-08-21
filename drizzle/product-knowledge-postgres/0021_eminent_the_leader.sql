@@ -1,0 +1,3 @@
+ALTER TABLE "workbench"."source_collection_runs" ADD COLUMN "resumed_from_run_id" text;--> statement-breakpoint
+ALTER TABLE "workbench"."source_collection_runs" ADD CONSTRAINT "source_collection_runs_resumed_from_run_id_source_collection_runs_id_fk" FOREIGN KEY ("resumed_from_run_id") REFERENCES "workbench"."source_collection_runs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "source_collection_run_resume_uq" ON "workbench"."source_collection_runs" USING btree ("resumed_from_run_id");

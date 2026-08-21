@@ -11,6 +11,7 @@ import {
   crawlPlanningRuns,
   createWorkbenchDb,
   migrateWorkbenchDatabase,
+  sourceCollectionBatches,
   sourceCollectionPlans,
   sourceCollectionRuns,
   sourceCollectionTargetRuns,
@@ -53,6 +54,7 @@ describeWithPostgres("抓取计划版本与确认", () => {
         await db.delete(sourceCollectionTargetRuns).where(eq(sourceCollectionTargetRuns.runId, run.id));
       }
       await db.delete(sourceCollectionRuns).where(eq(sourceCollectionRuns.taskId, taskId));
+      await db.delete(sourceCollectionBatches).where(eq(sourceCollectionBatches.taskId, taskId));
       await db.delete(sourceObjects).where(eq(sourceObjects.taskId, taskId));
       await db.delete(sourceCollectionPlans).where(eq(sourceCollectionPlans.taskId, taskId));
       await db.delete(crawlPlanningRuns).where(eq(crawlPlanningRuns.taskId, taskId));
@@ -224,7 +226,7 @@ describeWithPostgres("抓取计划版本与确认", () => {
     expect((await opened.planning.get(taskId))!.plans).toHaveLength(1);
   });
 
-  it("京东搜索入口作为真实 target 时不再被强制要求使用 JD catalog Provider", async () => {
+  it("京东任务不能只用通用搜索页冒充 JD v2 商品抓取", async () => {
     const content = taskContent();
     const entryUrl = "https://search.jd.com/Search?keyword=%E5%86%B0%E7%AE%B1";
     content.sourceCandidates[0] = candidate("candidate-jd", "京东搜索", entryUrl, "retailer");
@@ -245,8 +247,38 @@ describeWithPostgres("抓取计划版本与确认", () => {
 
     const events = await collect(opened.planning.run({ taskId, expectedTaskRevision: 1 }));
 
-    expect(events).toContainEqual(expect.objectContaining({ type: "run.completed" }));
-    expect((await opened.planning.get(taskId))!.plans).toHaveLength(1);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "run.failed",
+      error: expect.stringContaining("jd.catalog-product@2.0.0"),
+    }));
+    expect((await opened.planning.get(taskId))!.plans).toHaveLength(0);
+  });
+
+  it("历史已确认计划缺少 JD v2 时也在执行前拒绝", async () => {
+    const opened = await openModules();
+    db = opened.db;
+    taskId = opened.task.id;
+    const entryUrl = "https://search.jd.com/Search?keyword=%E5%86%B0%E7%AE%B1";
+    const output = validOutput(1);
+    const oldContent = { ...output.planCandidate, taskId, taskRevision: 1 };
+    const jd = oldContent.sources[0]!;
+    jd.entryUrls = [entryUrl];
+    jd.provider = { key: "public.web-resource", version: "1.0.0", configuration: [
+      { key: "mode", value: "exact_https" }, { key: "maximum_bytes", value: 5_000_000 },
+    ] };
+    jd.targets = [{ ...target("jd-search", "品牌与型号"), taskTopics: ["品牌与型号", "配置参数"],
+      providerConfiguration: [{ key: "url", value: entryUrl }] }];
+    const planningRunId = `crawl-planning-run-old-${randomUUID()}`;
+    await db.insert(crawlPlanningRuns).values({ id: planningRunId, taskId, taskRevision: 1,
+      status: "completed", timelineParts: [], startedAt: "2026-08-20T00:00:00.000Z",
+      finishedAt: "2026-08-20T00:00:01.000Z" });
+    await db.insert(sourceCollectionPlans).values({ id: "plan-old-without-jd-v2", taskId,
+      taskRevision: 1, planningRunId, version: 1, status: "confirmed", contentHash: "9".repeat(64),
+      content: oldContent, createdAt: "2026-08-20T00:00:01.000Z", confirmedAt: "2026-08-20T00:00:02.000Z" });
+
+    await expect(opened.planning.requireExecutablePlan({ taskId, planId: "plan-old-without-jd-v2",
+      expectedTaskRevision: 1, expectedPlanVersion: 1 }))
+      .rejects.toThrow("缺少 jd.catalog-product@2.0.0");
   });
 
   it("拒绝把多个京东候选入口合并成一个只访问首个 URL 的来源", async () => {
@@ -312,9 +344,7 @@ describeWithPostgres("抓取计划版本与确认", () => {
     await collect(opened.planning.run({ taskId, expectedTaskRevision: 1 }));
     let view = (await opened.planning.get(taskId))!;
     view = await opened.planning.confirm({ taskId, planId: view.plans[0]!.id, expectedTaskRevision: 1 });
-    const provider = {
-      key: "jd.catalog-product", version: "1.0.0", validate() {}, async preflight() {},
-      async *collect(source: typeof view.plans[0]["content"]["sources"][number]) {
+    const collectProvider = async function* (source: typeof view.plans[0]["content"]["sources"][number]) {
         for (const target of source.targets) {
           const text = `real-seam:${source.key}:${target.key}`;
           const payloadHash = createHash("sha256").update(text).digest("hex");
@@ -326,14 +356,17 @@ describeWithPostgres("抓取计划版本与确认", () => {
               mediaType: "application/pdf", bytes: Buffer.byteLength(text), contentHash: payloadHash }
               : { kind: "inline_text" as const, mediaType: "text/plain", text,
                 bytes: Buffer.byteLength(text), contentHash: payloadHash },
-          }, ...(isAsset ? { assets: [{ assetKey: "raw", filename: "standard.pdf",
+          }, resourceReferences: [], ...(isAsset ? { assets: [{ assetKey: "raw", filename: "standard.pdf",
             sourceUrl: source.entryUrls[0]!, mediaType: "application/pdf", contentHash: payloadHash,
             content: new TextEncoder().encode(text) }] } : { assets: [] }) };
           yield { type: "target.completed" as const, targetKey: target.key };
         }
-      },
     };
-    const providers = new Map([["jd.catalog-product", provider], ["public.web-resource", { ...provider, key: "public.web-resource" }]]);
+    const providers = new Map([["jd.catalog-product", {
+      key: "jd.catalog-product", version: "2.0.0", validate() {}, async preflight() {}, collect: collectProvider,
+    }], ["public.web-resource", {
+      key: "public.web-resource", version: "1.0.0", validate() {}, async preflight() {}, collect: collectProvider,
+    }]]);
     const stored = new Map<string, Uint8Array>();
     const datasets = createSourceDatasetModule(db, { assetStore: {
       async put(input) { const integrity = `sha256-${input.contentHash}`; stored.set(integrity, input.content); return integrity; },
@@ -347,7 +380,7 @@ describeWithPostgres("抓取计划版本与确认", () => {
     // WHY：数据库未承诺无 ORDER BY 查询的行序；按来源身份对账，保护真实执行结果而非偶然插入顺序。
     expect(Object.fromEntries(runs.map((run) => [run.sourceCollectionPlanSourceKey,
       [run.status, run.snapshotCount]]))).toEqual({
-      jd: ["completed", 2], brand: ["completed", 1],
+      jd: ["completed", 5], brand: ["completed", 1],
       "brand-secondary": ["completed", 1],
       standard: ["completed", 1], technical: ["completed", 1],
     });
@@ -421,8 +454,11 @@ function validOutput(variant: number): CrawlPlanningRuntimeOutput {
       executionChecklistVersion: 2,
       summary: `冰箱多来源抓取计划 ${variant}`,
       sources: [source("jd", "candidate-jd", "京东", "https://www.jd.com/", [
-        target("catalog", "品牌与型号", "catalog"),
-        target("detail", "配置参数", "first_matching_product"),
+        jdTarget("catalog-pages", "品牌与型号", "catalog_pages"),
+        jdTarget("store-catalogs", "配置参数", "store_catalogs"),
+        jdTarget("product-details", "配置参数", "product_details"),
+        jdTarget("review-summaries", "品牌与型号", "review_summaries"),
+        jdTarget("review-samples", "品牌与型号", "review_samples"),
       ]), source("brand", "candidate-brand", "品牌官网", "https://example.com/products", [
         target("official_parameters", "配置参数"),
       ]), source("brand-secondary", "candidate-brand-secondary", "第二品牌官网", "https://second-brand.example.com/products", [
@@ -437,7 +473,8 @@ function validOutput(variant: number): CrawlPlanningRuntimeOutput {
   });
 }
 
-function source(key: string, candidateId: string, name: string, entryUrl: string, targets: ReturnType<typeof target>[]) {
+function source(key: string, candidateId: string, name: string, entryUrl: string,
+  targets: Array<ReturnType<typeof target> | ReturnType<typeof jdTarget>>) {
   const jd = key === "jd";
   const brand = key.startsWith("brand");
   return {
@@ -445,20 +482,36 @@ function source(key: string, candidateId: string, name: string, entryUrl: string
       : key === "standard" ? "standards_body" as const : "technical_publisher" as const,
     sourceCandidateIds: [candidateId],
     role: "提供任务所需原始数据", entryUrls: [entryUrl], observationLevel: "search_discovered" as const,
-    provider: { key: jd ? "jd.catalog-product" : "public.web-resource", version: "1.0.0", configuration: jd
-      ? [{ key: "mode", value: "cdp" }, { key: "include_text", value: "冰箱" },
+    provider: { key: jd ? "jd.catalog-product" : "public.web-resource", version: jd ? "2.0.0" : "1.0.0", configuration: jd
+      ? [{ key: "mode", value: "explicit_http" }, { key: "include_text", value: "冰箱" },
         { key: "exclude_text", value: "二手|冷柜|酒柜" }]
       : [{ key: "mode", value: "exact_https" }, { key: "maximum_bytes", value: 5_000_000 }] },
-    accessPolicy: { kind: "paced_http" as const, version: "jd-low-frequency-v1", maxRequestsPerMinute: 2, minimumIntervalMs: 10_000, maximumRunMs: 180_000 },
-    stopPolicy: { requestBudget: 2, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true as const },
-    rawOutputPolicy: { formats: [entryUrl.endsWith(".pdf") ? "document" as const : "html" as const],
-      retainAssets: entryUrl.endsWith(".pdf") },
+    accessPolicy: { kind: "paced_http" as const, version: jd ? "jd-explicit-http-v2" : "public-low-frequency-v1",
+      maxRequestsPerMinute: jd ? 1 : 2, minimumIntervalMs: jd ? 60_000 : 10_000,
+      maximumRunMs: jd ? 3_600_000 : 180_000 },
+    stopPolicy: { requestBudget: jd ? 10 : 2, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true as const },
+    rawOutputPolicy: { formats: jd ? ["html" as const, "source_json" as const]
+      : [entryUrl.endsWith(".pdf") ? "document" as const : "html" as const],
+      retainAssets: jd ? false : entryUrl.endsWith(".pdf") },
     accessState: "unknown" as const, observedAt: "2026-08-19T00:00:00.000Z",
     targets: jd ? targets : targets.map((target) => ({ ...target,
       rawFormats: entryUrl.endsWith(".pdf") ? ["document" as const] : target.rawFormats,
       providerConfiguration: [{ key: "url", value: entryUrl }] })),
     executionBlockers: [],
   };
+}
+
+function jdTarget(key: string, topic: string, operation: "catalog_pages" | "store_catalogs"
+  | "product_details" | "review_summaries" | "review_samples") {
+  const review = operation === "review_summaries" || operation === "review_samples";
+  return { key, name: topic, taskTopics: [topic], captureUnit: "来源记录",
+    rawFormats: [review ? "source_json" as const : "html" as const],
+    providerConfiguration: operation === "review_samples"
+      ? [{ key: "operation" as const, value: operation }, { key: "samples_per_product" as const, value: 50 as const }]
+      : [{ key: "operation" as const, value: operation }],
+    quantity: { mode: "all_available" as const, unit: "份",
+      denominator: "动态工作项", rationale: "逐工作项严格对账" },
+    uniqueKey: "规范化 GET URL", traversal: "从前序响应发现", stopCondition: "全部完成或首次受限" };
 }
 
 function target(key: string, topic: string, operation = "exact_resource") {

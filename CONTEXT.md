@@ -64,7 +64,27 @@ Workbench 把采访中已有的来源事实结构化为正式 Source Candidate �
 
 ### 来源运行（Source Run）
 
-一次正式抓取执行。它绑定抓取任务、计划来源项、Provider 和访问策略，记录开始、结束、状态和计数。
+一个来源在一次正式抓取批次中的执行。它绑定抓取任务、执行批次、计划来源项、Provider 和访问策略，记录开始、结束、状态和计数。历史运行可能没有批次关系，必须明确标成“历史记录（无批次）”，不能按相近时间猜测归属。
+
+### 抓取批次（Source Collection Batch）
+
+负责人每次点击“开始新批次抓取”后、任何 Provider preflight 或来源访问前创建的一次可审计执行事实。它冻结任务 revision、计划 ID/version、计划来源数、开始/结束时间和批次结果，并拥有本轮全部 Source Run；Prepare 只检查条件，不创建批次。
+
+### 来源运行恢复（Source Run Resume）
+
+负责人对 stopped/failed Source Run 发起的显式继续。系统创建新的 Source Run，并用 `resumedFromRunId` 关联前序运行；前序已完成工作不重复，请求预算、窗口和冷却不能因继续而重置。它不是自动重试。
+
+### 捕获工作项（Capture Work Item）
+
+Provider 从已确认入口或前序原始响应中发现的、确实需要网络访问的动态捕获对象。它用稳定 work key 对账 pending/running/completed/failed/stopped 和预期/实际数量；图片 URL 引用不是工作项。
+
+### 来源请求尝试（Source Request Attempt）
+
+一个实际 HTTP hop 的持久账本记录。它在网络发送前先占预算并记录 requested URL、Provider、run/work/target 和开始时间，随后补充响应或停止结果；没有 attempt 就不得出网。
+
+### 来源访问门（Source Access Gate）
+
+PostgreSQL 中跨进程共享的请求预算、最小间隔、窗口、冷却、熔断和人工继续状态。进程内 limiter 只能执行其准入结果，不能另算一套。
 
 ## 3. 原始数据
 
@@ -80,13 +100,17 @@ Workbench 把采访中已有的来源事实结构化为正式 Source Candidate �
 
 来源对象在某次运行中的不可变观察和原始载荷。新抓取追加新快照，不覆盖历史。
 
+### 来源资源引用（Source Resource Reference）
+
+来源快照中观察到、但当前阶段没有下载的外部资源引用。它记录原始 URL、资源类型、在原内容中的用途、区块、顺序及所属来源对象关系；它不是来源附件，不表示资源字节已经取得、URL 仍可访问或内容已经校验。
+
 ### 来源附件（Source Asset）
 
 以原文件保存的 PDF、表格、图片、视频或其他二进制内容，带来源 URL、媒体类型、字节数和内容哈希。
 
 ### 来源数据集（Source Dataset）
 
-一个抓取任务下所有来源运行、对象、快照和附件的集合。Workbench 可以查看并导出；它不是清洗结果。
+一个抓取任务下所有来源运行、对象、快照、资源引用和附件的集合。Workbench 可以查看并导出；它不是清洗结果。
 
 ### 旧结构化记录（Legacy Structured JSON）
 
@@ -109,6 +133,8 @@ Workbench 把采访中已有的来源事实结构化为正式 Source Candidate �
 - 抓取规划运行 ≠ 来源运行；前者生成计划，后者按已确认计划取得原始数据。
 - 抓取任务确认 ≠ 开始抓取。
 - 抓取计划确认 ≠ 开始抓取。
+- 抓取条件检查 ≠ 创建抓取批次或访问来源。
+- 抓取批次 ≠ 来源运行；前者对应一次 Start，后者对应该批次中的一个来源。
 - 来源可访问 ≠ 数据完整、可用或允许再分发。
 - Source Dataset ≠ 清洗结果。
 - JSON/Zod schema ≠ 用户配置面板；它只负责内部边界校验。

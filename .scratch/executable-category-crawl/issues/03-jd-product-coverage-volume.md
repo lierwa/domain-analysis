@@ -18,6 +18,8 @@ Status: ready-for-human
 
 该项会改变 Provider 能力与计划约束，不能混入 Issue 02 的同线程 repair；当前仅登记，不实施、不确认现有计划、不 Start。
 
+2026-08-21 频控审计补充：该 Issue 还不能进入目录枚举原型。旧 JD Provider 把一次 `page.goto` 当一个请求，Prepare/Preflight 又各自绕过 gate 访问页面，浏览器子请求、redirect 和重启后的冷却均未受控。当前 Provider 已失败关闭；先完成 R-032 登记的持久准入、工作项恢复、逐请求 observation 与本地强杀门，或证明 JOS 官方 API 覆盖本期字段并取得权限，之后才能继续本 Issue。登录和真实京东探针均保持禁止。
+
 ## 证据
 
 - Capture Task：`capture-task-3a404f9e-4ede-414d-9eaa-bc834303a5a5`，revision 1；
