@@ -1026,6 +1026,39 @@ Node/TypeScript、本地/离线和部署边界：纯 Node 24/TypeScript；App Se
 
 边界：这项修正只提高大结构化输出的可恢复性，不代表计划数量已经满足任务范围。该真实 plan 有 16 个来源、25 个 target，但 `jd.catalog-product@1.0.0` 仍固定每个入口只抓一个首个匹配商品；“主流品牌全系在售”需要单独扩展 Provider 的覆盖分母与遍历能力，见 Issue 03，不能用本 repair 冒充完成。
 
+### R-039 fake-IP TUN 下的公共 DNS 与 SSRF 同址连接
+
+状态：已验证；当前本机采用关闭冲突 TUN 后复用系统 DNS/现有同址 SSRF，DoH 候选不进入生产
+目标阶段：阶段 1C～1E 公共原始资源真实执行
+
+问题：2026-08-20 的 confirmed plan 执行中，15 个 `public.web-resource` 均被现有 SSRF 门拒绝，因为 Windows 系统解析返回 `198.18.0.x`。2026-08-21 现场确认本机运行 Mihomo TUN，虚拟网卡、网关和 DNS 均使用 `198.18.0.0/15`；Node `dns.lookup` 对 NIST、海尔、SAMR、CNIS 均返回 fake IP。该地址仍属于保留基准测试网段，不能加白，也不能关闭私网检查。
+
+官方依据：
+
+- Mihomo 官方 DNS 文档说明 `fake-ip` 模式默认以 `198.18.0.1/16` 为 fake-IP/TUN 参考范围，并提供 `fake-ip-filter` 让特定域名返回真实地址；修改用户全局代理配置会扩大产品边界且难以保证两台电脑一致，因此本项目不自动改 Mihomo 配置：https://wiki.metacubex.one/en/config/dns/
+- Node 24 官方说明 `dns.lookup()` 使用操作系统解析设施；`dns.Resolver`/`resolve4`/`resolve6` 才直接向指定 DNS server 发请求，并可用 `setLocalAddress` 选择多网卡出口：https://nodejs.org/docs/latest-v24.x/api/dns.html
+- Got 14 官方提供与 `dns.lookup` 同签名的 `dnsLookup`，关闭 `dnsCache` 后连接层直接消费该回调选出的地址；现有 `followRedirect=false`、`retry.limit=0`、HTTPS/Unix socket/字节上限继续保留：https://github.com/sindresorhus/got/blob/main/documentation/2-options.md
+
+现场原型：Windows `Resolve-DnsName -Server 192.168.1.1` 能取得真实公网地址，但 Node `Resolver.setServers(["192.168.1.1"])` 即使 `setLocalAddress("192.168.1.7")` 仍超时；普通 UDP 查询 `1.1.1.1`/`223.5.5.5` 又被 TUN 劫持并返回 fake IP。因此“改用指定 UDP DNS”已淘汰，不能作为跨平台生产路径。
+
+2026-08-21 经用户明确允许，使用 Mihomo 官方本地 controller 只把运行时 `tun.enable` 从 `true` 切为 `false`，没有改订阅、Cookie、Profile 或代理规则。`198.18.0.0/15` 虚拟路由随即消失；Node 24 的 `dns.lookup` 对 NIST、海尔、SAMR 恢复真实 A/AAAA，NIST HTTPS 实连公网 IPv6、HTTP 200、TLS authorized。该结果证明当前故障是本机 fake-IP TUN 与安全解析的环境冲突，现有 `createPublicDnsLookup` 在 TUN 关闭后可以继续把“校验全部候选地址”和“连接选中地址”保持为同一条路径。
+
+成熟候选：
+
+| 候选 | 处置 | 依据 |
+| --- | --- | --- |
+| 把 `198.18.0.0/15` 加入公网白名单 | 拒绝 | 会把保留/测试网段当公网，直接放松 SSRF |
+| 自动修改 Mihomo `fake-ip-filter` | 拒绝 | 修改用户全局网络工具，扩大权限和部署边界，且不是项目可移植配置 |
+| 本次真实运行期间关闭 Mihomo TUN | 采用（本机运行条件） | 用户显式授权；官方 controller 动态关闭后系统 DNS、TLS 与现有 SSRF 同时通过，不改项目安全边界或用户订阅 |
+| Node `Resolver` 指定传统 UDP DNS | 拒绝 | 当前 TUN 下现场超时或仍被劫持，最小原型失败 |
+| 自写 DoH JSON/wire parser | 拒绝 | DNS 解析、缓存、错误处理已有成熟实现，不自研协议栈 |
+| `dns-query` | 暂缓 | 支持 RFC 8484/TypeScript，但 API 偏低层且默认含 resolver 列表更新/重试；本项目只需 A/AAAA，边界更宽 |
+| `dns-over-http-resolver@3.0.16` | 原型通过但不采用 | 临时 `--no-save` 原型经 Google JSON DoH 得到真实地址，Got 连接同一已校验地址并通过 TLS；当前环境已有更短的用户授权运行条件，故不增加依赖、DoH 隐私面或第二解析配置 |
+
+安全结论：生产继续拒绝 loopback、link-local、private、multicast、documentation、reserved、fake-IP、redirect、非 HTTPS 443、凭证 URL、Unix socket、自动重试和超字节。若 TUN 再次把系统解析改为 `198.18.*`，Provider 必须继续失败关闭；不得静默切 DoH、加白或绕开用户网络配置。DoH 原型仅证明存在安全候选，不构成已选生产能力。
+
+部署与退出：本轮不增加 package 或 lockfile，不改变 Crawl Plan、公共 Provider、Source Dataset 或数据库 contract。TUN 只是本机本次运行条件；Clash Verge 重启后可能恢复原设置，届时需要用户再次明确关闭或另行批准产品级网络配置，不能由项目暗中持久化。
+
 ### R-007 依赖复现与安全升级
 
 状态：持续维护

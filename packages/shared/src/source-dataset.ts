@@ -26,7 +26,7 @@ export const rawSourceObservationSchema = z.object({
   requestedUrl: z.string().url(),
   finalUrl: z.string().url().optional(),
   observedAt: isoDateSchema,
-  state: z.enum(["accessible", "login_required", "verification_required", "access_denied", "not_found", "source_error"]),
+  state: z.enum(["accessible", "login_required", "verification_required", "access_denied", "rate_limited", "not_found", "source_error"]),
   httpStatus: z.number().int().min(100).max(599).optional(),
   responseHeaders: z.record(z.string(), z.string()).default({}),
   error: z.string().min(1).max(4000).optional(),

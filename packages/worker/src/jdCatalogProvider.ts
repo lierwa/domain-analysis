@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { CrawlPlanSource, SourcePreparation, SourceProviderEvent } from "@domain-analysis/shared";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
-import { createPacedAccessGate } from "./pacedAccessGate";
+import { createPacedAccessGate, type PacedAccessGate } from "./pacedAccessGate";
 import { SourceAccessError } from "./sourceAccessError";
 
 export interface JdCatalogProviderOptions { endpointUrl: string; userDataDir: string; }
@@ -10,6 +10,8 @@ export interface JdCatalogProvider {
   readonly key: string;
   readonly version: string;
   validate(source: CrawlPlanSource): void;
+  beginExecution(input: { executionKey: string; sources: readonly CrawlPlanSource[] }): void;
+  endExecution(executionKey: string): Promise<void>;
   prepare(source: CrawlPlanSource): Promise<SourcePreparation>;
   preflight(source: CrawlPlanSource): Promise<void>;
   collect(source: CrawlPlanSource, runId: string, signal?: AbortSignal): AsyncIterable<SourceProviderEvent>;
@@ -19,6 +21,7 @@ export interface JdCatalogProvider {
 export function createJdCatalogProvider(
   options: JdCatalogProviderOptions,
   browserType: Pick<typeof chromium, "connectOverCDP" | "launchPersistentContext"> = chromium,
+  accessGateFactory: typeof createPacedAccessGate = createPacedAccessGate,
 ): JdCatalogProvider {
   const endpoint = new URL(options.endpointUrl);
   if (endpoint.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname)) {
@@ -28,6 +31,7 @@ export function createJdCatalogProvider(
   let browser: Browser | undefined;
   let ownedContext: BrowserContext | undefined;
   let loginPage: Page | undefined;
+  let accessScope: { executionKey: string; gate: PacedAccessGate } | undefined;
   const context = () => ensureBrowserContext(options, endpoint, browserType, {
     get browser() { return browser; },
     set browser(value) { browser = value; },
@@ -37,50 +41,35 @@ export function createJdCatalogProvider(
   return {
     key: "jd.catalog-product",
     version: "1.0.0",
-    validate(source) {
-      if (source.provider.key !== "jd.catalog-product" || source.provider.version !== "1.0.0") {
-        throw new Error("JD Provider 绑定必须是 jd.catalog-product@1.0.0");
-      }
-      const configurationKeys = source.provider.configuration.map((item) => item.key).sort();
-      if (configurationKeys.join(",") !== "exclude_text,include_text,mode") {
-        throw new Error("JD Provider 配置必须且只能包含 mode、include_text 与 exclude_text");
-      }
-      const configuration = config(source);
-      if (configuration.mode !== "cdp") throw new Error("JD Provider 只接受已验证的 cdp 配置");
-      if (!configuration.include_text) throw new Error("JD Provider 必须配置 include_text");
-      if (source.entryUrls.length !== 1) throw new Error("JD Provider 每个来源只接受一个京东入口");
-      for (const value of source.entryUrls) {
-        const url = new URL(value);
-        if (url.protocol !== "https:" || url.hostname !== "www.jd.com" || url.port || url.username || url.password) {
-          throw new Error("JD 入口必须是无凭证的 www.jd.com HTTPS URL");
-        }
-      }
-      if (source.sourceKind !== "retailer") throw new Error("JD Provider 只承担零售来源");
-      if (source.rawOutputPolicy.formats.join(",") !== "html" || source.rawOutputPolicy.retainAssets) {
-        throw new Error("JD 首版只保留源站 HTML 且不下载附件");
-      }
-      const operations = source.targets.map((target) => targetOperation(target));
-      if (operations.filter((value) => value === "catalog").length !== 1
-        || operations.filter((value) => value === "first_matching_product").length !== 1
-        || operations.length !== 2) {
-        throw new Error("JD Provider 当前只接受一个 catalog target 和一个 first_matching_product target");
-      }
-      for (const target of source.targets) {
-        if (target.quantity.mode !== "target_count" || target.quantity.targetCount !== 1) {
-          throw new Error(`JD 首个有界 target 只能抓取 1 个单元：${target.key}`);
-        }
-      }
-      if (source.stopPolicy.requestBudget !== 2) throw new Error("JD 首个有界来源请求预算必须为 2");
+    validate: validateJdSource,
+    beginExecution(input) {
+      for (const source of input.sources) validateJdSource(source);
+      if (accessScope?.executionKey === input.executionKey && !isTerminalGate(accessScope.gate)) return;
+      accessScope?.gate.cancel("superseded_execution");
+      // WHY：同一 confirmed plan 的 Prepare、Start preflight、目录和详情必须共享时钟；
+      // 最长窗口按各来源计划窗口求和，只扩展整个执行寿命，不放宽每分钟和同域间隔。
+      accessScope = { executionKey: input.executionKey,
+        gate: accessGateFactory(combinedAccessPolicy(input.sources)) };
+    },
+    async endExecution(executionKey) {
+      if (accessScope?.executionKey !== executionKey) return;
+      const scope = accessScope;
+      accessScope = undefined;
+      await scope.gate.onIdle();
     },
     async prepare(source) {
-      this.validate(source);
-      const readiness = await checkReadiness(await context(), source.key, source.entryUrls[0]!, loginPage);
+      validateJdSource(source);
+      const gate = requireAccessGate(accessScope);
+      const readiness = await gate.schedule(`prepare:${source.key}`, async (signal) =>
+        checkReadiness(await context(), source.key, source.entryUrls[0]!, loginPage, signal));
       loginPage = readiness.page;
       return readiness.result;
     },
     async preflight(source) {
-      this.validate(source);
-      const readiness = await checkReadiness(await context(), source.key, source.entryUrls[0]!, loginPage);
+      validateJdSource(source);
+      const gate = requireAccessGate(accessScope);
+      const readiness = await gate.schedule(`preflight:${source.key}`, async (signal) =>
+        checkReadiness(await context(), source.key, source.entryUrls[0]!, loginPage, signal));
       loginPage = readiness.page;
       if (readiness.result.status === "action_required") {
         throw new SourceAccessError(readiness.result.action, readiness.result.message);
@@ -88,33 +77,78 @@ export function createJdCatalogProvider(
     },
     async *collect(source, _runId, signal) {
       const browserContext = await context();
+      const gate = requireAccessGate(accessScope);
       const entry = source.entryUrls[0]!;
       const catalogTarget = source.targets.find((target) => targetOperation(target) === "catalog")!;
       const detailTarget = source.targets.find((target) => targetOperation(target) === "first_matching_product")!;
-      const gate = createPacedAccessGate({ ...source.accessPolicy, jitterMs: { min: 0, max: 0 }, batchSize: 1, batchCooldownMs: 1 });
-      if (signal) signal.addEventListener("abort", () => gate.cancel("operator_cancelled"), { once: true });
-      const catalog = await gate.schedule("catalog", () => capture(browserContext.newPage(), entry, signal));
-      yield captureEvent(catalogTarget.key, "catalog", source.key, entry, catalog);
-      if (catalog.state !== "accessible") return;
-      yield { type: "target.completed", targetKey: catalogTarget.key };
-      const configuration = config(source);
-      const excluded = configuration.exclude_text?.split("|").map((item) => item.trim()).filter(Boolean) ?? [];
-      const detailUrl = catalog.cards.find((card) => card.text.includes(configuration.include_text!)
-        && excluded.every((term) => !card.text.includes(term)))?.url;
-      if (!detailUrl) throw new Error("京东目录没有符合 include_text/exclude_text 的商品详情链接");
-      const detail = await gate.schedule("detail", () => capture(browserContext.newPage(), detailUrl, signal));
-      yield captureEvent(detailTarget.key, "product", new URL(detailUrl).pathname, detailUrl, detail);
-      if (detail.state === "accessible") yield { type: "target.completed", targetKey: detailTarget.key };
-      await gate.onIdle();
+      const cancel = () => gate.cancel("operator_cancelled");
+      signal?.addEventListener("abort", cancel, { once: true });
+      try {
+        const catalog = await gate.schedule(`catalog:${source.key}`, (gateSignal) =>
+          capture(browserContext.newPage(), entry, gateSignal));
+        yield captureEvent(catalogTarget.key, "catalog", source.key, entry, catalog);
+        if (catalog.state !== "accessible") return;
+        yield { type: "target.completed", targetKey: catalogTarget.key };
+        const configuration = config(source);
+        const excluded = configuration.exclude_text?.split("|").map((item) => item.trim()).filter(Boolean) ?? [];
+        const detailUrl = catalog.cards.find((card) => card.text.includes(configuration.include_text!)
+          && excluded.every((term) => !card.text.includes(term)))?.url;
+        if (!detailUrl) throw new Error("京东目录没有符合 include_text/exclude_text 的商品详情链接");
+        const detail = await gate.schedule(`detail:${source.key}`, (gateSignal) =>
+          capture(browserContext.newPage(), detailUrl, gateSignal));
+        yield captureEvent(detailTarget.key, "product", new URL(detailUrl).pathname, detailUrl, detail);
+        if (detail.state === "accessible") yield { type: "target.completed", targetKey: detailTarget.key };
+      } finally {
+        signal?.removeEventListener("abort", cancel);
+      }
     },
     async close() {
+      accessScope?.gate.cancel("provider_closed");
+      await accessScope?.gate.onIdle().catch(() => undefined);
       await loginPage?.close().catch(() => undefined);
       if (ownedContext) await ownedContext.close().catch(() => undefined);
       loginPage = undefined;
+      accessScope = undefined;
       ownedContext = undefined;
       browser = undefined;
     },
   };
+}
+
+function validateJdSource(source: CrawlPlanSource) {
+  if (source.provider.key !== "jd.catalog-product" || source.provider.version !== "1.0.0") {
+    throw new Error("JD Provider 绑定必须是 jd.catalog-product@1.0.0");
+  }
+  const configurationKeys = source.provider.configuration.map((item) => item.key).sort();
+  if (configurationKeys.join(",") !== "exclude_text,include_text,mode") {
+    throw new Error("JD Provider 配置必须且只能包含 mode、include_text 与 exclude_text");
+  }
+  const configuration = config(source);
+  if (configuration.mode !== "cdp") throw new Error("JD Provider 只接受已验证的 cdp 配置");
+  if (!configuration.include_text) throw new Error("JD Provider 必须配置 include_text");
+  if (source.entryUrls.length !== 1) throw new Error("JD Provider 每个来源只接受一个京东入口");
+  for (const value of source.entryUrls) {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname !== "www.jd.com" || url.port || url.username || url.password) {
+      throw new Error("JD 入口必须是无凭证的 www.jd.com HTTPS URL");
+    }
+  }
+  if (source.sourceKind !== "retailer") throw new Error("JD Provider 只承担零售来源");
+  if (source.rawOutputPolicy.formats.join(",") !== "html" || source.rawOutputPolicy.retainAssets) {
+    throw new Error("JD 首版只保留源站 HTML 且不下载附件");
+  }
+  const operations = source.targets.map((target) => targetOperation(target));
+  if (operations.filter((value) => value === "catalog").length !== 1
+    || operations.filter((value) => value === "first_matching_product").length !== 1
+    || operations.length !== 2) {
+    throw new Error("JD Provider 当前只接受一个 catalog target 和一个 first_matching_product target");
+  }
+  for (const target of source.targets) {
+    if (target.quantity.mode !== "target_count" || target.quantity.targetCount !== 1) {
+      throw new Error(`JD 首个有界 target 只能抓取 1 个单元：${target.key}`);
+    }
+  }
+  if (source.stopPolicy.requestBudget !== 2) throw new Error("JD 首个有界来源请求预算必须为 2");
 }
 
 async function ensureBrowserContext(
@@ -152,8 +186,16 @@ async function ensureBrowserContext(
   }
 }
 
-async function checkReadiness(context: BrowserContext, sourceKey: string, entryUrl: string, previousPage?: Page) {
+async function checkReadiness(
+  context: BrowserContext,
+  sourceKey: string,
+  entryUrl: string,
+  previousPage: Page | undefined,
+  signal: AbortSignal,
+) {
   const page = previousPage && !previousPage.isClosed() ? previousPage : await context.newPage();
+  const abort = () => void page.close();
+  signal.addEventListener("abort", abort, { once: true });
   try {
     const response = await page.goto(entryUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.waitForTimeout(2_000);
@@ -174,9 +216,12 @@ async function checkReadiness(context: BrowserContext, sourceKey: string, entryU
     throw new SourceAccessError(state === "source_error" ? "source_abnormal" : state,
       "京东入口当前不可访问，未开始抓取");
   } catch (error) {
+    if (signal.aborted) throw signal.reason;
     if (error instanceof SourceAccessError) throw error;
     await page.close().catch(() => undefined);
     throw new Error("京东登录状态检查失败，请在项目专用 Chrome 中确认页面可访问后重试");
+  } finally {
+    signal.removeEventListener("abort", abort);
   }
 }
 
@@ -215,12 +260,35 @@ function config(source: CrawlPlanSource) {
 }
 
 function classify(url: string, status: number | undefined, text: string) {
-  if (status === 429 || url.includes("frequent")) return "access_denied" as const;
+  if (status === 429 || url.includes("frequent")) return "rate_limited" as const;
   if (url.includes("passport.jd.com")) return "login_required" as const;
   if (url.includes("risk_handler") || text.includes("京东验证")) return "verification_required" as const;
   if (status === 401 || status === 403) return "access_denied" as const;
   if (!text.trim()) return "source_error" as const;
   return "accessible" as const;
+}
+
+function combinedAccessPolicy(sources: readonly CrawlPlanSource[]) {
+  const first = sources[0]?.accessPolicy;
+  if (!first) throw new Error("JD 执行至少需要一个来源");
+  for (const source of sources.slice(1)) {
+    const policy = source.accessPolicy;
+    if (policy.version !== first.version || policy.maxRequestsPerMinute !== first.maxRequestsPerMinute
+      || policy.minimumIntervalMs !== first.minimumIntervalMs) {
+      throw new Error("同一 JD 执行的所有来源必须共享相同低频策略");
+    }
+  }
+  return { ...first, jitterMs: { min: 0, max: 0 }, batchSize: 1, batchCooldownMs: 1,
+    maximumRunMs: sources.reduce((total, source) => total + source.accessPolicy.maximumRunMs, 0) };
+}
+
+function requireAccessGate(scope: { gate: PacedAccessGate } | undefined) {
+  if (!scope) throw new Error("JD Provider 尚未开始 confirmed plan 执行生命周期");
+  return scope.gate;
+}
+
+function isTerminalGate(gate: PacedAccessGate) {
+  return gate.state === "open" || gate.state === "cancelled" || gate.state === "expired";
 }
 
 function captureEvent(targetKey: string, kind: string, externalKey: string, requestedUrl: string,

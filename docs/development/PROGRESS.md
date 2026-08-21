@@ -898,3 +898,38 @@ Patch Disposition:
 - `npm test`：32 files passed、1 skipped，121 tests passed、1 skipped；`npm run typecheck` 六个 workspace 通过；`npm run build` 通过，Web 2301 modules、596.39 kB / gzip 176.26 kB，仅有既存大 chunk warning；`git diff --check` 通过。
 
 本轮架构影响：改变。Crawl Plan 的事实归属没有变化，但运行态 preflight 从计划确认职责移到 Source Execution 的显式 Prepare/Start 门；新增一个 typed HTTP contract，不新增数据库状态、队列或第二事实源。当前修改未提交、未推送，只在本机工作树，不构成跨电脑接续点。
+
+## 20. 2026-08-21 真实抓取共享节奏与 fake-IP TUN 冲突处置
+
+简单说明：上次 18 个来源全部失败有两个系统性原因。京东的准备检查、最终检查和每个来源各自重置了访问节奏；公共来源则被本机 Mihomo TUN 解析成 `198.18.*` fake IP，现有 SSRF 正确拒绝。当前代码已让一次 confirmed plan 内的全部京东导航共用一个低频 gate；经用户明确允许，本次真实运行临时关闭 TUN，公共 Provider 继续使用原有严格 SSRF，不加白也不新增 DoH。自动化门已通过，下一步必须由用户在正式 Web 点击 Prepare/Start 才能判定真实结果。
+
+```text
+Baseline Impact:
+- touched modules: JD Provider、Source Execution、Raw Source Observation typed contract、测试、Issue/RESEARCH/ARCHITECTURE/ADR/PROGRESS
+- owning fact source: Crawl Plan 继续拥有来源/策略；Source Execution 编排一次 Provider execution；Source Dataset 继续拥有 run/target/observation/snapshot
+- public interface changed: yes；SourceProvider 增加可选 begin/end execution；Raw Source Observation 增加 rate_limited；HTTP 路由与 PostgreSQL schema 不变
+- new protocol/adapter/fallback: 只扩展现有 Provider 生命周期；不增加公共 DNS/代理 adapter、自动重试或 fallback
+- compatibility or legacy path changed: 历史 18 个 failed run 不改写；公共 Provider 与 SSRF 代码保持；JD Provider key/version 保持
+- research update required: yes；R-039 记录 Mihomo/Node/Got 官方依据、DoH 原型与最终不采用结论
+- architecture or ADR update required: yes；记录 plan execution 共享 gate、同 Provider stopped 审计与 rate_limited
+- tests and real-surface validation: 4 个定向文件、全量 test/typecheck/build、用户 Web Prepare/Start、页面/API/PostgreSQL/Source Dataset 对账
+```
+
+```text
+Patch Disposition:
+- delete: 每个 JD source 内新建 gate、preflight 绕过 pacing、pc-frequent-pro 误记为 access_denied
+- keep: p-queue/cockatiel、Playwright CDP、data/jd-cdp-profile、零重试、公共 SSRF/redirect/HTTPS/同址连接、历史运行事实
+- rewrite: Provider execution 用 plan identity/version 贯穿 Prepare/Start；访问面受限后其余同 Provider 来源只写 stopped 审计，其他 Provider 继续
+- reason: 不能在错误生命周期上叠 sleep/白名单；节奏必须只有一个事实，fake-IP 仍必须按保留地址拒绝
+```
+
+实现与当前证据：
+
+- `SourceProvider` seam 增加可选 `beginExecution/endExecution`。Source Execution 先校验并按 Provider 分组；Prepare 与 Start 使用同一个 plan execution key。JD Provider 的 Prepare、Start preflight、目录、详情和跨 source 调度均进入一个既有 `PacedAccessGate`，总最长窗口按来源窗口合计，但 2 次/分钟、10 秒同域间隔和零重试不变。
+- `login_required`、`verification_required`、`access_denied`、`rate_limited` 会阻断其余同 Provider 导航，并为每个剩余 source/target 写 `stopped`；`not_found/source_error` 只结束当前 source，其他 Provider 继续。`pc-frequent-pro`/HTTP 429 现在保存为 `rate_limited`；历史 observation 不迁移。
+- 用户授权后经 Mihomo 官方本地 controller 把运行时 TUN 从 true 切为 false。`198.18.*` 虚拟路由消失；Node 对 NIST、海尔、SAMR 恢复真实 A/AAAA；NIST HTTPS 为 200 且 TLS authorized。公共 Provider、BlockList 和 package/lockfile 均未修改，Clash Verge 重启后可能恢复原设置。
+- 定向为 4 files / 13 tests passed；全量 `npm test` 为 32 files passed、124 tests passed、1 个既有 realtime acceptance skipped；六个 workspace `npm run typecheck` 通过；`npm run build` 通过，Web 2301 modules、596.41 kB / gzip 176.27 kB，仅有既有大 chunk warning；`git diff --check` 无错误。
+
+本轮架构影响：改变。事实源和依赖方向不变；现有 SourceProvider seam 新增一次 confirmed plan 的临时 execution 生命周期，Raw Source Observation 扩展 `rate_limited`，已同步 ARCHITECTURE 与 ADR-0013。真实页面/API/PostgreSQL 结果尚未产生，当前不得标记完成，也尚未提交推送。
+
+正式 Web 后续已在 `127.0.0.1:6173` 启动并读取目标任务、confirmed plan 与历史 Source Run，但连续三轮没有收到用户 Prepare/Start POST。正式 API 列表和 PostgreSQL 直接查询均为历史 54 条 run，latest `2026-08-20T17:53:16.251Z`；数据库累计 failed 51、completed 3、stopped 0，没有本次新增 run/target/observation/snapshot/asset。真实抓取因此分类为 blocked/untested，而非 passed 或 failed；按用户“无论结果都提交远端并关机”的明确指令，当前转入报告定稿与远端交付，Goal 不得标成 complete。

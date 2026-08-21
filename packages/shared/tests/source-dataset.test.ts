@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { sourceProviderEventSchema, sourceSnapshotCommitSchema } from "../src";
+import { rawSourceObservationSchema, sourceProviderEventSchema, sourceSnapshotCommitSchema } from "../src";
 
 describe("来源执行 target contract", () => {
   it("新快照必须明确归属 target", () => {
@@ -47,6 +47,16 @@ describe("来源执行 target contract", () => {
     expect(sourceProviderEventSchema.safeParse({
       type: "capture", targetKey: "official.manual", snapshot, assets: [],
     }).success).toBe(false);
+  });
+
+  it("把 429 或站点频控保留为 rate_limited 原始观察状态", () => {
+    expect(rawSourceObservationSchema.parse({
+      requestedUrl: "https://www.jd.com/chanpin/450039.html",
+      observedAt: "2026-08-21T00:00:00.000Z",
+      state: "rate_limited",
+      httpStatus: 429,
+      responseHeaders: {},
+    }).state).toBe("rate_limited");
   });
 });
 

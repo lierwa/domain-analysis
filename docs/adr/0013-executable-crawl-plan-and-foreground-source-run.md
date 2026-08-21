@@ -35,3 +35,7 @@ date: 2026-08-20
 ## 2026-08-21 修订：确认与运行准备分离
 
 原“确认时执行运行态 preflight”被本修订替代。原因是 9222 和登录状态会随本机环境变化，不是 Crawl Plan 的业务事实；把它放在确认按钮会让一个合法计划因为 Chrome 未启动而无法确认。Source Execution 现通过显式 Prepare 管理这段临时生命周期：用 Playwright `launchPersistentContext` 和 Git 忽略的独立 Profile 启动系统 Chrome，校验 loopback CDP，再返回 `ready` 或登录/验证人工动作。Start 仍保留最终 preflight，因此准备完成后状态发生变化也不会带病创建运行记录。
+
+## 2026-08-21 修订：Provider execution 共享访问面
+
+Prepare 与 Start 不再各自绕过频控访问站点，也不在每个 source 的 `collect()` 中重建 gate。Source Execution 用 confirmed plan identity/version 建立一次 Provider execution；JD Provider 在该生命周期内让 Prepare、最终 preflight、目录、详情和全部同 Provider source 共用现有 `p-queue`/`cockatiel` gate。来源计划窗口只合计为整个 execution 的最长寿命，每分钟预算和最小间隔保持原计划值。登录、验证、拒绝或 `rate_limited` 后不再导航同 Provider 的剩余来源，但为每个剩余 source/target 写入 `stopped` 审计；其他 Provider 不受牵连。`rate_limited` 加入 Raw Source Observation typed vocabulary，历史 `access_denied` 记录不改写。

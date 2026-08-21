@@ -20,6 +20,8 @@ export interface SourceProvider {
   readonly key: string;
   readonly version: string;
   validate(source: CrawlPlanSource): void;
+  beginExecution?(input: { executionKey: string; sources: readonly CrawlPlanSource[] }): Promise<void> | void;
+  endExecution?(executionKey: string): Promise<void> | void;
   prepare?(source: CrawlPlanSource): Promise<SourcePreparation>;
   preflight(source: CrawlPlanSource): Promise<void>;
   collect(source: CrawlPlanSource, runId: string, signal?: AbortSignal): AsyncIterable<SourceProviderEvent>;
@@ -58,15 +60,11 @@ export function createSourceExecutionModule(
       const view = await planning.get(raw.taskId);
       const plan = view?.plans.find((item) => item.id === raw.planId);
       requireExecutablePlan(view, plan, request);
-      const preparedProviders = new Set<string>();
-      for (const source of plan.content.sources) {
-        const provider = resolve(source);
-        requireNoExecutionBlockers(source);
-        const identity = `${provider.key}@${provider.version}`;
-        if (preparedProviders.has(identity)) continue;
-        const result = await prepareSource(source, provider);
+      const scopes = providerScopes(plan, resolve);
+      await beginProviderScopes(plan, scopes);
+      for (const scope of scopes) {
+        const result = await prepareSource(scope.sources[0]!, scope.provider);
         if (result.status === "action_required") return result;
-        preparedProviders.add(identity);
       }
       return sourcePreparationSchema.parse({ status: "ready", message: "抓取环境已准备完成，可以开始抓取。" });
     },
@@ -76,19 +74,29 @@ export function createSourceExecutionModule(
       const view = await planning.get(raw.taskId);
       const plan = view?.plans.find((item) => item.id === raw.planId);
       requireExecutablePlan(view, plan, request);
-      const preflightedProviders = new Set<string>();
-      for (const source of plan.content.sources) {
-        const provider = resolve(source);
-        requireNoExecutionBlockers(source);
-        const identity = `${provider.key}@${provider.version}`;
-        // WHY：浏览器和登录是 Provider 会话级准备；每个来源仍逐项 validate，但不在 Start 前无频控重复访问同一站点。
-        if (preflightedProviders.has(identity)) continue;
-        await preflightSource(source, provider);
-        preflightedProviders.add(identity);
-      }
-      for (const source of plan.content.sources) {
-        if (raw.signal?.aborted) return;
-        yield* executeSource(plan, source, resolve(source), datasets, raw.signal);
+      const scopes = providerScopes(plan, resolve);
+      const executionKey = planExecutionKey(plan);
+      try {
+        await beginProviderScopes(plan, scopes);
+        for (const scope of scopes) {
+          // WHY：浏览器和登录是 Provider 会话级准备；来源仍逐项 validate，但 Start 只做一次站点 preflight。
+          await preflightSource(scope.sources[0]!, scope.provider);
+        }
+        const stoppedProviders = new Map<string, string>();
+        for (const source of plan.content.sources) {
+          if (raw.signal?.aborted) return;
+          const provider = resolve(source);
+          const identity = providerIdentity(provider);
+          const blockedBy = stoppedProviders.get(identity);
+          if (blockedBy) {
+            yield* stopSource(plan, source, provider, datasets, `provider_access_surface_stopped:${blockedBy}`);
+            continue;
+          }
+          const accessRestriction = yield* executeSource(plan, source, provider, datasets, raw.signal);
+          if (accessRestriction) stoppedProviders.set(identity, accessRestriction);
+        }
+      } finally {
+        await endProviderScopes(executionKey, scopes);
       }
     },
   };
@@ -100,7 +108,7 @@ async function* executeSource(
   provider: SourceProvider,
   datasets: SourceDatasetModule,
   signal?: AbortSignal,
-): AsyncIterable<SourceRunEvent> {
+): AsyncGenerator<SourceRunEvent, string | undefined> {
   const run = await datasets.startRun({ taskId: plan.taskId, planId: plan.id, planVersion: plan.version,
     sourceKey: source.key, providerKey: provider.key, providerVersion: provider.version,
     accessPolicy: effectiveAccessPolicy(source), targetKeys: source.targets.map((target) => target.key) });
@@ -125,7 +133,9 @@ async function* executeSource(
           const failed = await datasets.finishRun({ runId: run.id, status: "failed",
             terminationReason: event.snapshot.observation.state });
           yield parseRunEvent({ type: "run.failed", run: failed });
-          return;
+          return blocksProviderAccessSurface(event.snapshot.observation.state)
+            ? event.snapshot.observation.state
+            : undefined;
         }
         continue;
       }
@@ -150,6 +160,7 @@ async function* executeSource(
     const completed = await datasets.finishRun({ runId: run.id, status: "completed",
       terminationReason: "plan_scope_completed" });
     yield parseRunEvent({ type: "run.completed", run: completed });
+    return undefined;
   } catch (error) {
     const stopped = Boolean(signal?.aborted);
     const reason = stopped ? "operator_cancelled" : boundedMessage(error);
@@ -157,7 +168,70 @@ async function* executeSource(
     const failed = await datasets.finishRun({ runId: run.id, status: stopped ? "stopped" : "failed",
       terminationReason: reason });
     yield parseRunEvent({ type: stopped ? "run.stopped" : "run.failed", run: failed });
+    return undefined;
   }
+}
+
+async function* stopSource(
+  plan: CrawlPlan,
+  source: CrawlPlanSource,
+  provider: SourceProvider,
+  datasets: SourceDatasetModule,
+  reason: string,
+): AsyncGenerator<SourceRunEvent> {
+  const run = await datasets.startRun({ taskId: plan.taskId, planId: plan.id, planVersion: plan.version,
+    sourceKey: source.key, providerKey: provider.key, providerVersion: provider.version,
+    accessPolicy: effectiveAccessPolicy(source), targetKeys: source.targets.map((target) => target.key) });
+  yield parseRunEvent({ type: "run.started", run });
+  for (const target of source.targets) {
+    await datasets.finishTarget({ runId: run.id, targetKey: target.key, status: "stopped",
+      terminationReason: reason });
+  }
+  const stopped = await datasets.finishRun({ runId: run.id, status: "stopped", terminationReason: reason });
+  yield parseRunEvent({ type: "run.stopped", run: stopped });
+}
+
+interface ProviderScope {
+  identity: string;
+  provider: SourceProvider;
+  sources: CrawlPlanSource[];
+}
+
+function providerScopes(plan: CrawlPlan, resolve: (source: CrawlPlanSource) => SourceProvider) {
+  const scopes = new Map<string, ProviderScope>();
+  for (const source of plan.content.sources) {
+    requireNoExecutionBlockers(source);
+    const provider = resolve(source);
+    const identity = providerIdentity(provider);
+    const scope = scopes.get(identity) ?? { identity, provider, sources: [] };
+    scope.sources.push(source);
+    scopes.set(identity, scope);
+  }
+  return [...scopes.values()];
+}
+
+async function beginProviderScopes(plan: CrawlPlan, scopes: readonly ProviderScope[]) {
+  const executionKey = planExecutionKey(plan);
+  for (const scope of scopes) {
+    await scope.provider.beginExecution?.({ executionKey, sources: scope.sources });
+  }
+}
+
+async function endProviderScopes(executionKey: string, scopes: readonly ProviderScope[]) {
+  for (const scope of scopes) await scope.provider.endExecution?.(executionKey);
+}
+
+function planExecutionKey(plan: CrawlPlan) {
+  return `${plan.taskId}:${plan.id}:v${plan.version}`;
+}
+
+function providerIdentity(provider: SourceProvider) {
+  return `${provider.key}@${provider.version}`;
+}
+
+function blocksProviderAccessSurface(state: string) {
+  return state === "login_required" || state === "verification_required"
+    || state === "access_denied" || state === "rate_limited";
 }
 
 function requireExecutablePlan(

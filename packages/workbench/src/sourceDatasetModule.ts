@@ -324,7 +324,7 @@ function normalizeAsset(row: typeof sourceAssets.$inferSelect) {
 }
 
 function normalizeState(value: unknown) {
-  const states = ["accessible", "login_required", "verification_required", "access_denied", "not_found", "source_error"] as const;
+  const states = ["accessible", "login_required", "verification_required", "access_denied", "rate_limited", "not_found", "source_error"] as const;
   return states.find((state) => state === String(value)) ?? "source_error";
 }
 

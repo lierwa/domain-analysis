@@ -48,9 +48,11 @@ describe("JD catalog Provider contract", () => {
     const provider = createJdCatalogProvider({
       endpointUrl: "http://127.0.0.1:9222",
       userDataDir: "data/test-jd-profile",
-    }, browserType as never);
+    }, browserType as never, immediateGateFactory() as never);
+    const source = jdSource();
+    provider.beginExecution({ executionKey: "task:plan:v1", sources: [source] });
 
-    await expect(provider.prepare(jdSource())).resolves.toMatchObject({
+    await expect(provider.prepare(source)).resolves.toMatchObject({
       status: "action_required", action: "login_required",
     });
     expect(browserType.launchPersistentContext).toHaveBeenCalledWith("data/test-jd-profile",
@@ -58,13 +60,80 @@ describe("JD catalog Provider contract", () => {
     expect(page.bringToFront).toHaveBeenCalledOnce();
 
     finalUrl = "https://www.jd.com/chanpin/450039.html";
-    await expect(provider.prepare(jdSource())).resolves.toEqual({
+    await expect(provider.prepare(source)).resolves.toEqual({
       status: "ready", message: "项目专用 Chrome、9222 端口和京东登录状态均已就绪。",
     });
     await provider.close();
     expect(context.close).toHaveBeenCalledOnce();
   });
+
+  it("Prepare、Start preflight、目录详情和下一来源共享同一个低频时钟", async () => {
+    const navigations: string[] = [];
+    const scheduled: string[] = [];
+    const gateFactory = immediateGateFactory(scheduled);
+    const context = { newPage: vi.fn(async () => fakePage(navigations)) };
+    const browser = { contexts: () => [context], isConnected: () => true };
+    const browserType = { connectOverCDP: vi.fn(async () => browser),
+      launchPersistentContext: vi.fn() };
+    const provider = createJdCatalogProvider({ endpointUrl: "http://127.0.0.1:9222",
+      userDataDir: "data/test-jd-profile" }, browserType as never, gateFactory as never);
+    const first = jdSource();
+    const second = { ...jdSource(), key: "jd.refrigerator.second",
+      entryUrls: ["https://www.jd.com/chanpin/450040.html"] };
+    provider.beginExecution({ executionKey: "task:plan:v1", sources: [first, second] });
+
+    await provider.prepare(first);
+    await provider.preflight(first);
+    for await (const _event of provider.collect(first, "run-1")) { /* consume */ }
+    for await (const _event of provider.collect(second, "run-2")) { /* consume */ }
+    await provider.endExecution("task:plan:v1");
+
+    expect(gateFactory).toHaveBeenCalledOnce();
+    expect(gateFactory).toHaveBeenCalledWith(expect.objectContaining({
+      maxRequestsPerMinute: 2, minimumIntervalMs: 10_000, maximumRunMs: 360_000,
+    }));
+    expect(scheduled).toEqual([
+      "prepare:jd.refrigerator", "preflight:jd.refrigerator",
+      "catalog:jd.refrigerator", "detail:jd.refrigerator",
+      "catalog:jd.refrigerator.second", "detail:jd.refrigerator.second",
+    ]);
+    expect(navigations).toHaveLength(6);
+  });
 });
+
+function immediateGateFactory(scheduled: string[] = []) {
+  return vi.fn(() => ({
+    schedule: vi.fn(async (id: string, task: (signal: AbortSignal) => Promise<unknown>) => {
+      scheduled.push(id);
+      return task(new AbortController().signal);
+    }),
+    cancel: vi.fn(),
+    onIdle: vi.fn(async () => undefined),
+    state: "idle" as const,
+    queued: 0,
+    pending: 0,
+  }));
+}
+
+function fakePage(navigations: string[]) {
+  let currentUrl = "about:blank";
+  let closed = false;
+  return {
+    goto: vi.fn(async (url: string) => {
+      currentUrl = url;
+      navigations.push(url);
+      return { status: () => 200 };
+    }),
+    waitForTimeout: vi.fn(async () => undefined),
+    locator: vi.fn(() => ({ innerText: async () => "海尔冰箱",
+      evaluateAll: async () => [{ url: "https://item.jd.com/100.html", text: "海尔冰箱" }] })),
+    url: () => currentUrl,
+    content: async () => "<html><body>海尔冰箱</body></html>",
+    isClosed: () => closed,
+    bringToFront: vi.fn(async () => undefined),
+    close: vi.fn(async () => { closed = true; }),
+  };
+}
 
 function jdSource(): CrawlPlanSource {
   return {
