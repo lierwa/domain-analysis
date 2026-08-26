@@ -1,9 +1,9 @@
 # 技术调研登记
 
-> 2026-08-21 当前边界：项目只实施阶段 1 数据抓取。本文保留历史候选和淘汰依据，但其中 Evidence、Knowledge Factory、知识包、Runtime、Market Universe 及旧具体来源 Provider 均已退出当前生产组合根，不得按历史“接受”状态继续实现。当前组合除 PostgreSQL/Drizzle、Fastify、assistant-ui、Codex App Server、Crawlee、p-queue 与 cockatiel 外，已按 R-036/R-037 接受 Playwright 显式 HTTP、Node 24 官方代理 Agent、Google Public DNS DoH、robots-parser、Cheerio 与 cacache，并按 R-040 接受 Radix Alert Dialog；Got 仅保留为 Crawlee 的间接依赖。后续新增来源机制仍须重新进入调研和真实原型门。
+> 2026-08-26 当前边界：项目只实施阶段 1 数据抓取。本文保留历史候选和淘汰依据，但其中 Evidence、Knowledge Factory、知识包、Runtime、Market Universe 及旧具体来源 Provider 均已退出当前生产组合根，不得按历史“接受”状态继续实现。当前组合除 PostgreSQL/Drizzle、Fastify、assistant-ui、Codex App Server、Graphile Worker、Crawlee、p-queue 与 cockatiel 外，已按 R-036/R-037 接受 Playwright 显式 HTTP、Node 24 官方代理 Agent、Google Public DNS DoH、robots-parser、Cheerio 与 cacache，并按 R-047 接受 WHATWG `encoding-sniffer`，按 R-040 接受 Radix Alert Dialog；Got 仅保留为 Crawlee 的间接依赖。后续新增来源机制仍须重新进入调研和真实原型门。
 
 状态：持续维护
-更新日期：2026-08-21
+更新日期：2026-08-26
 
 本文件只记录技术问题、成熟候选、官方依据、原型结果、接受/拒绝/替代状态和退出成本。阶段进度看 `PROGRESS.md`，模块边界看 `ARCHITECTURE.md`，已删除 POC 的历史结论只通过本文件、ADR 与 Git 历史追溯。
 
@@ -22,9 +22,13 @@
 | R-039 | 一次 Start 的批次事实与历史隔离 | 接受显式 Source Collection Batch；拒绝按时间戳推导或回填历史批次 |
 | R-040 | 页面内高影响操作确认 | 接受 Radix Alert Dialog 薄封装；生产 Web 禁止原生 alert/confirm/prompt |
 | R-037 | 完整执行清单、公共原始资源与附件 CAS | 接受 Node 24 代理 Agent＋可信 DoH＋固定公网 IP/SNI、robots-parser、Cheerio 与 cacache；真实微波炉任务 6 个来源中 4 个完成、2 个按真实来源状态失败 |
-| R-038 | Crawl Planning 结构化输出修正 | 接受同一 ephemeral thread 最多一个 repair turn；只回填现有校验错误，不新增校验、模型或持久会话 |
+| R-038 | Crawl Planning 结构化输出修正 | 接受同一 ephemeral thread 最多两个 repair turn；只回填现有校验错误，不新增校验、模型或持久会话 |
 | R-032 | 来源访问限速、取消与熔断 | 接受 PostgreSQL 持久准入＋显式 HTTP＋Crawlee 派发；真实京东已验证 60 秒两请求与首个空骨架即停，未验证登录后窗口 |
-| 历史 R-002～R-026、R-030～R-034 | 旧知识生产与 POC | 只保留调研/失败证据；DBOS、Evidence、知识包、Runtime、Market Universe 和旧 Source Dataset contract 均由 ADR-0015 退出当前范围 |
+| R-045 | 分阶段 AI 来源规划 | 已接受并通过电视 v9 真实规划门 |
+| R-046 | Graphile 进程失联收口 | 已接受；Batch lease＋启动恢复保留 Snapshot，不自动重抓 |
+| R-047 | gate 政策升级与 HTML 原文编码 | 已接受；保留更严格冷却，复用 WHATWG sniffer 无损保存内联原文 |
+| R-049 | Crawl Planning 长运行持久恢复 | 已接受 DBOS 4.25.14 并接入正式组合根；正式 adapter 强杀恢复通过 |
+| 历史 R-002～R-026、R-030～R-034 | 旧知识生产与 POC | 旧 DBOS 知识流水线、Evidence、知识包、Runtime、Market Universe 和旧 Source Dataset contract 均由 ADR-0015 退出；Crawl Planning 专用 DBOS 只按 R-049/ADR-0020 接受 |
 
 ## 2. 仍然有效的基础设施决定
 
@@ -1014,7 +1018,7 @@ Node/TypeScript、本地/离线和部署边界：纯 Node 24/TypeScript；App Se
 
 ### R-036 京东有界 CDP Provider 与显式 Source Run
 
-状态：v1/CDP 生产决定已撤回；v2 真实匿名目录切片已通过，详情/评价受登录或安全上下文限制
+状态：v1/CDP 生产决定已撤回；v2 真实匿名目录切片已通过；专用 Playwright 登录会话已被真实账号异常证据否决
 目标阶段：1C/1D 首个纵切片
 
 问题：Crawl Plan 必须能指导已实现程序，而不是把自然语言 traversal 当 crawler；确认、运行准备与开始必须分离，来源原始结果必须进入正式 Source Dataset。9222 和登录会随本机变化，不能成为计划能否确认的条件。
@@ -1028,6 +1032,31 @@ Node/TypeScript、本地/离线和部署边界：纯 Node 24/TypeScript；App Se
 2026-08-21 当前结果：上述 v1 结果只保留为历史风险证据。负责人显式要求启动真实匿名抓取后，本地开发配置打开 v2 access；正式批次 `source-batch-4b8f31b0-fca0-4740-aa34-3b83b16aba33` 中的 JD run `source-run-f5e076a2-1d29-4d46-8891-2db79e682e64` 保存 1 个真实目录快照、30 个 SKU 和 60 条图片 URL，只产生 2 个显式 HTTP attempt，约 61 秒后在首个详情客户端骨架处停止。没有下载图片、登录、复制签名、自动重试、换代理或继续派发其余商品。
 
 旧测试夹具以 `data-jd-image-role`、`data-jd-store-url` 和 `data-jd-review-*` 这类源站不存在的属性制造“3 个详情、75 条图片、店铺和评价全部完成”，不能证明生产能力，相关 parser、fixture 和结论已删除或改写。当前生产只从真实 `#J_goodsList li.gl-item[data-sku]` 商品卡保存 `.p-img` 与 `.p-scroll` 中的源站图片 URL；匿名商品详情 HTML 是客户端骨架，前端所用源 JSON 请求在当前匿名上下文返回 HTTP 403，普通浏览器访问同一详情进入登录页。详情、店铺与评价 target 保持未完成/失败，不能伪装为 success；下一步仍先解决获准会话的稳定访问条件，再由负责人决定是否登录。
+
+#### 2026-08-24 获准专用会话与 1＋2 详情验收门
+
+状态：**真实否决。不得再次登录、刷新、切换账号或继续 1＋2；代码候选必须按退出边界清算。**
+
+问题：现有生产组合根使用 `request.newContext()`，Playwright 官方将它定义为拥有独立 Cookie 存储的 `APIRequestContext`；因此用户在浏览器完成登录也不会改变 JD Provider 的匿名请求。继续修改详情 parser、增加等待或重复匿名请求不能解决已经真实复现的客户端空骨架。
+
+官方依据与候选处置：
+
+- **专用 `launchPersistentContext`＋`BrowserContext.request`，进入最小原型**：Playwright 官方明确 `BrowserContext.request` 使用并更新同一 BrowserContext 的 Cookie jar；`launchPersistentContext(userDataDir)` 将 Cookie/localStorage 保存在指定目录，且官方要求 Chrome 使用独立自动化 Profile，不得指向日常默认 User Data。项目继续使用已锁定的 Apache-2.0 `playwright-core@1.62.1`、Node 24 和系统 Chrome，不增加依赖、云服务或新的浏览器 registry。官方资料：https://playwright.dev/docs/api/class-browsercontext#browser-context-request 、https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context
+- **独立 `request.newContext()`，拒绝用于登录后详情**：它拥有隔离 Cookie 存储，只适用于当前匿名访问和本地无会话 fixture，不能消费负责人在浏览器完成的登录。官方资料：https://playwright.dev/docs/api/class-apirequest#api-request-new-context 、https://playwright.dev/docs/api-testing
+- **`connectOverCDP` 连接日常 Chrome，拒绝**：Playwright 官方标记 CDP 连接比 Playwright protocol 低保真，并警告非 Playwright 参数启动时部分能力可能失效；Chrome 136+ 又不再接受对默认数据目录使用 remote debugging。更重要的是连接日常 Profile 会扩大标签页、Cookie 和存储权限，不满足最小权限。官方资料：https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp 、https://developer.chrome.com/blog/remote-debugging-port
+- **导出 `storageState`、复制 Cookie/Header、复刻签名或伪造浏览器字段，继续永久拒绝**：即使 Playwright 提供 storage state API，本产品没有跨进程复制认证材料的需要；Cookie、Profile、认证 Header 和验证码材料不得进入 PostgreSQL、Graphile payload、日志、Codex、导出或 Git。
+
+安全与退出边界：专用 Profile 只能位于 Git 忽略的本地 `data/`；页面明确由负责人打开登录窗口并确认完成，系统不读取密码、不自动提交表单、不处理验证码，也不以 Cookie 名称或值推导登录成功。会话 readiness 只表示“专用 BrowserContext 存活且负责人已确认”，第一条已计划详情请求仍负责真实验证；登录/验证/403/429/风险正文立即写入既有请求账本并熔断。退出该候选只删除 JD 会话 adapter、API/Web 动作和组合根注入，不改变 Crawl Plan、Source Dataset、请求准入或后台派发 contract。
+
+最小原型结果：本地随机 loopback 登录页先写入会话 Cookie；同一 persistent BrowserContext 的 `context.request` 能取得完整详情，而对照的独立 `request.newContext()` 只取得骨架。正式 adapter 在负责人确认前拒绝提供 request context；Fastify 只暴露查询、打开、确认和关闭四个 typed 动作，响应不含 Cookie/Profile；React 页面使用组件按钮，不调用原生弹窗。浏览器夹具证明详情 HTML 可达且图片路径请求为 0。Provider 另以 `JD_DETAIL_CANARY_LIMIT=1..10` 作为每个 Source Run 的临时安全上限：只有快照、工作项和 RequestQueue 都完成记账后才计数，达到上限如实停止并保留剩余队列；Resume 新运行重新获得显式配置的上限。该上限不改变计划 `all_available` 分母，也不能把剩余 target 标成完成。
+
+历史接受范围（已由下述真实结果撤回）：曾接受专用 persistent BrowserContext、`BrowserContext.request`、页面显式人工动作和详情 canary 作为本次真实 1＋2 的最小会话 seam；该接受从未等于“京东详情可稳定抓取”。
+
+真实否决结果：负责人完成专用 Chrome 登录后，首个详情请求 `https://item.jd.com/100187642192.html` 仍只返回 HTTP 200、35994 bytes 的 `skeleton-screen`＋空 `#root`；没有形成有效详情，也没有进入后 2 条。随后专用 Chrome 的京东页面直接显示“当前页面异常，请刷新或切换账号”，且浏览器顶部可见“不受支持的命令行标记：--no-sandbox”。系统立即关闭会话；已受理的后续 Resume 最终 `requestAttempts=[]`，没有新增京东请求。Playwright 官方当前实现默认在 `chromiumSandbox !== true` 时加入 `--no-sandbox`，官方参数文档也说明 `chromiumSandbox` 默认 false；但仅移除该 flag 不能证明其他自动化启动参数或会话行为不再触发风控，因此不得拿账号做下一轮试错。官方依据：https://github.com/microsoft/playwright/blob/main/packages/playwright-core/src/server/chromium/chromium.ts 、https://github.com/microsoft/playwright/blob/main/docs/src/api/params.md
+
+候选处置：撤回上一段“接受范围”；专用登录 adapter/API/UI 与把 loopback Cookie 夹具外推到京东的测试结论应删除。下一候选若继续，只能是不带账号的受控访问：任何页面/脚本/XHR/fetch 都必须在派发前进入现有 PostgreSQL admission，图片请求默认拦截，首个登录/验证/风险/403/429/异常即停止。该方向涉及新的浏览器网络 adapter 和公共运行边界，必须完成官方/开源调研、最小本地原型和人工确认后才能实现或发出真实请求。
+
+最小原型与停止门：先在本地随机端口页面建立“匿名详情返回空骨架、专用会话人工动作后同一 `BrowserContext.request` 返回完整详情”的红灯；同时验证未确认时不提供 request context、关闭后失败、redirect 每 hop 仍先准入、403/429 首错停止、图片服务器零请求及 Cookie 不进入 API 响应/日志/领域 payload。只有该原型和全量工程门通过，才允许从已确认目录中执行最多 3 个 SKU 的真实验收：先 1 个，成功后再 2 个；该运行必须有明确 Batch ID，任一受限即停止，不据此宣称批量安全或评价闭环。
 
 退出成本：删除 composition-root 注入与 JD Provider 不改变 Crawl Plan、Source Execution 或 Source Dataset contract；其他来源必须各自通过同一调研和真实门。
 
@@ -1097,9 +1126,9 @@ Node/TypeScript、本地/离线和部署边界：纯 Node 24/TypeScript；App Se
 
 问题：Crawl Plan 的最终 JSON 较大，现有 Zod、候选/topic 完整性、附件正文或 Provider 结构校验只要发现一处错误，旧流程就直接关闭 Planning Run，已经完成的搜索上下文也无法用于修正。
 
-官方依据与结论：Codex App Server 把对话组织为 thread 中的 turn；`thread/start` 返回 `threadId`，后续可以继续对同一 ID 调用 `turn/start`，而 `outputSchema` 属于每个 turn 的参数。项目因此只在第一次输出未通过现有解析或校验时继续同一个 ephemeral thread，把原错误消息回填一次，并为第二轮重新附上相同 `outputSchema`。不新增错误分类器、字段级校验、第二模型、持久 thread、跨进程恢复或网络重试：https://developers.openai.com/codex/app-server/
+官方依据与结论：Codex App Server 把对话组织为 thread 中的 turn；`thread/start` 返回 `threadId`，后续可以继续对同一 ID 调用 `turn/start`，而 `outputSchema` 属于每个 turn 的参数。项目只在阶段输出未通过现有解析或校验时继续同一个 ephemeral thread，把原错误消息回填；每个阶段最多两个 repair turn，每轮继续附上相同 `outputSchema`。不新增错误分类器、字段级校验、第二模型、持久 thread、跨进程恢复或网络重试：https://developers.openai.com/codex/app-server/
 
-验证：fake App Server 断言一个 `thread/start`、最多两个同 thread `turn/start`、两轮均携带 `outputSchema`；第二次仍失败即停止。真实电视 Planning Run `crawl-planning-run-288a0f9f-9c5b-4769-994c-488543a1c090` 首轮触发现有“海信电视产品目录缺少说明书正文 target”错误，第二轮只补该目标并成功保存 draft plan，证明搜索上下文和原校验错误能完成有界修正。
+验证：fake App Server 断言一个 `thread/start`、最多三个同 thread `turn/start`、每轮均携带 `outputSchema`；第三次仍失败即停止。真实电视分阶段运行曾在补齐空 `evidenceUrls` 后新引入共享官网 URL 重复，单次修正不足；当前回归测试证明第二次仍只接收新出现的原校验错误并闭环。最新真实 v9 运行中各阶段最多使用一次 repair 即通过，没有消耗第二次额度。
 
 边界：这项修正只提高大结构化输出的可恢复性，不代表计划数量已经满足任务范围。该真实 plan 有 16 个来源、25 个 target，但 `jd.catalog-product@1.0.0` 仍固定每个入口只抓一个首个匹配商品；“主流品牌全系在售”需要单独扩展 Provider 的覆盖分母与遍历能力，见 Issue 03，不能用本 repair 冒充完成。
 
@@ -1176,3 +1205,391 @@ Node/TypeScript、本地/离线和部署边界：
 安全、重试与退出：Worker 并发固定为 1，避免一次启动多个完整 Batch；单个来源内部仍受 PostgreSQL Request Admission 限制。任务处理器必须吞掉已经被 Source Execution 持久化为 completed/partial/failed 的领域结果，使 Graphile 的 attempt 只覆盖任务进程异常，不把 403/429/登录/频控变成自动重抓。job key 只用于一次提交的稳定命令标识，不能替代 Batch 主键；官方说明 replace 在已锁 job 上可能生成第二 job，因此不把 `unsafe_dedupe` 当领域幂等。退出时只移除 API composition-root adapter 与依赖，不改变 Crawl Plan、Batch、Run 或 Snapshot contract。当前 `npm audit --omit=dev` 仍为既有 1 moderate/4 high（AJV/fast-uri/Fastify/find-my-way/Crawlee 的 brace-expansion 链），报告中没有 Graphile Worker 新增链；Fastify 修复要求破坏性大版本，继续由 R-007 单独处置，本轮不擅自 `audit fix/force`。
 
 最小原型与结论：本机 Node 24.12.0 与现有 PostgreSQL 真实运行 Graphile 0.17.3。两个 worker、concurrency 2 对同一 queue 的两个任务实测 `maxActive=1`；runner 停止后入队的第三个任务在新 runner 启动后完成。随机端口 Fastify 原型中 `POST /start` 在 48ms 返回 202 并关闭客户端连接，250ms 延迟任务继续完成；领域异常由 task adapter 记账并返回成功，即使 job `maxAttempts=3` 也只调用一次领域执行；非法 Zod payload 在 task seam 失败且没有进入领域执行。原型通过，因此接受 Graphile Worker：Start/Resume 改为 202 enqueue，Web 只轮询 Source Dataset；Graphile job 失败只表示组合根/进程级异常，来源限制仍由领域 Batch/Run 事实表达。进程异常下未领取 job 可恢复已经证明；正在执行到一半的 Source Batch 仍依赖现有 Request/Work 幂等与后续专门恢复门，本轮不得把“队列恢复”夸大成“任意抓取步骤 exactly once”。
+
+## R-042 市面反爬采集体系调研（只解释行业机制，不实施规避）
+
+状态：调研完成；行业机制已归纳，京东规避实现不进入项目
+目标阶段：阶段 1D 京东平台闭环的阻塞归因
+
+问题：负责人明确排除需要企业/商家资质的京东开放平台路线，并说明用途为个人学习和自用。需要回答业内采集者实际怎样应对大型站点反爬，以及为什么单靠延迟、`rate-limiter` 或换 Firefox 不足；本轮不把行业观察转成针对京东的可执行绕过步骤。
+
+不可取消约束：不再次登录、刷新异常页、切换账号或向 JD 商品页发送 canary；不提供代理轮换参数、账号轮换、浏览器指纹伪造、自动化标记隐藏、验证码绕过、私有接口签名逆向或风控脚本对抗实现；Cookie/Profile/认证材料不进入 Git、日志、Codex、数据库或导出。个人、学习和非商业用途不改变源站的技术检测，也不自动产生访问许可。
+
+### 反爬方实际检查什么
+
+现代 Bot Management 是多信号联合判断，不是单一 QPS 阈值：
+
+- Cloudflare 官方列出 heuristics、已知恶意 fingerprint、JavaScript detections、监督式机器学习和行为分析；模型输入包含 Header、Session 特征和浏览器信号：https://developers.cloudflare.com/bots/concepts/bot-detection-engines/
+- Cloudflare JA3/JA4 文档说明 TLS 握手可形成跨目标 IP/端口/证书仍相对稳定的客户端标识，并把请求量、IP、路径、浏览器比例等统计信号与之关联：https://developers.cloudflare.com/bots/additional-configurations/ja3-ja4-fingerprint/
+- DataDome 把模型分为 TLS/浏览器/HTTP Header 指纹、行为检测和 IP/代理信誉检测；设备检查会在客户端收集大量环境信号并识别伪造环境：https://docs.datadome.co/docs/threat-detection 、https://docs.datadome.co/docs/device-check
+
+因此频率只是一个维度。即使每分钟一次，请求仍可能因为出口信誉、TLS/HTTP 栈、浏览器环境不一致、JS 设备信号、Cookie/会话关系、资源加载图、账号历史或访问路径被判定为自动化。Firefox 只改变其中一部分信号；没有证据表明它能让一个自动化会话稳定通过京东联合风控。
+
+### 市面采集体系实际分层
+
+| 层 | 行业做法 | 它解决什么 | 不能保证什么 |
+| --- | --- | --- | --- |
+| 网络出口 | 大规模数据中心、ISP、住宅或移动网络池，按地区和信誉调度 | 分散单出口容量与历史信誉 | 不能消除账号、TLS、JS 和行为不一致；随机换 IP 还会破坏会话 |
+| 会话池 | 把同一 IP、Cookie、浏览器身份和状态绑定成一个 session；受限后退休整个 session | 保持“同一访问者”的内部一致性 | 不能把被风控的账号变成安全账号。Crawlee 官方 `SessionPool` 就把代理、Cookie 和会话健康绑在一起：https://crawlee.dev/js/docs/guides/session-management |
+| 浏览器执行 | 在需要 JavaScript 的页面运行真实浏览器栈，加载 DOM，并捕获页面产生的业务请求 | 处理客户端渲染、延迟内容和页面交互 | 真实浏览器不等于真人；JS 检查、启动环境和资源序列仍可识别自动化 |
+| 指纹一致性 | 市面服务让网络栈、浏览器、设备、地区和 Session 尽量相互匹配 | 减少自相矛盾的客户端特征 | 这是持续对抗面，不存在一次配置永久有效；本项目不研究伪造细节 |
+| 挑战处理 | 遇到 CAPTCHA/设备校验时停止、转人工，或由商业服务在其责任边界内处理 | 把挑战从 crawler 主循环隔离 | 不能证明源站许可；自动绕过不进入本项目 |
+| 站点 adapter | 针对页面/业务接口写发现、解析、翻页和状态识别规则 | 得到目标字段，而不是只保存整页 HTML | 站点变化就要维护，不能靠万能 Provider 自动长期稳定 |
+| 调度与恢复 | 队列、请求预算、block detector、session retirement、断点、熔断和逐项重跑 | 避免一个失败拖垮整批，保留审计和恢复 | 它提高可靠性，不负责骗过风控 |
+| 数据质量 | 多响应校验、字段完整率、去重、时效和异常页识别 | 防止把登录页、空骨架、假 200 当成数据 | 不能弥补访问入口本身不可达 |
+
+### 市面产品公开展示的组合
+
+- Apify 公开提供代理网络、固定/轮换 session、Cookie 和浏览器 fingerprint 的组合；其文档反而强调登录态需要同一 IP，会话不是“每次随机换代理”：https://docs.apify.com/proxy
+- Crawlee 的开源 SessionPool 管理代理、Cookie、blocked/working 状态和 session retirement，说明“代理池必备”更准确的说法是“需要一致的会话与出口健康管理”，而不是无脑轮换。
+- Zyte API 把浏览器渲染、IP 类型、地理位置、Cookie、Session、网络捕获和自动抽取作为托管能力；同一 session 会复用 IP、Cookie jar 和网络栈：https://docs.zyte.com/zyte-api/usage/browser.html 、https://docs.zyte.com/zyte-api/usage/index.html
+- ScrapingBee 公开售卖 JavaScript 渲染、premium/stealth proxy 和 session 能力，并按更难的访问模式提高单次成本；这证明市面确有“托管解锁”生意，也证明它不是一个免费 limiter 能替代的能力：https://www.scrapingbee.com/documentation/
+
+这些产品资料只用于证明行业能力组成和成本模型，不构成允许其访问京东的结论，也不进入本项目采购或接线决定。托管服务还会把目标 URL、请求和返回数据交给第三方，与当前 local-first 和原始数据边界存在额外冲突。
+
+### 对当前项目的结论
+
+1. **能不能抓到：技术上有人可以在某个时期、某批页面上抓到，但不是永久“解决反爬”。** 大型采集团队靠多层基础设施、站点专用维护、持续试错和较高成本维持成功率；源站模型和页面变化后仍会重新失败。
+2. **代理池是常见基础设施，但绝不是充分条件。** 可用系统维护的是“IP＋Cookie＋浏览器/网络身份＋健康状态”的会话池；只轮换代理会制造更多不一致。
+3. **Firefox 不是反爬浏览器。** 它可能改变某些 Chromium 特征，也同时形成另一套稳定特征；账号、IP、TLS、Session、JS 和行为信号仍在。
+4. **限速代码仍应保留，但定位要改正。** 它负责预算、停止和不扩大损害，不负责通过风控。
+5. **京东当前登录链已经被真实账号异常否决。** 在项目的“不自动绕过访问限制”基准下，以上市场机制不能直接转成 JD Provider 实现；ADR 0017 与 R-043 已决定删除专用 Playwright 登录 API/UI/adapter，不能在上面继续叠代理或 fingerprint fallback。
+
+最小验证与架构影响：本轮只读官方反爬厂商、开源 crawler 和托管采集服务资料，没有运行第三方解锁服务、没有访问京东商品页、没有修改依赖或代码，也没有建立 POC。该条目的“京东平台闭环”旧目标已由后续 R-043 和 ADR 0017 替代；本节只保留反爬根因与行业机制证据。
+
+## R-043 市场目录发现与品牌官网补齐能力
+
+状态：历史候选；已被 R-044 与 ADR 0018 取代，不得继续实现或注册 JD Provider
+目标阶段：1B 可验证分母、1D 京东目录发现、1E 品牌官网补齐与缺口修复
+
+### 问题
+
+真实访问已经否决京东登录和商品详情路线。新的产品目标是：从京东公开目录尽可能完整地观察一个门类的品牌和商品卡，再到相应品牌官网取得可核实型号、官方参数、规格页和说明书。当前 `public.web-resource` 只能处理精确 URL 或一次同源唯一链接，无法证明官网产品目录、分页或 sitemap 覆盖；旧 JD 五 target contract 又把详情、店铺和评论错误绑定成京东完成条件。
+
+### 不可取消约束
+
+- 京东不登录、不跳详情、不访问评论接口、不下载图片；
+- 登录、验证码、风控、403/429、robots 禁止、未知跳转或许可不明立即停止；
+- 新品牌/官网来源必须经过新的 Planning Run 和 plan confirmation，Source Run 不边搜边扩范围；
+- Source Dataset 的不可变 Snapshot 继续是原始事实源；覆盖只做可重建投影，不恢复 Stage 2 模型；
+- Cookie、Profile、认证 Header 和未脱敏内容不进入 Git、日志、Codex 或导出；
+- 不扫描 `node_modules`，依赖事实只从 workspace `package.json`/lockfile 与官方资料取得。
+
+### 已有资产与依赖
+
+- `@crawlee/core@3.18.1` / `@crawlee/memory-storage@3.18.1`：已有 RequestQueue 和本地恢复能力；
+- Cheerio：已有 HTML adapter；
+- `robots-parser@3.0.1`：已有 robots 解析；
+- Graphile Worker、Source Collection Batch、Capture Work Item、Source Request Attempt / Access Gate：已有后台执行、工作对账与请求准入；
+- Source Snapshot / Asset / Resource Reference：已有不可变原始内容和 URL-only 关系；
+- `public.web-resource@1.0.0`：可继续处理已确认的精确产品页、规格页和说明书。
+
+本轮不需要新增依赖。Crawlee 官方 core 包当前提供 `SitemapRequestList`，可从 sitemap URL 或 XML 文本加载 URL、后台增量读取、去重、过滤并持久化状态，适合标准 sitemap 入口，不应自行实现 sitemap loader：[Crawlee SitemapRequestList](https://crawlee.dev/js/api/3.13/core/class/SitemapRequestList)、[Crawlee Core API](https://crawlee.dev/js/api/core)。Crawlee 官方仓库为 Apache-2.0/TypeScript 且持续发布；若 POC 通过可直接复用现有依赖，不增加部署服务：[官方 package.json](https://github.com/apify/crawlee/blob/master/package.json)、[官方 releases](https://github.com/apify/crawlee/releases)。
+
+### 标准与来源边界
+
+- Sitemaps 协议允许 sitemap index 引用多个 sitemap；单个文件最多 50,000 URL、未压缩最大 50 MB，并要求 URL 属于相应 host 范围。它能提供可审计枚举入口，但不能保证站点把全部产品发布在 sitemap 中：[Sitemaps protocol](https://www.sitemaps.org/protocol.html)。
+- RFC 9309 定义 robots.txt 的抓取与匹配语义。robots 不可达、格式异常或明确禁止时必须失败关闭，不能因为 sitemap 可见就跳过访问规则：[RFC 9309](https://www.rfc-editor.org/rfc/rfc9309.html)。
+- Schema.org `Product`/`ProductGroup` 可以公开 SKU、产品组与变体关系；它只是一种页面观察格式，站点可以缺字段或完全不提供，因此只能保存为原始结构化数据，不能用来证明目录完整或直接成为跨品类参数模型：[Schema.org ProductGroup](https://schema.org/ProductGroup)。
+
+### 候选比较
+
+| 候选 | 处置 | 理由 |
+| --- | --- | --- |
+| 继续 `public.web-resource` 手工列 URL | 拒绝作为目录能力，保留精确页/附件能力 | 无分页/sitemap/分母，少量 URL 不能证明覆盖 |
+| 自研 sitemap parser、重试和持久队列 | 拒绝 | Crawlee、robots-parser 和现有 Source Execution 已提供成熟能力 |
+| 一个通用递归 crawler 遍历所有官网 | 拒绝 | 容易越过 confirmed plan、失去分母和停止口径，也无法处理站点差异 |
+| `SitemapRequestList`＋严格同源/plan 过滤 | 进入 POC | 标准入口、复用现有依赖、可持久和去重，但必须验证站点实际覆盖 |
+| Schema.org Product/ProductGroup | 作为可选观察输入 | 有助于提取源站明确型号/变体，不作为完整性保证 |
+| 每品牌薄 adapter | 条件候选 | 只在标准 sitemap/列表不足且至少有当前真实调用方时新增；必须隔离来源协议并记录退出条件 |
+| 恢复 MarketUniverse / Knowledge Factory | 拒绝 | 越过阶段 1 并形成第二事实源 |
+
+### 最小原型与决策门
+
+在冻结 `brand.official-catalog@1.0.0` 前，选择三个结构不同、对电视任务真实相关的品牌官网完成同一 POC：
+
+1. 从 robots/sitemap 或公开产品目录得到可冻结入口；
+2. 证明分页/URL 分母、同源边界、去重和停止条件可表达；
+3. 从源站明确字段观察型号/系列、产品页和说明书链接，不从标题臆测；
+4. 全部请求进入现有 Request Attempt / Access Gate；
+5. 强杀后只继续未完成 URL；
+6. robots 禁止、sitemap 不完整、结构化数据缺失和型号歧义均形成 typed gap，不自动 fallback；
+7. Node 24 本地 fixture、当前 macOS 开发机和目标 Linux 安装/测试通过。
+
+只有三站 POC 全部通过，才接受一个薄官网目录 Provider。若失败，停止实现，列出每站缺口、最小 adapter 范围、维护成本和退出方案，等待负责人确认；不得先建 plugin system 或把候选写成生产完成。
+
+### 当前结论
+
+- 接受 `jd.catalog-market@1.0.0` 的目录-only 产品职责和新 version；历史 JD v2 保留只读但不执行；
+- 接受 Catalog Coverage Projection 作为 Source Dataset 的可重建阶段 1 控制视图；
+- `SitemapRequestList` 是官网目录首选 POC 候选，不是已选定生产 Provider；
+- 不新增依赖，不新增外部服务，不实施自动 fallback；
+- 京东目录实现复用 Crawlee RequestQueue、Cheerio、Playwright `APIRequestContext` 和现有 PostgreSQL admission；没有新增依赖。Provider 网络 allowlist 只有 `https://www.jd.com`，详情、店铺、评论和图片 origin 在 transport 层不可请求；目录 HTML 与 source-near JSON 分别形成不可变 Snapshot。
+- Catalog Coverage Projection 已实现为 Source Dataset 的派生视图：按目录 URL 采用最新不可变观察，汇总页分母、品牌、SKU/SPU，并把分母未知/未覆盖、品牌官网待规划和标题待匹配全部投影为 typed open gap；没有新增表或第二事实源。
+- 三品牌官网 POC 仍未运行，`brand.official-catalog` 仍未进入 contract 或组合根；本轮没有访问京东或品牌官网。
+
+## R-044 AI 深度来源调查与可审核规划账
+
+状态：接受 AI 深搜策略与 version 3 Research Audit；单轮巨型输出实现已由 R-045 真实否决
+目标阶段：1A 任务范围、1B 真实来源计划、1E 品牌官网补齐
+
+### 问题与真实否决证据
+
+最新真实电视批次只从京东静态目录得到 30 个 SKU、0 个品牌、0 个下一页和未知分母，无法承担“品类品牌尽可能全”的发现职责。Capture Task 现有完成门又要求采访阶段预先准备零售平台、至少两个品牌官网、标准和技术来源，并强制 Planning 执行每个旧候选；这把本应由 Agent 调查的事实转嫁给了采访和固定 URL，导致规划即使搜索很浅也能返回形式完整的清单。
+
+### 候选比较
+
+| 候选 | 处置 | 依据 |
+| --- | --- | --- |
+| 继续京东/VPN/无痕搜索承担品牌分母 | 拒绝 | 真实浏览器分别进入错误页、登录页；正式批次 0 品牌、分母未知 |
+| 采访阶段要求负责人或 Agent 预先枚举全部品牌官网 | 拒绝 | Capture Task 应拥有确认范围，不应提前承担可执行来源清单；品牌事实会漂移 |
+| 新接商业搜索 API/代理搜索服务 | 暂不引入 | 会增加凭证、外部数据边界、费用和退出成本；当前 App Server 已提供真实网页搜索 |
+| 自研多 Agent 搜索编排、爬虫搜索引擎或持久研究工作流 | 拒绝 | 当前只需一次有界规划；App Server thread/turn、Skill 和搜索事件已经满足流程 |
+| 复用 Codex App Server web search，并把研究覆盖结构化进入 Plan | 接受 | 当前锁定 `@openai/codex@0.147.0`、Node/TypeScript、本地 stdio、ephemeral thread、Skill、outputSchema 和 Zod 均已验证 |
+
+### 接受范围
+
+规划仍是一个前台、可见、有界的 Planning Run，不新增模型 Provider、自动 fallback、队列或后台研究状态机。Agent 必须执行并登记四个调查方向：`brand_landscape`、`official_source_mapping`、`parameters_and_manuals`、`standards_and_principles`。version 3 Plan 增加 Research Audit：每个方向保存查询摘要和证据 URL；品牌清单保存规范名称、别名、发现证据、官方 source keys、`planned/unresolved` 状态和说明；topic 覆盖保存 source keys；最后保存 `complete/partial` 与停止理由。
+
+结构化账只属于 Crawl Plan 的规划事实，不是 Source Dataset 原始事实，也不把搜索摘要冒充已抓取内容。每个新发现品牌必须恰好被官方来源或 unresolved gap 对账；每个 topic 必须引用实际计划 source。AI 可以增加采访中没有的新来源，但不能修改 Capture Task topic、自动确认计划或启动抓取。
+
+### 依赖、部署与安全
+
+- 复用 `@openai/codex@0.147.0` App Server、现有 Zod 3.25.76 和 PostgreSQL；不修改 lockfile，不增加部署服务；
+- 运行目录仍是隔离临时目录，禁用 shell/unified exec，只开放网页搜索；Cookie、Profile、认证 Header 和验证码材料没有输入字段；
+- 规划需要网络搜索，不属于离线能力；计划持久化和历史查看仍在本地；
+- 真实来源访问继续由已确认 Plan 和 Provider 执行，搜索本身不创建 Source Run、Snapshot 或 Asset。
+
+### 退出与验证门
+
+若真实电视 Planning Run 无法在十分钟有界窗口内形成带品牌逐项对账的 Research Audit，停止扩大 Prompt 和重试次数；保留失败时间线，重新评估是否需要成熟的专门研究产品或分阶段人工确认。当前不得先建设多 Agent、搜索任务队列或外部搜索 API。
+
+## R-045 单轮巨型来源规划失败与分阶段独立上下文实现
+
+状态：单轮聚合实现已拒绝；分阶段独立 ephemeral thread 已通过完整电视真实规划验收
+目标阶段：1B 真实来源计划、1D AI 品类版图与官网规划
+
+### 简单说明
+
+系统现在先单独冻结品牌清单，再按可配置批次逐品牌核对官网、参数和说明书，最后单独补标准与原理来源。每个批次使用新的短上下文；程序只从已经通过小 schema 的阶段结果生成 key、Provider 配置和最终计划。批次大小可设为 1-10，默认 3；调小更稳但更慢，调大更快但单轮结构化压力更高。
+
+### 真实否决证据
+
+| 版本/运行 | 搜索量 | 结果 | 否决原因 |
+| --- | ---: | --- | --- |
+| v4 | 111 URL | 8 个品牌 | 把“前八大主力品牌”冒充覆盖分母 |
+| v5 | 112 URL | 18 个品牌、16 个来源 | 11 个品牌 unresolved，且停止理由数量不一致 |
+| v6/v7 | 105/137 URL | 9 个来源 | 新版本静默丢失历史已发现来源；`unknown` 访问状态被误当成 unresolved |
+| v8 | 72 URL | 18 个品牌、19 个来源 | 索尼被记为 unresolved，但同一计划仍保留可执行的索尼官网来源；按当前双向门不可确认或启动 |
+| v9 | 123 URL | failed | 一次修复后，TCL 品牌账引用计划中不存在的 `tcl-official-store-tv` |
+| v10 | 102 URL | failed | 首轮缺 `tcl-official-store-tv`；有界修复又产生不存在的 `tcl-tv-manual-guide` |
+
+v9/v10 均来自 `http://127.0.0.1:6173/` 真实 Workbench 按钮，分别运行约 5 分 35 秒和 5 分 10 秒；失败运行已持久化，未生成 v9/v10 Plan，也未确认、Prepare、Start 或创建 Source Run。搜索深度不是当前主因，巨型输出的交叉引用稳定性才是主因。
+
+### 补丁清算与实现边界
+
+- 删除：旧 `planningPrompt`、一次生成完整 Plan 的模型输出、整份 Plan 错误回填 Prompt，以及要求模型生成 source/target key 的职责。
+- 保留：JD 排除、七类品牌发现镜头、逐品牌/逐 topic Research Audit、App Server 可见搜索、现有 v3 最终 Plan contract、人工确认门和 Source Dataset 事实边界。
+- 重写：Planning runtime 依次执行六镜头品牌发现、逐查询饱和核查、小批官网映射、标准/原理阶段；Workbench 确定性计算新增品牌和连续零新增、生成 source/target key、Provider policy 和 topic coverage。历史 Plan 来源只作复核线索，不再无条件复制到新版本；同阶段只复用原校验错误做最多两次有界修正。
+- 原因：v8-v10 证明模型不适合同时研究事实和维护大量交叉引用；程序可以生成结构 key，但不能替模型补造 URL、品牌或来源事实。
+
+### 候选比较与结论
+
+| 候选 | 当前处置 | 依据 |
+| --- | --- | --- |
+| 继续单轮输出并增加 Prompt/重试 | 拒绝 | v9/v10 已在 102-123 个搜索 URL 下重复出现“修一个、坏一个”；R-044 停止门已触发 |
+| 程序静默删除悬空 key 或补造 source | 拒绝 | 会替模型制造来源事实，破坏 Planning Audit 单一事实源 |
+| 所有阶段复用一个模型 thread | 拒绝 | 品牌数和搜索材料会持续污染后续批次上下文，不能隔离单个品牌批次的失败与修复 |
+| 接入外部研究 API、多 Agent或持久工作流平台 | 暂不引入 | 当前三阶段原型可复用既有运行时；新增凭证、部署、工作流事实和退出成本没有收益证据 |
+| 每个阶段/品牌批次独立 ephemeral thread，同阶段校验失败只在原 thread 有界修正 | 接受 | [官方 App Server 文档](https://developers.openai.com/codex/app-server/)定义 `thread/start` 创建新会话、`turn/start` 向目标 thread 发起 turn，且 `outputSchema` 只约束当前 turn；独立上下文可以复用一条已初始化连接并隔离批次材料 |
+
+### 复用、依赖与原型结论
+
+- 官方/成熟组件：继续使用已锁定 Codex App Server `stdio`、官方 per-turn `outputSchema`、现有 Zod 与 `zod-to-json-schema`、typed SSE 和 PostgreSQL Planning Run；没有新增依赖、许可证、原生模块、远程凭证或部署服务。
+- 项目已有资产：version 3 最终 contract、Research Audit 校验、Skill、人工确认门、`public.web-resource@1.0.0`、历史 Plan 只读展示及 Capture Task 候选连续覆盖规则。
+- 产品特有代码：品牌发现/饱和、官网批次、标准原理三个小 schema/prompt，1-10 品牌批次编排，以及从已验证事实确定性组装 v3 Plan；这些属于本产品的品牌覆盖和计划事实规则，不是通用工作流能力。
+- 最小原型：批次参数默认 3；每批品牌必须与请求集合完全相等，`planned` 必须有官网和参数/说明书检索，`unresolved` 必须有两条官网查询。六镜头发现后，Workbench 每次发起一个独立饱和查询并按规范名称和别名比较；两个不同查询连续零新增即停止，最多六次。批次发现额外品牌时，该品牌自身的查询和证据增量并入品牌账，再继续独立饱和查询和新增品牌批次；旧品牌整表不让模型重写，也不能把新增项直接塞入执行清单。
+- 失败边界：任一阶段没有真实 `web_search`、小 schema 经最多两个 repair 后仍失败、传输/认证失败，或六个饱和查询内没有形成连续两次零新增，整轮 Planning Run failed 且不保存 Plan。中间阶段只驻留本轮内存，不新增数据库事实源；Source Run 仍不能边抓边扩。
+
+首轮自动化原型通过后，真实电视 Workbench 完成品牌分母阶段，观察到 149 个搜索页面和 56 个候选品牌，并连续完成 5 批共 15 个品牌；第 6 批因东芝的 pass 没有可靠归属而在 18 分 38 秒后 truthful failed，没有生成 Plan。把 `brandName` 加到平行 pass 数组的第一次修补仍然允许模型漏配：第二轮用配置值 10 冻结 52 个品牌、通过首批 10 个品牌后，又在第 2 批因酷开缺少归属证据失败。把混合 pass 内嵌品牌的第二次修补虽消除了跨品牌 join，但第三轮冻结 31 个品牌、通过首批后，模型仍能让 Vidda 缺少 `official_source_mapping` area。
+
+上述两个错误补丁均已删除。最终内部 schema 使用 `status` 判别联合：`planned` 结构上必须分别带至少一条 `officialMappingPasses`、`parameterAndManualPasses` 和至少一个官网 URL；`unresolved` 必须带至少两条 `officialMappingPasses` 且官网 URL 长度为零。第四轮配置值 10 冻结 28 个品牌，三批官网映射全部通过并发现额外品牌；随后分母复核仍因模型重复填写的 `newlyAddedBrands` 与有序发现账不一致而失败。该重复字段也已从内部 schema 删除，Workbench 现在从每轮 `discoveredBrands` 的有序首次出现确定性投影最终 `newlyAddedBrands`。
+
+第五轮配置值 10 冻结 80 个品牌，8 批官网映射经局部有界修正全部通过；一次分母复核新增 3 个品牌并只运行增量批次，标准/监管/原理阶段也通过，累计搜索 1101 个网页。最终组装因无条件继承的历史 `TCL 官方商城电视入口` 未进入本轮品牌映射而失败。历史 v8 虽保存了 TCL 关系，但它是旧计划事实，不应与本轮重新核实结果并列成为权威来源；强制继承正是旧巨型交叉引用问题的残留。
+
+该兼容补丁已删除：历史 Plan/Run/Snapshot 继续只读保留，历史 URL 只作新阶段复核线索；只有本轮重新核实返回的 URL 和 Capture Task 当前 revision 已确认的非 JD 候选进入新 Plan。后续真实失败依次暴露并已清算：当前候选只在最终组装才检查、模型自报 `newlyAddedBrands`、一个巨型饱和阶段无法稳定收敛、规范品牌别名被重复计数、相邻投影品牌污染，以及修复空证据后新引入共享 URL 重复。当前实现把候选连续性移入所属阶段，把新增/连续零新增交给 Workbench，按名称与别名归一化，并明确排除任务范围外形态；同一精确官网 URL 在批次只建一个 target，共享品牌引用同一 URL。
+
+2026-08-25 从真实 `http://127.0.0.1:6173/` 依次点击任务、抓取计划和重新规划，配置批次 10。运行 `crawl-planning-run-968eb7d4-e3bf-4800-bd94-10836cc260f4` 用时 18 分 24 秒，六镜头搜索记录 412 个网页，3 个逐查询饱和阶段后以两个不同查询连续零新增停止；25 个品牌分三批完成官网核对，再完成标准/监管/技术原理阶段，最终持久化实际 Crawl Plan v9 draft `crawl-plan-b049a5fb-3ed6-4384-9016-d9adfddcd96a`。
+
+v9 有 24 个 `public.web-resource` 来源、42 个互不重复的精确 target；25 个品牌中 20 planned、5 unresolved，四类 Research Audit 和 10 个 task topic 全部对账。Capture Task 当前 revision 的 9 个非 JD 候选 URL 和 candidate ID 均恰好进入一个来源/target；JD URL/Provider 为 0；brand_official source 与 planned 品牌双向无悬空。页面停在“确认此计划”，未确认、Prepare 或 Start；Source Dataset 接口显示 plan version 9 的 Batch 和 Source Run 都为 0。该结果通过的是“规划可审查门”，不是官网页面已抓取或品类绝对全集证明。
+
+2026-08-26 的 version 4 真实验收又否决了“新增品牌后重跑完整六镜头品牌表”。运行 `crawl-planning-run-70d08aad-310b-4778-bad0-e8a2f12392e4` 完成 24 个品牌官网核对和一次新增品牌复核后，在最终门暴露品牌别名集合漂移及“华为智慧屏”参数证据漏配；第二轮 `crawl-planning-run-0bc2933e-4c8c-47f9-9962-790bc04ed16c` 因红米/REDMI 等重复身份把 44 个品牌再次膨胀成 44 个待核对项，已从 Workbench 主动中止；第三轮 `crawl-planning-run-edecf60e-9c0f-4234-ba61-154a0138c1ed` 又因整表复核让前五个旧品牌证据 URL 变空而 failed。错误的整表复核与别名保留补丁已删除，改为 `additionalBrands` 携带原查询/证据增量并入既有品牌账，只继续饱和查询和真正新增品牌的官网批次。
+
+最终真实运行 `crawl-planning-run-7bb4e4fb-386c-4a24-9a7f-4f3af299b519` 状态 completed，约 20 分 15 秒，页面记录搜索 551 个网页并持久化 v10 draft `crawl-plan-764c592a-7ee9-4219-b5cd-2a16b90b53ea`。v10 为 execution checklist 4：40 个品牌中 25 planned、15 unresolved，29 个来源、50 个唯一 target，其中 22 个 `site`、28 个 `exact`，全部 Provider 为 `public.web-resource@2.0.0`；10 个 task topic、9 个非 JD candidate ID 全部闭合，JD URL 与 blocker 均为 0，最后两个饱和查询不同且均零新增。服务重启后 Workbench 仍显示“Crawl Plan v10 · 执行清单 4”和“确认此计划”；本轮没有点击确认，v10 Batch/Source Run 为 0。这通过的是当前真实系统的规划与持久化门，不是 25 个 planned 来源已经抓取或内容已经验收。
+
+### 时长、配置和退出成本
+
+- `CRAWL_PLANNING_BRAND_BATCH_SIZE` 允许 1-10，默认 3。主要阶段数约为 `六镜头发现 1 + 饱和查询 2-6 + ceil(品牌数/批次大小) + 标准原理 1`；品牌越多、饱和查询越多或批次越小，总时长越长。
+- 十分钟限制是单阶段 hard timeout，不代表整轮上限。该段记录的前台 SSE 边界已由 R-049 与 ADR-0020 的 DBOS 稳定阶段恢复替代。
+- 退出成本保持最小：删除两个阶段文件和分阶段编排即可退回其他研究实现；最终 v3 contract、数据库、确认门、Provider 与 Source Dataset 不需要迁移。
+
+### 当前停止门
+
+完整电视 Planning Run 的规划可审查门已由 v9 通过，本轮用户也已授权确认并用三个真实批次跑通 1C 链路。该授权不把 5 个 unresolved 和执行失败改写为已覆盖，也不自动授权新的专站 crawler。阶段 1E 仍需选择三个结构不同的官网做真实目录 POC，才能决定如何从精确入口覆盖型号与说明书。
+
+## R-046 Graphile 进程失联后的领域状态收口
+
+状态：已接受；强杀红绿原型、真实历史孤儿收口和三轮 v9 执行已通过
+目标阶段：1C～1E / 已启动 Source Collection Batch 的进程恢复门
+
+问题：Graphile Worker 已把 Start 与页面连接解耦，但当前真实数据库仍存在执行进程丢失后永久停在 `running` 的 Batch/Run。页面停止轮询只能消除空闲请求，不能把执行链路变成可恢复终态。覆盖是否完整可以持续增量；已经启动的批次却必须在进程丢失后留下可审计的 `stopped` 事实，保留已提交 Snapshot、请求预算与恢复链。
+
+官方边界：Graphile Worker 0.17.3 普通版在 `SIGKILL`、掉电或进程崩溃时无法主动解锁正在执行的 job，默认至少四小时后才扫描释放；`maxAttempts=1` 表示该 job 不应自动再次访问来源。官方同时要求任务具备幂等性，并说明崩溃恢复无法在网络分区下证明 exactly-once。来源：https://worker.graphile.org/docs/error-handling 、https://worker.graphile.org/docs/pro/recovery 、https://worker.graphile.org/docs/library/add-job 。因此不能通过缩短 Graphile 内部锁、读取其私有表推导业务状态，或提高自动尝试次数来补洞。
+
+结论：继续复用 PostgreSQL session advisory lease。Source Execution 在创建 Batch 后持有 batch lease，运行中的 Source Run 继续持有既有 run lease；API 启动、Graphile runner 接单前，只对仍为 `running` 且已经能够取得 batch lease 的批次执行一次领域收口。收口复用既有 `prepareSourceRunForResume`：started request 记为 outcome unknown、未结束 work/target/run 记为 stopped、访问 gate 要求人工继续；随后 Batch 记为 stopped。活动 lease 存在时不触碰状态。它不读取 Graphile 表、不自动 Resume、不发网络请求，也不新增队列、重试器或第二事实源。
+
+验证：PostgreSQL 集成测试先稢复现 `recover is not a function`，随后证明活动 Batch lease 下零副作用、lease 释放后只收口未终结 Batch/Run/Target/Work/Request 且不改 Snapshot。第一次真实执行恢复了 2026-08-21 的孤儿 `source-batch-6a8bb6b7-0d9f-4774-9daf-63ec1290c298`，没有删除或重写历史记录。此后电视 v9 三个批次都进入终态；第三轮 13/24 完成、11 失败且无遗留 `running`。这只接受“失联后可审计收口”，不扩大为 exactly-once 或自动重抓承诺。
+
+## R-047 访问 gate 政策升级与 HTML 原文编码
+
+状态：已接受；红绿回归与真实 Sony 原始页已通过
+目标阶段：1C～1E / 持续增量执行的访问准入和原文不可变性
+
+问题一：已有 origin gate 使用旧 `public-web-resource-v1` 政策，新 v9 执行使用低频政策时被“gate 身份或策略冲突”拦截。清空表、无条件覆盖或在 UI 推导状态都会破坏持久限速事实。结论是产品特有的薄规则：Provider identity 不变；只对 closed、无 manual resume 且当前零 `started` attempt 的 gate 升级 policy version，`nextEligibleAt` 取旧值与按新最小间隔计算值中更晚者。已打开/受限/有在途请求的 gate 继续失败关闭。这不是新基础设施，不需要新状态机库。
+
+问题二：Sony 官网页面实际为 GB2312/GBK，但 HTTP 头误报 UTF-8。Node `TextDecoder` 是通用 WHATWG 解码器，而 HTML 编码优先级和 meta sniffing 应复用成熟实现。接受 `encoding-sniffer@1.0.2`：MIT、声明 Node `>=20.19`、无原生模块或运行时网络服务，并复用 `@exodus/bytes` 解码。官方依据：https://encoding.spec.whatwg.org/ 、https://nodejs.org/api/util.html#class-utiltextdecoder 、https://github.com/fb55/encoding-sniffer 。退出成本仅为替换一个 Provider 边界函数，不泄漏到公共 contract。
+
+边界：HTML/XHTML 先按 WHATWG 规则解码。只有传输层 label 在 `TextDecoder(..., { fatal: true })` 下不能无损解码，且忽略错误传输层后的 meta/sniff 结果确实减少替换字符时，才使用后者。合法正文自带 `U+FFFD` 时不回退；非 HTML 内联文本继续用 Node `TextDecoder`；Asset 始终保存原字节。
+
+验证：gate 集成回归先失败为“请求 gate 身份或策略冲突”，修复后真实 Hisense/TCL/Samsung 旧 gate 在不清理历史的前提下升级。编码回归分别覆盖无 HTTP charset、错误 HTTP UTF-8 与合法 `U+FFFD`。第三轮真实 Sony run `source-run-938de170-1fb3-4171-a68e-87ae9d3757d1` 保存新 Snapshot `source-snapshot-c3827c6f-1aae-43be-9e0b-934e7c97b4c2`：`charset=GBK`、`bytes=396`、正文无替换字符、标题为“无标题文档”；旧有损 Snapshot 保留，没有覆盖。
+
+## R-048 官网多路径采集开源底座与真实三站原型
+
+状态：接受 Crawlee 3.18.1 的稳定 HTTP/文件组件进入现有公共资源 Provider；浏览器路径只保留候选，不自动 fallback
+目标阶段：1E 品牌官网目录、规格页与说明书原始采集
+
+### 问题与失败证据
+
+电视 v9 第三批虽然完成 Workbench → Graphile → Batch/Run → Snapshot → 导出与重启持久化，但 24 个来源只有 13 个完成。11 个失败中，5 个直接来自旧传输缺口：TCL、东芝、Vidda 的 `robots.txt` 返回 301/302，Philips 正文返回 301，松下 PDF 比计划中的 5 MB 上限多 306,712 bytes；海信则在自写 Node HTTPS 传输的 30 秒窗口超时。另有 3 个已经被持久 gate 标记 `access_denied`、1 个证书域名不匹配、1 个 robots 504，这些不能靠换浏览器、换出口或忽略 TLS 绕过。
+
+现有 13 个完成来源同样不能只按 HTTP 200 验收内容。真实 Snapshot 审计发现酷开两个 URL 保存的是同一份约 4 KB 页面壳；隔离浏览器加载后目标页标题为“了解酷开”，没有形成电视目录。相反，TCL、海信和松下的源站页面本身公开了明确型号/系列和规格内容。阶段 1E 因此必须把“访问成功”和“内容满足计划捕获单元”分开，不能继续用任意 2xx 原文冒充目录覆盖。
+
+### 成熟候选比较与处置
+
+| 候选 | 处置 | 依据 |
+| --- | --- | --- |
+| Crawlee 3.18.1 `HttpCrawler` / `CheerioCrawler` / `FileDownload` / `PlaywrightCrawler` / `SitemapRequestList` | 接受稳定 HTTP、文件、队列和 sitemap 组件；浏览器路径保持显式候选 | Apache-2.0、Node/TypeScript、本地运行；当前仓库已锁同版本 core/memory，官方组件覆盖 HTTP、重定向、文件、浏览器和 sitemap |
+| Crawlee `AdaptivePlaywrightCrawler` | 拒绝生产 | 官方仍标记 experimental；自动选择会把访问路径和 fallback 藏到运行时，无法由 confirmed Crawl Plan 冻结 |
+| Firecrawl self-host | 拒绝作为核心底座 | AGPL-3.0；自托管同时引入 API/worker、Redis、RabbitMQ、PostgreSQL 等第二套队列和状态事实 |
+| Crawl4AI | 拒绝当前仓库采用 | Python/Docker 优先且面向 Markdown/LLM 加工，会新增第二语言运行栈并偏离阶段 1 不可变原文 |
+| Scrapy + scrapy-playwright | 拒绝当前仓库采用 | 能力成熟但引入 Python、Twisted 和独立浏览器生命周期，重复现有 Node/Graphile/Source Dataset 组合 |
+
+官方依据：[Crawlee 仓库与 Apache-2.0](https://github.com/apify/crawlee)、[3.18.1 发布](https://github.com/apify/crawlee/releases)、[HttpCrawler](https://crawlee.dev/js/api/3.12/http-crawler)、[FileDownload](https://crawlee.dev/js/api/3.12/http-crawler/class/FileDownload)、[SitemapRequestList](https://crawlee.dev/js/api/3.15/core/class/SitemapRequestList)、[AdaptivePlaywrightCrawler experimental](https://crawlee.dev/js/api/next/playwright-crawler/class/AdaptivePlaywrightCrawler)、[Firecrawl self-host 边界](https://github.com/firecrawl/firecrawl/blob/main/SELF_HOST.md)、[Crawl4AI](https://github.com/unclecode/crawl4ai)、[Scrapy](https://github.com/scrapy/scrapy) 与 [scrapy-playwright](https://github.com/scrapy-plugins/scrapy-playwright)。
+
+### 与产品约束一致的原型
+
+隔离目录锁定 `crawlee@3.18.1`、`playwright@1.62.1`，Node 24.12.0，关闭 Crawlee 自动 retry/session rotation，使用独立 MemoryStorage 和 Playwright 管理的 headless shell，不复用日常 Chrome/Profile。随机本地站先证明 sitemap 去重、静态 HTML/JSON-LD、JS 渲染与公开 JSON 响应、PDF 原字节、302 最终 URL、零重试 500 只访问一次；完整进程约 3 秒退出，临时依赖树 `npm audit --omit=dev` 为 0 个已知漏洞。
+
+随后只访问 v9 已确认的三个官网精确 target 做真实原型，没有扩展到未计划 URL：
+
+- TCL `https://www.tcl.com/cn/zh/tvs`：HTTP 200，840,156 bytes，34 个产品链接；正文包含 Q8E、X11、85C11、75T9G、98X9C 等型号及 Mini LED、刷新率、分区、HDR 等规格。旧 Source Run 失败只是 robots 302 未被旧传输处理。
+- 海信 `https://www.hisense.com/productcat/45.html`：HTTP 200，359,753 bytes，页面声明 61 个产品、观察到 103 个产品相关链接；正文包含 UX 2026、E7S、U7S Pro+、E8S Pro、发现 X 等系列及 RGB-MiniLED、分区、亮度、刷新率等规格。旧 Source Run 的 30 秒超时不代表源站无内容。
+- 松下 `https://consumer.panasonic.cn/product/homeav/led-tv.html`：HTTP 200，166,710 bytes，正文包含 PX600C-PRO、PX680C-PRO、NX900C、LX780C、LX600C 等系列；计划内 `TH-43-50-55LX600C.pdf` 下载为 5,306,712 bytes、`%PDF-` 文件，SHA-256 `a0f442ca53ec9050705fdc4143690e3bb30b07555529e6603c8e25d005938c76`。旧 5 MB 上限不足以容纳真实说明书。
+
+浏览器候选另用 v9 已确认的酷开精确 URL 验证：渲染成功但只得到“了解酷开”企业页面和 `K3 Pro` 新闻，不是电视型号目录。这证明浏览器只能解决渲染，不能修复错误来源；生产不得见到 2xx 就自动切浏览器，也不得把渲染成功记成内容完成。
+
+### 接受边界与退出成本
+
+- Crawlee 只承担 HTTP/重定向、文件、sitemap、队列和显式浏览器 mechanics；Graphile 继续承担 Batch 后台派发，PostgreSQL Source Dataset 继续拥有 Request/Gate/Snapshot/Asset 事实。
+- 当前生产接入先替换精确 HTTP/文件传输，保持 `public.web-resource@1.0.0` 与 Crawl Plan/Source Dataset 公共 contract 不变；每个 redirect hop 仍必须在发送前进入现有 request admission，跨 origin redirect 失败关闭。
+- 不启用代理轮换、SessionPool、自动 retry、TLS 忽略、验证码/风控绕过或隐式 HTTP→浏览器 fallback。持久 gate 已标记 `access_denied` 的来源不因本结论自动重开。
+- 产品特有代码只保留 Crawlee 到现有 admission/raw snapshot 的薄 adapter，以及后续由 Crawl Plan 明示的内容验收条件；不得自写队列、sitemap parser、下载器、浏览器池或重试器。
+- 若成熟组件无法同时满足 redirect hop 预准入、SSRF/Fake-IP 边界和原始内容保存，撤回生产接入而不是保留第二传输 fallback。
+
+### 生产接入与第四批结果
+
+`@crawlee/http@3.18.1` 已作为直接依赖接入 `public.web-resource@1.0.0` 的精确 HTTP/文件传输，替换旧的单跳 Node HTTPS 正文实现。生产仍关闭 retry、SessionPool、session rotation、代理轮换和隐式浏览器 fallback；每个允许的同源 redirect 响应先结算上一条 Request Attempt，目标通过 HTTPS、同源与公网地址校验后才预留下一跳。Node `lookup(all=true)` 的重载已用真实无代理探针暴露并修正，避免直连路径读取到 `undefined` 地址；失败只向领域层返回有界错误消息，不再把 Crawlee 内部堆栈写入新的 termination reason。
+
+真实 Workbench 第四批 `source-batch-48648747-3e08-480b-964b-3de5cbf6d308` 终态为 `partial`：14/24 来源完成、10 个失败，保存 29 条全部 accessible 的不可变 Snapshot（28 条原始文本、1 个 PDF Asset），原始 payload 合计 9,883,724 bytes。海信从旧超时恢复为 3/3 target 完成；TCL 从 robots 302 整源失败变为实际保存 5/6 target，包括 840,156-byte 电视目录、两个产品页/商城页和 4,030,287-byte PDF。TCL、Vidda、夏新剩余失败均由已确认 v9 的旧请求预算没有为 redirect hop 留余量触发；松下仍由 v9 的 5 MB 上限触发。新的确定性 Planning 组装已把后续草案升级为 25 MB、900 秒和 `(target 数 + origin 数) × 2` 请求预算，但不会改写已确认 v9。
+
+内容审计没有把 2xx 等同于目标数据。TCL 目录真实包含 34 个产品链接；海信目录页面声明 61 个产品并观察到 103 个产品相关链接；松下目录包含 PX600C-PRO、PX680C-PRO、NX900C、LX780C、LX600C 等系列。另一方面，Sony 仅 386 字符且标题为“无标题文档”，酷开两个 target 是相同 4,139 字符页面壳且均无电视产品链接，因此不得计入“取得所需电视目录”。当前 Source Dataset 已如实保存原文，但“capture unit 内容验收”尚无 typed contract；在该 contract 和目录遍历 Provider 通过三站门前，不能把 14 个 completed source 直接换算为 14 个有效内容来源。
+
+### VPN/代理边界与响应上限
+
+本机正式运行时同时存在 `http_proxy/https_proxy=http://127.0.0.1:7890`，当前 Crawlee 请求因此经过该代理；移除环境变量后的系统 DNS 仍返回 `198.18.0.0/15` Fake-IP，说明 VPN/TUN 仍参与本机网络路径。同一进程里改用“普通浏览器”或清空代理变量不能证明出口 IP 已与 VPN 分离，也不能证明降低站点风控概率；若必须隔离出口，只能使用独立网络命名空间、独立 Runner/主机或用户明确配置的另一网络路径，不能自动轮换代理或伪装浏览器。
+
+Crawlee 官方当前明确说明 `HttpCrawler` 没有按响应大小在下载过程中中止的内置选项；`FileDownload` 提供 stream/`abortDownload`，但它的 stream 路径不复用本 adapter 的 redirect/DNS hooks。当前生产仍在 Crawlee 返回 body 后执行 25 MB 上限检查，并由 30 秒网络/handler timeout 限制悬挂；不得把它描述为流式带宽上限。若要补齐流式硬上限，必须继续验证 Crawlee `FileDownload` 或自定义官方 `HttpClient` 能否保持 redirect hop 预准入和 SSRF 固定解析，验证前不自写第二下载器。
+
+### 2026-08-26 生产替换结论
+
+状态：接受 `public.web-resource@2.0.0` 进入真实系统；原 `1.0.0` 与 execution checklist v3 只读，不可新启动。
+
+- 采用 Crawlee 3.18.1 `RequestQueue` 作为 `site` route 的本机持久页面队列，采用 `@crawlee/utils` 的 `RobotsTxtFile` 和 `parseSitemap` 解析 robots/sitemap；不使用 `SitemapRequestList` 直接联网，因为它会绕过现有 PostgreSQL request admission。sitemap XML 仍由现有 audited transport 获取，每个 hop 先预留 Request Attempt。
+- v4 计划把品牌官网首个 HTML 种子组装为 `site`，冻结 `required_terms`、`maximum_depth<=3`、`maximum_pages_per_target<=100`、`minimum_accepted_pages`、运行时长、频率和请求预算；其他正文/附件保持 `exact`。Provider 不解释自然语言 traversal，也不自由跨源发现。
+- 内容门使用可见正文而非 HTML 源码长度。`site` 页面必须命中计划信号，并同时出现 Product/ProductGroup JSON-LD、至少两个字母数字混合型号或至少两个相关同源链接之一；品牌 `exact` HTML 也必须命中计划信号并出现商品结构、型号或相关链接，标准/技术正文至少满足可见正文与计划信号，PDF 还核对文件签名。sitemap 是 `supporting`，无关企业页/新闻页是 `rejected`；二者保存原文但不增加 `accessibleCount`，supporting 也不冒充失败，只有 `accepted` 可以完成 target。
+- 浏览器仍未进入生产 route。酷开原型证明“能渲染”不能证明“有目标内容”；因此不存在 HTTP 失败或内容 rejected 后的自动浏览器 fallback。若未来需要 browser route，必须由新 Plan contract 显式冻结并重新完成开源原型、许可、安全和内容验收门。
+- 退出成本：撤回 v2 时只需移除 v4 可执行门与 v2 composition root，历史 v3/v9 和全部 Snapshot 无需迁移；Crawlee 队列不拥有 Batch/Run/Snapshot 事实，不形成第二业务状态机。
+
+### 2026-08-26 ZOL 电视产品库低频多路由验证
+
+负责人明确本项目为个人非商用，并授权只对 ZOL 电视门类做低频、有界验证。隔离验证使用真实 `public.web-resource@2.0.0`、PostgreSQL Request Admission、Crawlee 持久 RequestQueue、Source Execution 和 Source Dataset；没有写入正式电视任务或开发数据库。计划含一个 `site` route（`https://detail.zol.com.cn/digital_tv/`，深度 1、最多 4 页、至少 2 页 accepted）和一个 `exact` route（`https://detail.zol.com.cn/digital_tv/new.html`），频率为每分钟最多 2 次、同源最少间隔 30 秒，请求预算 22，首次受限即停。
+
+真实运行发送 6 个请求，相邻请求间隔依次为 30.1、30.1、30.1、30.1、30.0 秒；没有 401/403/429、验证码或 robots 禁止。`site` route 保存 4 个 accessible HTML Snapshot：
+
+- 门类入口 `https://detail.zol.com.cn/digital_tv/`：302,199 bytes，SHA-256 `c49d0492a4a81e8ab48f4f77aff0ba80c4c0b727286b963e40c9426ab5e0eb71`；
+- 华为品牌目录 `https://detail.zol.com.cn/digital_tv/huawei/`：328,680 bytes，SHA-256 `c0d8e213bbc3af7ef1e6adf5f2c47ce1ea8eb56e1f77f3c97c8ddd69213f6386`；
+- 两个单品页分别为 216,744 和 213,538 bytes，SHA-256 `9f79f8033dcc55c8a49257b23b7cd25a955b1e44eb7fbbdb4181eea35b75fd07`、`fecbde7bbfac1c31b23ff939d4df119b7c64b9547f516bad2d383e61985af44d`。
+
+原始正文长度为 8,894～17,973 字符，模型规则观察到 27～71 个字母数字混合型号和 66～328 个相关同源链接；原文中可辨认 `Q9L Pro`、`MateTV`、`E5Q`、`KD-X85K`、`MRA115MR95FXXZ`、`XR-X90J` 等产品标识，证明 ZOL 门类确实包含高密度产品目录、型号、筛选和参数候选。
+
+首次运行的历史结果为：四页中文都被解成 mojibake，计划信号命中数为 0，4/4 Snapshot 因而是 rejected，`site` target 以“至少 2 页、实际 0 页”失败；同一 source 的 `exact` target 按失败隔离没有继续访问。后续原字节对照推翻了当时的归因：ZOL 响应头和正文实际都是 GBK，不是“声明 GBK、实际 UTF-8”。真正根因是锁定的 Crawlee 3.18.1 `HttpCrawler._encodeResponse` 会在 request handler 之前把 Node 不原生支持的 GBK 流转成 UTF-8，但保留源站 `charset=GBK` 响应头；Provider 因而对已转码 body 再套用 GBK，制造了双重解码乱码。
+
+### 2026-08-26 原字节保留修复与系统重跑
+
+官方源码核对了两条成熟路径。Crawlee 3.18.1 `FileDownload.streamHandler` 确实暴露原始流，但该锁定版本会用另一次 `httpClient.stream({ url, proxyUrl })` 取数，不复用当前 adapter 的 User-Agent、redirect hop 预准入和 DNS pinning，因此拒绝作为生产替换。`HttpCrawler.forceResponseEncoding` 是公开选项；在锁定的 3.18.1 实现中，强制为 Node 原生支持的 `utf8` 会关闭 iconv 转码分支，request handler 仍收到源站原字节。生产 adapter 因此只增加该锁版选项，实际编码继续由已接受的 `encoding-sniffer` 按 HTTP/meta 判定；没有增加站点特判、第二下载器或自研编码探测。依据：[Crawlee 3.18.1 HttpCrawler 编码实现](https://github.com/apify/crawlee/blob/v3.18.1/packages/http-crawler/src/internals/http-crawler.ts#L730-L757)、[Crawlee 3.18.1 FileDownload 流实现](https://github.com/apify/crawlee/blob/v3.18.1/packages/http-crawler/src/internals/file-download.ts#L243-L309)、[Node Buffer 支持编码判定](https://nodejs.org/api/buffer.html#static-method-bufferisencodingencoding)。
+
+最小原型与生产 transport 各自完成 ZOL/Sony/TCL 三类门：ZOL 保留 276,978 原字节并以 GBK 还原，标题及“电视/品牌/产品”分别命中 194/12/24 次；Sony 保留 391 原字节，在错误 HTTP UTF-8 头下由页内 GBK 恢复“无标题文档”；TCL 保留 840,081 原字节并以 UTF-8 还原完整电视目录。三页替换字符均为 0。聚焦回归 17/17 与 worker typecheck 通过。
+
+同一 ZOL 计划使用隔离 PostgreSQL/RequestQueue 重跑。第一批在门类页已 accepted 后遇一次 TLS 建连中断，按零自动重试如实 failed；第二个独立批次 `source-batch-5ba28124-88e7-4ca3-8134-1fc502cc80ed` 终态 completed，7 个 Request Attempt 全部 completed，相邻开始间隔 30.050～30.067 秒。Run `source-run-168773e7-166a-4acf-a56a-585690e8ccda` 的两个 target 均 completed，保存 5/5 accepted HTML Snapshot（门类页、3 个系列页、最新产品页），均为 GBK、0 替换字符，解码后 payload 合计 1,112,293 bytes。这接受“真实系统能低频保存并验收 ZOL 电视原文”，不扩大为“品牌或全量产品已覆盖”。升级 Crawlee 时必须重跑三编码门；临时数据库、队列、资产目录和验证脚本已删除，没有写入正式任务或 v10 草案。
+
+## R-049 Crawl Planning 长运行持久恢复
+
+状态：已接受并接入正式组合根；DBOS 4.25.14 候选原型与正式 adapter 强杀恢复均通过
+目标阶段：1E 品牌地图、跨品牌市场目录和品牌官网增量规划
+
+### 真实问题与停止门
+
+加入 ZOL 跨品牌目录后，真实品牌发现形成 115 个候选。当前 Planning Run 按默认每批 3 个品牌需要约 39 个官网核对阶段；运行 17 分 33 秒只推进到第 10～12 个品牌，并暴露 `placeholder` 非品牌占位词。继续运行预计需要数小时，且任一 App Server/进程故障都会丢掉内存中的全部已完成阶段。该运行 `crawl-planning-run-3cf7d9a3-2a98-4f19-9210-6960d619c2c4` 已在不生成新计划的前提下失败关闭；最新正式草稿仍是 v10。
+
+这满足 R-044/R-045 预先写明的重开条件：常用品类真实规划超过十分钟且不能从阶段检查点恢复。继续扩大 timeout、Prompt、重试次数或让负责人保持页面打开均被拒绝。
+
+### 成熟候选比较
+
+| 候选 | 处置 | 当前约束下的原因 |
+| --- | --- | --- |
+| 继续一个前台 App Server 长进程 | 拒绝 | 已证明阶段结果只在内存，故障后从品牌发现重做 |
+| 复用 Graphile Worker 0.17.3 拆分阶段 job | 拒绝作为单独解法 | 项目已用它做 PostgreSQL 持久派发，但它不保存函数级检查点；阶段链、结果等待和 crash gap 仍需自研工作流/恢复器 |
+| pg-boss | 拒绝进入原型 | MIT、Node/PostgreSQL、重试和依赖 job 成熟，但仍是 job queue；对当前顺序父流程仍需应用自行维护中间工作流状态 |
+| Temporal TypeScript | 拒绝当前采用 | SDK/Server 均为 MIT 且功能成熟，但需要独立 Temporal Server、worker runtime 与更多部署/升级部件；本地单机 PostgreSQL 产品没有对应收益 |
+| DBOS TypeScript 4.25.14 | 原型通过，保持候选 | MIT、Node/TypeScript、PostgreSQL 检查点、稳定 workflow ID、子 workflow 和本地运行，不增加独立编排服务；仓库历史已验证同版本，但本轮必须以当前规划阶段重新过强杀门 |
+
+官方依据：[DBOS TypeScript 仓库与 MIT](https://github.com/dbos-inc/dbos-transact-ts)、[DBOS 架构与 PostgreSQL 检查点](https://docs.dbos.dev/architecture)、[Temporal TypeScript SDK](https://github.com/temporalio/sdk-typescript)、[Graphile Worker](https://worker.graphile.org/) 与 [pg-boss](https://github.com/timgit/pg-boss)。四者均支持 Node/TypeScript 或 Node 运行；DBOS/Graphile/pg-boss 可直接复用 PostgreSQL，Temporal 需要独立服务。规划依赖真实网页搜索，因此整体不具备离线执行；检查点、计划草稿和审计仍可留在本地 PostgreSQL。Cookie、Profile、认证 Header 和抓取原文都不进入 durable workflow 输入。
+
+### 与当前规划阶段一致的强杀原型
+
+隔离数据库和依赖目录使用 Node 24.12.0、`@dbos-inc/dbos-sdk@4.25.14`。父 workflow 依次调用五个稳定 ID 子 workflow：`brand-discovery`、`market-catalog`、`brand-batch-1`、`brand-batch-2`、`knowledge`。在第三阶段的 durable step 进行中强制 `SIGKILL`，随后以同一 workflow ID 启动新进程恢复。
+
+最终五个 typed 结果完整。日志中已完成的 `brand-discovery`、`market-catalog` 各 `start/done` 一次；在途 `brand-batch-1` 的 `start` 两次、`done` 一次，符合外部副作用至少一次边界；后续 `brand-batch-2`、`knowledge` 各执行一次。临时数据库已删除，临时依赖目录已移入系统废纸篓。原型接受“完成阶段不重做、在途阶段允许重做、后续阶段接续”，不接受模型网页搜索 exactly-once。
+
+### 生产决定、验证与边界
+
+- 负责人已明确允许接入 DBOS。生产组合根锁定 `@dbos-inc/dbos-sdk@4.25.14`，使用独立 `domain_analysis_crawl_planning` system schema；没有恢复 ADR-0015 退出的旧知识流水线。
+- DBOS 只拥有 Planning Run 内部阶段派发、typed result 检查点和恢复；Capture Task、Planning Run、用户可见 Stage Checkpoint、最终 Crawl Plan Draft 与人工确认仍由 Workbench PostgreSQL 领域表拥有。Web/API 不读取 DBOS 系统表推导用户状态。
+- 每个模型阶段必须是独立稳定子 workflow，并经 DBOS concurrency=1 Queue 串行复用一条 App Server `stdio` 连接；一次子 workflow 的 App Server 搜索和结构化输出属于至少一次副作用。在途失败后可重做，只有完成且校验通过的阶段结果不得重做。
+- 阶段 typed 输出必须经当前 Zod 校验后再作为 durable result；最终 Plan 仍由 Workbench 一次确定性组装并落一个新 draft，不允许半成品 source 变成可确认计划。
+- Workbench migration 新增 `crawl_planning_stage_checkpoints`，用 `(run_id, stage_key)` 和 `(run_id, sequence)` 唯一约束幂等投影；`source_collection_plans.planning_run_id` 新增 partial unique，保证最终 DBOS step 至少一次执行仍只生成一个版本。
+- SSE/socket 只拥有进度投影；页面离开不再发送领域取消。API 启动时以 Workbench 中仍为 `running` 的 run ID 幂等恢复，相同任务同时只允许一个 Planning Run。系统没有新增自动确认、自动抓取或隐式取消。
+- 正式强杀集成测试在 `brand-mapping:0:1` 执行中终止首进程；第二进程使用同一 run/workflow ID 恢复。品牌发现和市场目录各 `start` 一次，在途批次 `start` 两次、`done` 一次，后续品牌批次和知识来源各一次，最终一个 Plan Draft。全仓 39 个测试文件、169 项测试通过，8 项环境验收跳过；六个 workspace typecheck、生产构建与 API `/health`/任务列表 200 通过。
+- 真实电视运行 `crawl-planning-run-3f868a0d-bb9d-49aa-85cf-893ef6ab258f` 在页面断连和两次 API `SIGKILL` 后继续，12/12 稳定阶段于 1,851 秒内完成，只写入一个 v11 draft。第一次重启发现 `DBOS.launch()` 已恢复 workflow 后 API 又显式 `startWorkflow`，造成 queue name 冲突日志；生产恢复现先查询 workflow 状态，只在不存在时启动。第二次强杀恢复及正式测试均证明该冲突已消失。
+- v11 的 50 品牌、43 来源和 72 target 证明 durable 运行门通过，但内容审计发现市场目录 target 把全部 10 个任务 topic 都标为相关，导致 ZOL 被错误计入标准/原理覆盖。该缺口不否定 DBOS 选型，但否决 v11 的确认资格；后续必须在 stage 输出质量门修复后生成新版本，不能原地改写 v11。
+- 退出时可移除 DBOS adapter/schema；领域任务、历史 Planning Run 和 Crawl Plan 不依赖 DBOS 类型。替代品必须通过同一强杀门，不能退回进程内阶段数组或自研恢复器。

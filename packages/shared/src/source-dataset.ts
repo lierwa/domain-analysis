@@ -29,6 +29,12 @@ export const rawSourceObservationSchema = z.object({
   state: z.enum(["accessible", "login_required", "verification_required", "access_denied", "not_found", "source_error"]),
   httpStatus: z.number().int().min(100).max(599).optional(),
   responseHeaders: z.record(z.string(), z.string()).default({}),
+  contentAssessment: z.object({
+    status: z.enum(["accepted", "rejected", "supporting"]),
+    ruleVersion: idSchema,
+    matchedSignals: z.array(z.string().min(1).max(200)).max(50),
+    reason: z.string().min(1).max(2_000),
+  }).strict().optional(),
   error: z.string().min(1).max(4000).optional(),
 }).strict();
 

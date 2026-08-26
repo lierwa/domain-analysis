@@ -33,7 +33,7 @@ export function SourceDatasetPanel({ task }: { task: Pick<CaptureTask, "id" | "r
     queryKey: ["source-run", taskId, selectedRunId],
     queryFn: () => fetchSourceCollectionRun(taskId, selectedRunId!),
     enabled: Boolean(selectedRunId),
-    refetchInterval: (query) => query.state.data?.run.status === "running" ? 2_000 : false,
+    refetchInterval: shouldPollSourceRun(runs.data, selectedRunId) ? 2_000 : false,
   });
 
   async function resume(view: SourceDatasetRunView) {
@@ -61,8 +61,8 @@ export function SourceDatasetPanel({ task }: { task: Pick<CaptureTask, "id" | "r
   }
   const groups = runs.data ? groupSourceRunsByBatch(runs.data) : [];
   return (
-    <section className="grid gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
-      <aside className="rounded-xl border border-line bg-panel p-3">
+    <section className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <aside className="rounded-xl border border-line bg-panel p-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
         <h3 className="px-2 py-2 text-sm font-semibold">抓取批次</h3>
         {groups.map((group) => <section key={group.key} className="mb-3 border-t border-line pt-2 first:border-t-0 first:pt-0">
           <div className="px-2 py-2 text-xs">
@@ -71,7 +71,7 @@ export function SourceDatasetPanel({ task }: { task: Pick<CaptureTask, "id" | "r
               {group.startedAt ? ` · ${formatDateTime(group.startedAt)}` : ""}</p>
             <p className="mt-1 text-muted">{group.runs.length} 个来源运行 · {group.runs.reduce((sum, run) => sum + run.snapshotCount, 0)} 条</p>
           </div>
-          {group.runs.map((run) => <button key={run.id} type="button" onClick={() => setSelectedRunId(run.id)} className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selectedRunId === run.id ? "bg-ink text-surface" : "hover:bg-surface"}`}><span className="block font-medium">{run.providerKey}</span><span className="text-xs opacity-70">{run.snapshotCount} 条 · {renderRunStatus(run)}</span></button>)}
+          {group.runs.map((run) => <button key={run.id} type="button" onClick={() => setSelectedRunId(run.id)} className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selectedRunId === run.id ? "bg-ink text-surface" : "hover:bg-surface"}`}><span className="block font-medium">{run.sourceCollectionPlanSourceKey ?? "历史来源"}</span><span className="mt-0.5 block break-all text-xs opacity-70">{run.providerKey}@{run.providerVersion ?? "旧版"}</span><span className="mt-0.5 block text-xs opacity-70">{run.snapshotCount} 条 · {renderRunStatus(run)}</span></button>)}
           {group.runs.length === 0 && <p className="px-2 pb-2 text-xs text-muted">这个批次没有创建任何来源运行。</p>}
         </section>)}
       </aside>
@@ -88,8 +88,17 @@ export function SourceDatasetPanel({ task }: { task: Pick<CaptureTask, "id" | "r
 }
 
 export function shouldPollSourceDataset(view?: SourceDatasetTaskView) {
-  return Boolean(view?.batches.some((batch) => batch.status === "running")
-    || view?.runs.some((run) => run.status === "running"));
+  // WHY：后台队列串行创建批次，列表已按开始时间倒序；历史 running 可能来自进程中断，
+  // 不能把它当成当前存活信号，否则一个僵尸记录会让页面永久轮询。
+  return view?.batches[0]?.status === "running";
+}
+
+export function shouldPollSourceRun(view?: SourceDatasetTaskView, runId?: string) {
+  if (!view || !runId) return false;
+  const activeBatch = view.batches[0];
+  if (activeBatch?.status !== "running") return false;
+  return view.runs.some((run) => run.id === runId
+    && run.executionBatchId === activeBatch.id && run.status === "running");
 }
 
 export function groupSourceRunsByBatch(view: SourceDatasetTaskView) {
@@ -117,7 +126,7 @@ export function SourceRunDetail({ taskId, view, onResume, isResuming = false }: 
   taskId: string; view: SourceDatasetRunView; onResume?: () => void; isResuming?: boolean;
 }) {
   const canResume = (view.run.status === "failed" || view.run.status === "stopped")
-    && view.run.providerKey === "jd.catalog-product" && view.run.providerVersion === "2.0.0"
+    && view.run.providerKey === "public.web-resource" && view.run.providerVersion === "2.0.0"
     && Boolean(view.run.sourceCollectionPlanVersion);
   return <>
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -141,12 +150,18 @@ export function SourceRunDetail({ taskId, view, onResume, isResuming = false }: 
       <h4 className="text-sm font-semibold">清单逐项对账</h4>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">{view.targets.map((target) => <div key={target.id} className="rounded-md border border-line bg-surface px-3 py-2 text-xs">
         <div className="flex items-center justify-between gap-2"><span className="font-medium">{target.targetKey}</span><span>{renderRunStatus(target)}</span></div>
-        <p className="mt-1 text-muted">{target.snapshotCount} 快照 · {target.accessibleCount} 可访问 · {target.assetCount} 附件</p>
+        <p className="mt-1 text-muted">{target.snapshotCount} 快照 · {target.accessibleCount} 内容通过 · {target.assetCount} 附件</p>
       </div>)}</div>
     </section>
     <div className="space-y-4">{view.records.map((record) => <section key={record.snapshot.id} className="rounded-lg border border-line p-4">
       <div className="flex flex-wrap justify-between gap-2 text-sm"><span className="font-medium">{record.object.sourceIdentity} · {record.object.externalKey}</span><span className="text-muted">{record.snapshot.targetKey ?? "旧版未归属"} · {record.snapshot.observation.state}</span></div>
       <a className="mt-2 block break-all text-xs underline" href={record.snapshot.observation.finalUrl ?? record.snapshot.observation.requestedUrl} target="_blank" rel="noreferrer">{record.snapshot.observation.finalUrl ?? record.snapshot.observation.requestedUrl}</a>
+      {record.snapshot.observation.contentAssessment && <div className="mt-2 rounded bg-panel px-3 py-2 text-xs">
+        <span className="font-medium">内容验收：{renderAssessmentStatus(record.snapshot.observation.contentAssessment.status)}</span>
+        <span className="ml-2 text-muted">{record.snapshot.observation.contentAssessment.reason}</span>
+        {record.snapshot.observation.contentAssessment.matchedSignals.length > 0
+          && <p className="mt-1 text-muted">命中：{record.snapshot.observation.contentAssessment.matchedSignals.join("、")}</p>}
+      </div>}
       <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded bg-panel p-3 text-xs">{renderPayload(record.snapshot.payload)}</pre>
       {record.assets.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{record.assets.map((asset) => <a key={asset.id} className="button-secondary" href={sourceAssetUrl(taskId, view.run.id, asset.id)}><Download className="h-4 w-4" />{asset.filename} · {asset.bytes} B</a>)}</div>}
       {record.resourceReferences.length > 0 && <div className="mt-3 rounded bg-panel p-3 text-xs"><p className="font-medium">图片 URL 引用 {record.resourceReferences.length}</p><ol className="mt-2 max-h-48 list-decimal space-y-1 overflow-auto pl-5">{record.resourceReferences.map((reference) => <li key={reference.id} className="break-all"><span>{reference.sourceUrl}</span><span className="ml-2 text-muted">{reference.role} · {reference.section} · #{reference.ordinal}</span></li>)}</ol></div>}
@@ -158,6 +173,12 @@ function renderCircuits(view: SourceDatasetRunView) {
   if (view.accessGates.length === 0) return "circuit 未建立";
   const states = [...new Set(view.accessGates.map((gate) => gate.circuitState))];
   return `circuit ${states.join(" / ")}`;
+}
+
+function renderAssessmentStatus(status: "accepted" | "rejected" | "supporting") {
+  if (status === "accepted") return "通过";
+  if (status === "rejected") return "不满足计划内容";
+  return "发现支撑材料（不计完成）";
 }
 
 function renderRunStatus(run: { status: string; terminationReason?: string }) {

@@ -16,10 +16,19 @@ export const sourceKinds = [
 
 export const sourceAccessStates = ["public", "login_required", "restricted", "unavailable", "unknown"] as const;
 
-export const defaultJdStandardProductScope = [
+const legacyJdCatalogScopeValues = [
   "category_taxonomy",
   "category_filters",
   "brand_filters",
+  "catalog_product_cards",
+  "catalog_displayed_price",
+  "catalog_review_count",
+  "catalog_media",
+] as const;
+
+// WHY：旧任务必须继续可读，但新任务只使用公开目录范围；历史详情/店铺/评论值不会再进入默认策略或新计划。
+export const jdStandardProductScopeValues = [
+  ...legacyJdCatalogScopeValues,
   "jd_self_operated",
   "brand_flagship_stores",
   "product_details",
@@ -45,7 +54,7 @@ export const sourceCandidateSchema = z.object({
 export const jdCollectionIntentSchema = z.object({
   applicable: z.boolean(),
   disposition: z.enum(["included", "excluded", "pending"]),
-  scope: z.array(z.enum(defaultJdStandardProductScope)),
+  scope: z.array(z.enum(jdStandardProductScopeValues)),
   rationale: z.string().min(1).max(2000),
 }).strict();
 
@@ -113,24 +122,16 @@ export type CaptureTask = z.infer<typeof captureTaskSchema>;
 export type CaptureTaskDraftVersion = z.infer<typeof captureTaskDraftVersionSchema>;
 
 export function applyDefaultJdSourcePolicy(content: CaptureTaskContent): CaptureTaskContent {
-  if (!content.jd.applicable) {
-    return {
-      ...content,
-      jd: {
-        ...content.jd,
-        disposition: "excluded",
-        scope: [],
-      },
-    };
-  }
   return {
     ...content,
     jd: {
-      applicable: true,
-      disposition: "included",
-      scope: [...defaultJdStandardProductScope],
-      // WHY：标准商品在京东可售时，平台覆盖是来源策略而非负责人取舍；模型只负责调查适用性。
-      rationale: "该标准商品适用于京东，按平台默认来源策略覆盖类目、商品、参数、媒体与评价指标。",
+      ...content.jd,
+      disposition: "excluded",
+      scope: [],
+      // WHY：真实访问已否决 JD 作为稳定分母；保留 applicable 只用于历史语义，当前正式计划统一排除。
+      rationale: content.jd.applicable
+        ? "当前正式规划排除京东；品牌版图和官网来源由 Planning Agent 深度搜索。"
+        : content.jd.rationale,
     },
   };
 }

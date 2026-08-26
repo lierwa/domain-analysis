@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { prepareInterviewTurn } from "../src/categoryInterviewTurnPolicy";
 
 describe("采访草案完成门", () => {
-  it("只有零售和品牌入口时不能把调查判为完成", () => {
+  it("没有品类范围搜索凭证时不能把调查判为完成", () => {
     const output = draftOutput();
     output.draftMarkdown = [
       "# 微波炉数据抓取采访范围草案",
@@ -22,10 +22,10 @@ describe("采访草案完成门", () => {
     expect(() => prepareInterviewTurn(
       interviewView(), output, "2026-08-20T00:00:01.000Z", (kind) => kind, "message-user",
       [],
-    )).toThrow("草案来源覆盖尚未完成");
+    )).toThrow("草案品类范围调查尚未完成");
   });
 
-  it("四类入口都来自已完成搜索且写入草案时才能进入待确认", () => {
+  it("品类范围依据来自已完成搜索且写入草案时才能进入待确认", () => {
     const coverage = completeCoverage();
     const output = draftOutput();
     output.draftCoverage = coverage;
@@ -47,7 +47,7 @@ describe("采访草案完成门", () => {
     const searched = completedSearch(coverage);
     const activity = searched[0]?.type === "activity" ? searched[0].activity : undefined;
     if (!activity?.urls) throw new Error("测试搜索活动缺少 URL");
-    activity.urls = activity.urls.filter((url) => url !== coverage.technicalPrincipleUrls[0]);
+    activity.urls = activity.urls.filter((url) => url !== coverage.scopeEvidenceUrls[0]);
 
     expect(() => prepareInterviewTurn(
       interviewView(), output, "2026-08-20T00:00:01.000Z", (kind) => kind, "message-user",
@@ -59,8 +59,7 @@ describe("采访草案完成门", () => {
     const coverage = completeCoverage();
     const output = draftOutput();
     output.draftCoverage = coverage;
-    output.draftMarkdown = coverageMarkdown(coverage)
-      .replace(`- 技术原理：${coverage.technicalPrincipleUrls[0]}`, "- 技术原理：尚待补充");
+    output.draftMarkdown = "# 电视抓取范围\n- 品类范围：已调查";
 
     expect(() => prepareInterviewTurn(
       interviewView(), output, "2026-08-20T00:00:01.000Z", (kind) => kind, "message-user",
@@ -131,23 +130,17 @@ function interviewView(): CategoryInterviewView {
 
 function completeCoverage(): CategoryInterviewDraftCoverage {
   return {
-    retailMarketUrls: ["https://search.jd.com/Search?keyword=%E7%94%B5%E8%A7%86"],
-    brandOfficialUrls: [
-      "https://www.tcl.com/cn/zh/tvs",
-      "https://www.hisense.com/tv/",
+    scopeEvidenceUrls: [
+      "https://www.crta.com.cn/upload/default/66860b634af7e.pdf",
+      "https://tv.zol.com.cn/959/9596733.html",
     ],
-    standardsRegulationUrls: ["https://openstd.samr.gov.cn/"],
-    technicalPrincipleUrls: ["https://www.nist.gov/how-does-a-television-work"],
   };
 }
 
 function coverageMarkdown(coverage: CategoryInterviewDraftCoverage) {
   return [
     "# 电视抓取范围",
-    `- 零售市场：${coverage.retailMarketUrls[0]}`,
-    ...coverage.brandOfficialUrls.map((url) => `- 品牌官网：${url}`),
-    `- 国家标准：${coverage.standardsRegulationUrls[0]}`,
-    `- 技术原理：${coverage.technicalPrincipleUrls[0]}`,
+    ...coverage.scopeEvidenceUrls.map((url) => `- 品类范围依据：${url}`),
   ].join("\n");
 }
 
@@ -155,7 +148,7 @@ function completedSearch(coverage: CategoryInterviewDraftCoverage): InterviewMes
   return [{
     type: "activity",
     activity: {
-      id: "search-coverage", kind: "web_search", label: "搜索四类来源",
+      id: "search-coverage", kind: "web_search", label: "搜索品类范围依据",
       urls: Object.values(coverage).flat(), status: "completed",
     },
   }];

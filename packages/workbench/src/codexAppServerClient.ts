@@ -75,7 +75,12 @@ export class CodexAppServerError extends Error {
 }
 
 export interface CodexAppServerClient {
-  run(prompt: string, signal?: AbortSignal, threadId?: string): AsyncIterable<CodexAppServerStreamItem>;
+  run(
+    prompt: string,
+    signal?: AbortSignal,
+    threadId?: string,
+    outputSchema?: Record<string, unknown>,
+  ): AsyncIterable<CodexAppServerStreamItem>;
   close(): Promise<void>;
 }
 
@@ -103,7 +108,12 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
 
   constructor(private readonly options: CodexAppServerClientOptions) {}
 
-  async *run(prompt: string, signal?: AbortSignal, threadId?: string): AsyncIterable<CodexAppServerStreamItem> {
+  async *run(
+    prompt: string,
+    signal?: AbortSignal,
+    threadId?: string,
+    outputSchema?: Record<string, unknown>,
+  ): AsyncIterable<CodexAppServerStreamItem> {
     if (this.active) {
       throw new CodexAppServerError(
         "execution_failed",
@@ -118,7 +128,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     this.active = true;
     try {
       const transport = await this.ensureTransport();
-      yield* this.runTurn(transport, prompt, signal, threadId);
+      yield* this.runTurn(transport, prompt, signal, threadId, outputSchema);
     } finally {
       this.active = false;
     }
@@ -159,6 +169,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     prompt: string,
     signal?: AbortSignal,
     continuationThreadId?: string,
+    outputSchema?: Record<string, unknown>,
   ): AsyncIterable<CodexAppServerStreamItem> {
     const observedEvents = new Set<string>();
     const observedItemTypes = new Set<string>();
@@ -187,7 +198,8 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
       interrupt();
     }, this.options.timeoutMs ?? 180_000);
     if (threadId) {
-      transport.send("turn/start", turnRequestId, turnStartParams(this.options, threadId, prompt));
+      transport.send("turn/start", turnRequestId,
+        turnStartParams(this.options, threadId, prompt, outputSchema));
     } else {
       transport.send("thread/start", threadRequestId!, threadStartParams(this.options));
     }
@@ -204,7 +216,8 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
           const parsed = threadStartResultSchema.safeParse(response.data.result);
           if (!parsed.success) throw protocolError("thread/start 没有返回 ephemeral thread", parsed.error.message);
           threadId = parsed.data.thread.id;
-          transport.send("turn/start", turnRequestId, turnStartParams(this.options, threadId, prompt));
+          transport.send("turn/start", turnRequestId,
+            turnStartParams(this.options, threadId, prompt, outputSchema));
         }
         if (response.success && response.data.id === turnRequestId) {
           const parsed = turnStartResultSchema.safeParse(response.data.result);
@@ -327,7 +340,12 @@ function threadStartParams(options: CodexAppServerClientOptions) {
   };
 }
 
-function turnStartParams(options: CodexAppServerClientOptions, threadId: string, prompt: string) {
+function turnStartParams(
+  options: CodexAppServerClientOptions,
+  threadId: string,
+  prompt: string,
+  outputSchema?: Record<string, unknown>,
+) {
   return {
     threadId,
     input: [
@@ -335,7 +353,11 @@ function turnStartParams(options: CodexAppServerClientOptions, threadId: string,
       ...(options.skill ? [{ type: "skill", name: options.skill.name, path: options.skill.path }] : []),
     ],
     effort: options.reasoningEffort,
-    ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
+    // WHY：抓取规划的每个研究阶段使用独立小协议；官方 outputSchema 只约束当前 turn，
+    // 因而无需为阶段结果新建第二套会话或 App Server client。
+    ...(outputSchema ?? options.outputSchema
+      ? { outputSchema: outputSchema ?? options.outputSchema }
+      : {}),
   };
 }
 

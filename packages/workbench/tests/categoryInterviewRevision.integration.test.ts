@@ -74,13 +74,12 @@ describeWithPostgres("采访草案与正式抓取任务的阶段边界", () => {
     expect(harness.runtime.materializationInputs[0]?.draftMarkdown).toBe(draft.markdown);
     expect(await taskCount(db!, sessionId)).toBe(1);
     expect(confirmed.task).toMatchObject({
-      revision: 1, content: { jd: { applicable: true, disposition: "included" } },
+      revision: 1, content: { jd: { applicable: true, disposition: "excluded", scope: [] } },
     });
-    expect(confirmed.task.content.jd.scope).toContain("review_samples");
     expect(confirmed.task.content.sourceCandidates[0]?.observedAt).toBe("2026-08-19T14:00:00.000Z");
   });
 
-  it("确认草案时拒绝只有品牌官网、缺平台标准和技术原理的任务", async () => {
+  it("确认草案时允许来源种子不完整，完整来源留给 Planning Agent 深搜", async () => {
     const harness = await createHarness("抓电视");
     ({ db } = harness);
     sessionId = harness.view.session.id;
@@ -91,10 +90,14 @@ describeWithPostgres("采访草案与正式抓取任务的阶段边界", () => {
     incomplete.sourceCandidates = incomplete.sourceCandidates.filter((item) => item.sourceKind === "brand_official");
     harness.runtime.pushMaterialization(incomplete);
 
-    await expect(harness.interviews.confirmTaskDraft({
+    const confirmed = await harness.interviews.confirmTaskDraft({
       sessionId, draftId: draft.id, expectedRevision: view.session.revision,
-    })).rejects.toThrow("核心零售/市场平台、国家标准或监管来源、权威技术原理来源");
-    expect(await taskCount(db!, sessionId)).toBe(0);
+    });
+    expect(confirmed.task.content).toMatchObject({
+      jd: { disposition: "excluded", scope: [] },
+      sourceCandidates: [{ sourceKind: "brand_official" }, { sourceKind: "brand_official" }],
+    });
+    expect(await taskCount(db!, sessionId)).toBe(1);
   });
 });
 
@@ -286,10 +289,7 @@ function taskMaterialization(code: string, label: string): CaptureTaskMaterializ
 
 function completeCoverage() {
   return {
-    retailMarketUrls: ["https://www.jd.com/category"],
-    brandOfficialUrls: ["https://brand.example.com/products", "https://second-brand.example.com/products"],
-    standardsRegulationUrls: ["https://standard.example.com/document"],
-    technicalPrincipleUrls: ["https://technical.example.com/principles"],
+    scopeEvidenceUrls: ["https://industry.example.com/category-scope"],
   };
 }
 
@@ -303,7 +303,7 @@ function coverageMarkdown(coverage: ReturnType<typeof completeCoverage>) {
 function completedCoverageSearch(coverage: ReturnType<typeof completeCoverage>) {
   return {
     id: "search-professional-coverage", kind: "web_search" as const,
-    label: "搜索专业导购四类来源", urls: Object.values(coverage).flat(), status: "completed" as const,
+    label: "搜索品类范围依据", urls: Object.values(coverage).flat(), status: "completed" as const,
   };
 }
 

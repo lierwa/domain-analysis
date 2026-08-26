@@ -16,14 +16,14 @@ import {
 describe("来源执行准备", () => {
   it("只检查已确认计划的运行环境，不创建 Source Run", async () => {
     const source = {
-      key: "jd.refrigerator",
-      provider: { key: "jd.catalog-product", version: "2.0.0" },
+      key: "brand.official",
+      provider: { key: "public.web-resource", version: "1.0.0" },
       executionBlockers: [],
       targets: [{ providerConfiguration: [{ key: "operation", value: "catalog" }] }],
     } as unknown as CrawlPlanSource;
     const plan = {
       id: "plan-1", taskId: "task-1", taskRevision: 2, version: 3, status: "confirmed",
-      content: { executionChecklistVersion: 2, sources: [source] },
+      content: { executionChecklistVersion: 3, sources: [source] },
     } as unknown as CrawlPlan;
     const planning = {
       get: vi.fn(async () => ({ taskId: "task-1", taskRevision: 2, runs: [], plans: [plan] })),
@@ -34,7 +34,7 @@ describe("来源执行准备", () => {
     const expected: SourcePreparation = { status: "action_required", action: "login_required",
       sourceKey: source.key, message: "请扫码登录" };
     const provider = {
-      key: "jd.catalog-product", version: "2.0.0", validate: vi.fn(),
+      key: "public.web-resource", version: "1.0.0", validate: vi.fn(),
       prepare: vi.fn(async () => expected), preflight: vi.fn(async () => undefined),
       collect: async function* () { return; },
     } satisfies SourceProvider;
@@ -48,11 +48,11 @@ describe("来源执行准备", () => {
   });
 
   it("一个 Provider 预检受限时记录失败并继续执行其他 Provider", async () => {
-    const jdSource = executableSource("jd", "jd.catalog-product");
+    const restrictedSource = executableSource("restricted", "restricted.public-source");
     const publicSource = executableSource("public", "public.web-resource");
     const plan = {
       id: "plan-1", taskId: "task-1", taskRevision: 2, version: 3, status: "confirmed",
-      content: { executionChecklistVersion: 2, sources: [jdSource, publicSource] },
+      content: { executionChecklistVersion: 3, sources: [restrictedSource, publicSource] },
     } as unknown as CrawlPlan;
     const planning = {
       get: vi.fn(async () => ({ taskId: "task-1", taskRevision: 2, runs: [], plans: [plan] })),
@@ -95,18 +95,20 @@ describe("来源执行准备", () => {
       finishTarget: vi.fn(async () => ({})),
       finishRun,
       getRun: vi.fn(),
+      acquireBatchLease: vi.fn(async () => ({ release: async () => undefined })),
       acquireRunLease: vi.fn(async () => ({ release: async () => undefined })),
     } as unknown as SourceDatasetModule;
-    const jdCollect = vi.fn();
+    const restrictedCollect = vi.fn();
     const publicCollect = vi.fn();
-    const jdProvider = provider("jd.catalog-product", async () => { throw new Error("login_required"); }, jdCollect);
+    const restrictedProvider = provider("restricted.public-source",
+      async () => { throw new Error("access_denied"); }, restrictedCollect);
     const publicProvider = { ...provider("public.web-resource", async () => undefined, publicCollect),
       collect: async function* () {
         publicCollect();
         yield { type: "target.completed" as const, targetKey: "public-target" };
       } } satisfies SourceProvider;
     const execution = createSourceExecutionModule(planning, datasets,
-      new Map([[jdProvider.key, jdProvider], [publicProvider.key, publicProvider]]));
+      new Map([[restrictedProvider.key, restrictedProvider], [publicProvider.key, publicProvider]]));
 
     const events = [];
     for await (const event of execution.start({ taskId: "task-1", planId: "plan-1",
@@ -115,7 +117,7 @@ describe("来源执行准备", () => {
     expect(startBatch).toHaveBeenCalledOnce();
     expect(startBatch).toHaveBeenCalledWith({ taskId: "task-1", planId: "plan-1", planVersion: 3,
       taskRevision: 2, plannedSourceCount: 2 });
-    expect(startRun.mock.calls.map(([input]) => input.sourceKey)).toEqual(["jd", "public"]);
+    expect(startRun.mock.calls.map(([input]) => input.sourceKey)).toEqual(["restricted", "public"]);
     expect(startRun.mock.calls.every(([input]) => input.batchId === "batch-1")).toBe(true);
     expect(finishBatch).toHaveBeenCalledWith({ batchId: "batch-1", status: "partial",
       terminationReason: "1/2 个来源完成，1 个来源失败" });
@@ -126,21 +128,19 @@ describe("来源执行准备", () => {
       expect.objectContaining({ batchSize: 1, batchCooldownMs: 60_000 }),
     ]);
     expect(events).toContainEqual(expect.objectContaining({ type: "run.failed",
-      run: expect.objectContaining({ sourceCollectionPlanSourceKey: "jd",
-        terminationReason: expect.stringContaining("login_required") }) }));
-    expect(jdCollect).not.toHaveBeenCalled();
+      run: expect.objectContaining({ sourceCollectionPlanSourceKey: "restricted",
+        terminationReason: expect.stringContaining("access_denied") }) }));
+    expect(restrictedCollect).not.toHaveBeenCalled();
     expect(publicCollect).toHaveBeenCalledOnce();
   });
 
   it("规划模块判定旧计划不可执行时不创建批次、不预检也不访问 Provider", async () => {
     const oldPlan = { id: "plan-old", taskId: "task-1", taskRevision: 2, version: 1,
       status: "confirmed", content: { executionChecklistVersion: 2,
-        sources: [executableSource("jd", "public.web-resource")] } } as unknown as CrawlPlan;
+        sources: [executableSource("brand", "public.web-resource")] } } as unknown as CrawlPlan;
     const planning = {
       get: vi.fn(async () => ({ taskId: "task-1", taskRevision: 2, runs: [], plans: [oldPlan] })),
-      requireExecutablePlan: vi.fn(async () => { throw new Error(
-        "任务已纳入京东，但抓取计划缺少 jd.catalog-product@2.0.0 商品数据来源",
-      ); }),
+      requireExecutablePlan: vi.fn(async () => { throw new Error("历史计划缺少 version 3 Research Audit"); }),
     } as unknown as CrawlPlanningModule;
     const datasets = { startBatch: vi.fn(), startRun: vi.fn() } as unknown as SourceDatasetModule;
     const provider = { key: "public.web-resource", version: "1.0.0", validate: vi.fn(),
@@ -152,20 +152,21 @@ describe("来源执行准备", () => {
         expectedTaskRevision: 2, expectedPlanVersion: 1 })) { /* consume */ }
     };
 
-    await expect(consume()).rejects.toThrow("缺少 jd.catalog-product@2.0.0");
+    await expect(consume()).rejects.toThrow("缺少 version 3 Research Audit");
     expect(datasets.startBatch).not.toHaveBeenCalled();
     expect(provider.preflight).not.toHaveBeenCalled();
   });
 
   it("只从负责人指定的已停止运行继续，并把前序队列根传给 Provider", async () => {
-    const source = executableSource("jd", "jd.catalog-product");
+    const source = executableSource("brand", "public.web-resource");
     const plan = { id: "plan-1", taskId: "task-1", taskRevision: 2, version: 3,
-      status: "confirmed", content: { executionChecklistVersion: 2, sources: [source] } } as unknown as CrawlPlan;
+      status: "confirmed", content: { executionChecklistVersion: 3, sources: [source] } } as unknown as CrawlPlan;
     const planning = { get: vi.fn(async () => ({ taskId: "task-1", taskRevision: 2,
       runs: [], plans: [plan] })), requireExecutablePlan: vi.fn(async () => plan) } as unknown as CrawlPlanningModule;
-    const previous = { id: "run-old", taskId: "task-1", sourceCollectionPlanId: "plan-1",
-      sourceCollectionPlanSourceKey: "jd", sourceCollectionPlanVersion: 3,
-      providerKey: "jd.catalog-product", providerVersion: "2.0.0", requestBudget: 1,
+    const previous = { id: "run-old", taskId: "task-1", executionBatchId: "batch-1",
+      sourceCollectionPlanId: "plan-1",
+      sourceCollectionPlanSourceKey: "brand", sourceCollectionPlanVersion: 3,
+      providerKey: "public.web-resource", providerVersion: "1.0.0", requestBudget: 1,
       accessPolicy: { kind: "paced_http", version: "test", maxRequestsPerMinute: 1,
         minimumIntervalMs: 1, jitterMs: { min: 0, max: 0 }, batchSize: 1,
         batchCooldownMs: 60_000, maximumRunMs: 1_000 }, status: "stopped",
@@ -186,11 +187,11 @@ describe("来源执行准备", () => {
       finishRun, prepareRunForResume: vi.fn(async () => previous),
       acquireRunLease: vi.fn(async () => ({ release: async () => undefined })) } as unknown as SourceDatasetModule;
     const contexts: unknown[] = [];
-    const provider = { key: "jd.catalog-product", version: "2.0.0", validate: vi.fn(),
+    const provider = { key: "public.web-resource", version: "1.0.0", validate: vi.fn(),
       preflight: vi.fn(async () => undefined),
       collect: async function* (...args: Parameters<SourceProvider["collect"]>) {
         contexts.push(args[4]);
-        yield { type: "target.completed" as const, targetKey: "jd-target" };
+        yield { type: "target.completed" as const, targetKey: "brand-target" };
       } } satisfies SourceProvider;
     const execution = createSourceExecutionModule(planning, datasets, new Map([[provider.key, provider]]));
 
@@ -198,7 +199,8 @@ describe("来源执行准备", () => {
     for await (const event of execution.resume({ taskId: "task-1", runId: previous.id,
       expectedTaskRevision: 2, expectedPlanVersion: 3 })) events.push(event);
 
-    expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ resumedFromRunId: previous.id }));
+    expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ resumedFromRunId: previous.id,
+      batchId: previous.executionBatchId }));
     expect(contexts).toEqual([{ resumedFromRunId: previous.id, queueRunId: previous.id,
       accessPolicy: expect.objectContaining({ kind: "paced_http", version: "test",
         batchSize: 1, batchCooldownMs: 60_000 }) }]);
@@ -210,7 +212,7 @@ describe("来源执行准备", () => {
 function executableSource(key: string, providerKey: string) {
   return {
     key, name: key, provider: { key: providerKey,
-      version: providerKey === "jd.catalog-product" ? "2.0.0" : "1.0.0" }, executionBlockers: [],
+      version: "1.0.0" }, executionBlockers: [],
     targets: [{ key: `${key}-target`, quantity: { mode: "all_available" },
       providerConfiguration: [{ key: "operation", value: "exact" }] }],
     accessPolicy: { kind: "paced_http", version: "test", maxRequestsPerMinute: 1,
@@ -221,7 +223,7 @@ function executableSource(key: string, providerKey: string) {
 
 function provider(key: string, preflight: () => Promise<void>, collectCalled: ReturnType<typeof vi.fn>) {
   return {
-    key, version: key === "jd.catalog-product" ? "2.0.0" : "1.0.0", validate: vi.fn(), preflight,
+    key, version: "1.0.0", validate: vi.fn(), preflight,
     collect: async function* () { collectCalled(); },
   } satisfies SourceProvider;
 }

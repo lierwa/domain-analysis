@@ -111,6 +111,22 @@ export const crawlPlanningRuns = workbenchSchema.table("crawl_planning_runs", {
   finishedAt: timestamp("finished_at", { mode: "string", withTimezone: true }),
 }, (table) => [index("crawl_planning_run_task_time_idx").on(table.taskId, table.startedAt)]);
 
+export const crawlPlanningStageCheckpoints = workbenchSchema.table("crawl_planning_stage_checkpoints", {
+  runId: text("run_id").notNull().references(() => crawlPlanningRuns.id, { onDelete: "cascade" }),
+  stageKey: text("stage_key").notNull(),
+  sequence: integer("sequence").notNull(),
+  label: text("label").notNull(),
+  status: text("status", { enum: ["running", "completed", "failed"] }).notNull(),
+  timelineParts: jsonb("timeline_parts_json").$type<InterviewMessageTimelinePart[]>().notNull(),
+  error: text("error"),
+  startedAt: timestamp("started_at", { mode: "string", withTimezone: true }).notNull(),
+  finishedAt: timestamp("finished_at", { mode: "string", withTimezone: true }),
+}, (table) => [
+  // WHY：稳定 stage key 是 Workbench 的幂等投影键；DBOS 恢复或至少一次 step 不得重复追加时间线。
+  uniqueIndex("crawl_planning_stage_checkpoint_uq").on(table.runId, table.stageKey),
+  uniqueIndex("crawl_planning_stage_sequence_uq").on(table.runId, table.sequence),
+]);
+
 export const sourceCollectionPlans = workbenchSchema.table("source_collection_plans", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull().references(() => captureTasks.id),
@@ -123,6 +139,9 @@ export const sourceCollectionPlans = workbenchSchema.table("source_collection_pl
   createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
   confirmedAt: timestamp("confirmed_at", { mode: "string", withTimezone: true }),
 }, (table) => [
+  // WHY：父 workflow 恢复时最终业务写可能至少一次执行；每个 Planning Run 最多生成一个计划版本。
+  uniqueIndex("source_collection_plan_planning_run_uq").on(table.planningRunId)
+    .where(sql`${table.planningRunId} is not null`),
   uniqueIndex("source_collection_plan_task_hash_uq").on(table.taskId, table.contentHash),
   // WHY：旧来源计划没有 planning run；partial unique 只约束新计划版本，不伪造或破坏历史行。
   uniqueIndex("source_collection_plan_task_version_uq").on(table.taskId, table.version)

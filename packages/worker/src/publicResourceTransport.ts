@@ -1,14 +1,13 @@
 import { lookup as systemLookup, type LookupAddress } from "node:dns";
 import type { IncomingMessage } from "node:http";
-import {
-  Agent,
-  request as httpsRequest,
-  type AgentOptions,
-  type RequestOptions,
-} from "node:https";
-import { isIP } from "node:net";
+import { Agent, request as httpsRequest, type AgentOptions } from "node:https";
+import { isIP, type LookupFunction } from "node:net";
 import { Readable } from "node:stream";
 
+import { ProxyConfiguration } from "@crawlee/core";
+import { HttpCrawler } from "@crawlee/http";
+
+import { createEphemeralCrawleeConfiguration } from "./ephemeralCrawleeConfiguration";
 import { assertPublicAddress, assertPublicHttpsUrl, isFakeIpAddress } from "./publicNetworkPolicy";
 
 export const publicWebUserAgent = "DomainAnalysisBot/0.1";
@@ -20,22 +19,25 @@ export interface RawPublicResponse {
   statusCode: number;
   headers: Record<string, string>;
   body: Uint8Array<ArrayBuffer>;
+  finalUrl?: string;
 }
 
 export type PublicAddressLookup = (hostname: string, signal?: AbortSignal) => Promise<LookupAddress[]>;
 
-export interface PinnedHttpsRequestInput {
-  url: URL;
-  address: string;
-  maximumBytes: number;
-  signal?: AbortSignal;
-  agent: Agent;
+export interface PublicRedirectHop {
+  fromUrl: URL;
+  toUrl: URL;
+  statusCode: number;
+  headers: Record<string, string>;
 }
+
+export type PublicRedirectEvent =
+  | { type: "response"; hop: PublicRedirectHop }
+  | { type: "request"; toUrl: URL };
 
 export interface PublicResourceTransportOptions {
   lookup?: PublicAddressLookup;
   resolveViaDoh?: PublicAddressLookup;
-  requestPinned?: (input: PinnedHttpsRequestInput) => Promise<RawPublicResponse>;
   proxyEnv?: NodeJS.ProcessEnv;
 }
 
@@ -46,32 +48,22 @@ export function createPublicResourceTransport(options: PublicResourceTransportOp
   const lookup = options.lookup ?? lookupAll;
   const resolveViaDoh = options.resolveViaDoh
     ?? ((hostname: string, signal?: AbortSignal) => resolveGooglePublicDns(hostname, agent, signal));
-  const requestPinned = options.requestPinned ?? requestPinnedHttps;
+  const proxyUrl = proxyEnv.https_proxy ?? proxyEnv.HTTPS_PROXY;
 
-  return async (url: URL, maximumBytes: number, signal?: AbortSignal) => {
-    assertPublicHttpsUrl(url.href);
-    const address = await resolvePublicTarget(url.hostname, lookup, resolveViaDoh,
-      hasHttpsProxy(proxyEnv), signal);
-    return requestPinned({ url, address, maximumBytes, signal, agent });
-  };
-}
-
-export function pinnedHttpsRequestOptions(
-  url: URL,
-  address: string,
-  agent?: Agent,
-  signal?: AbortSignal,
-): RequestOptions {
-  return {
-    protocol: "https:",
-    hostname: address,
-    port: 443,
-    servername: url.hostname,
-    method: "GET",
-    path: `${url.pathname}${url.search}`,
-    ...(agent ? { agent } : {}),
-    ...(signal ? { signal } : {}),
-    headers: { host: url.host, "user-agent": publicWebUserAgent, accept: "*/*" },
+  return async (url: URL, maximumBytes: number, signal?: AbortSignal,
+    onRedirect?: (event: PublicRedirectEvent) => Promise<void>) => {
+    const initialUrl = assertPublicHttpsUrl(url.href);
+    const addresses = new Map<string, LookupAddress>();
+    const validateUrl = async (candidate: URL) => {
+      assertPublicHttpsUrl(candidate.href);
+      if (candidate.origin !== initialUrl.origin) throw new Error("公共资源重定向不能跨 origin");
+      const address = await resolvePublicTarget(candidate.hostname, lookup, resolveViaDoh,
+        hasHttpsProxy(proxyEnv), signal);
+      addresses.set(candidate.hostname, address);
+    };
+    await validateUrl(initialUrl);
+    return downloadWithCrawlee({ url: initialUrl, maximumBytes, signal, proxyUrl,
+      addresses, validateUrl, onRedirect });
   };
 }
 
@@ -90,17 +82,17 @@ export async function readBoundedBody(stream: Readable, maximumBytes: number) {
   return Buffer.concat(chunks, total);
 }
 
-async function resolvePublicTarget(
+export async function resolvePublicTarget(
   hostname: string,
   lookup: PublicAddressLookup,
   resolveViaDoh: PublicAddressLookup,
   proxyAvailable: boolean,
   signal?: AbortSignal,
-) {
+): Promise<LookupAddress> {
   const literalFamily = isIP(hostname);
   if (literalFamily) {
     assertPublicAddress(hostname, literalFamily);
-    return hostname;
+    return { address: hostname, family: literalFamily };
   }
   const systemAddresses = await lookup(hostname, signal);
   if (systemAddresses.length === 0) throw new Error(`DNS 没有返回地址：${hostname}`);
@@ -117,7 +109,7 @@ async function resolvePublicTarget(
 function selectPublicAddress(hostname: string, addresses: LookupAddress[]) {
   if (addresses.length === 0) throw new Error(`DNS 没有返回地址：${hostname}`);
   for (const value of addresses) assertPublicAddress(value.address, value.family);
-  return addresses[0]!.address;
+  return addresses[0]!;
 }
 
 async function resolveGooglePublicDns(hostname: string, agent: Agent, signal?: AbortSignal) {
@@ -160,18 +152,9 @@ function parseDohResponse(body: Uint8Array<ArrayBuffer>) {
   return { Status: candidate.Status as number, TC: candidate.TC, Answer: answers };
 }
 
-async function requestPinnedHttps(input: PinnedHttpsRequestInput) {
-  // WHY：安全校验过的公网 IP 必须就是本次连接地址；原域名仅保留给 Host/SNI，避免二次 DNS rebinding。
-  return requestHttps(input.url, {
-    options: pinnedHttpsRequestOptions(input.url, input.address, input.agent, input.signal),
-    maximumBytes: input.maximumBytes,
-  });
-}
-
 function requestHttps(
   url: URL,
-  input: { maximumBytes: number; options?: RequestOptions; agent?: Agent;
-    signal?: AbortSignal; headers?: Record<string, string> },
+  input: { maximumBytes: number; agent?: Agent; signal?: AbortSignal; headers?: Record<string, string> },
 ): Promise<RawPublicResponse> {
   return new Promise((resolve, reject) => {
     const onResponse = async (response: IncomingMessage) => {
@@ -183,10 +166,8 @@ function requestHttps(
         reject(error);
       }
     };
-    const request = input.options
-      ? httpsRequest(input.options, onResponse)
-      : httpsRequest(url, { agent: input.agent, signal: input.signal,
-        method: "GET", headers: input.headers }, onResponse);
+    const request = httpsRequest(url, { agent: input.agent, signal: input.signal,
+      method: "GET", headers: input.headers }, onResponse);
     request.setTimeout(requestTimeoutMs, () => request.destroy(new Error("公共资源请求超时")));
     request.on("error", reject);
     request.end();
@@ -214,4 +195,107 @@ function hasHttpsProxy(env: Record<string, string>) {
 function normalizeHeaders(headers: Record<string, string | string[] | undefined>) {
   return Object.fromEntries(Object.entries(headers).flatMap(([key, value]) => value === undefined
     ? [] : [[key.toLowerCase(), Array.isArray(value) ? value.join(", ") : value]]));
+}
+
+async function downloadWithCrawlee(input: {
+  url: URL;
+  maximumBytes: number;
+  signal?: AbortSignal;
+  proxyUrl?: string;
+  addresses: Map<string, LookupAddress>;
+  validateUrl: (url: URL) => Promise<void>;
+  onRedirect?: (event: PublicRedirectEvent) => Promise<void>;
+}) {
+  let response: RawPublicResponse | undefined;
+  let failure: Error | undefined;
+  let currentUrl = input.url;
+  const crawler = new HttpCrawler({
+    minConcurrency: 1,
+    maxConcurrency: 1,
+    maxRequestsPerCrawl: 1,
+    maxRequestRetries: 0,
+    maxSessionRotations: 0,
+    useSessionPool: false,
+    retryOnBlocked: false,
+    navigationTimeoutSecs: 30,
+    requestHandlerTimeoutSecs: 30,
+    additionalMimeTypes: ["*/*"],
+    // WHY：锁定的 Crawlee 3.18.1 会把 Node 不支持的 GBK 等正文先转成 UTF-8，导致 Source Snapshot
+    // 丢失源站原字节。这里选一个 Node 原生支持的编码以关闭该转码分支；真正编码仍由响应头与 HTML
+    // meta 交给内容层判定。升级 Crawlee 时必须重跑 ZOL/Sony/TCL 三编码门。
+    forceResponseEncoding: "utf8",
+    ...(input.proxyUrl ? { proxyConfiguration: new ProxyConfiguration({ proxyUrls: [input.proxyUrl] }) } : {}),
+    preNavigationHooks: [async (_context, gotOptions) => {
+      gotOptions.followRedirect = true;
+      // WHY：一个规范化跳转足以覆盖真实官网的 canonical/robots 重定向；更多跳转必须回到新计划，
+      // 不能让成熟客户端的默认上限暗中扩大已确认请求预算。
+      gotOptions.maxRedirects = 1;
+      gotOptions.headers = { ...gotOptions.headers, accept: "*/*", "accept-encoding": "identity",
+        "user-agent": publicWebUserAgent };
+      if (input.signal) gotOptions.signal = input.signal;
+      if (!input.proxyUrl) gotOptions.dnsLookup = pinnedLookup(input.addresses, input.validateUrl);
+      gotOptions.hooks ??= {};
+      gotOptions.hooks.beforeRedirect ??= [];
+      gotOptions.hooks.beforeRedirect.push(async (redirectOptions, redirectResponse) => {
+        if (!redirectOptions.url) throw new Error("公共资源重定向缺少目标 URL");
+        const toUrl = new URL(redirectOptions.url.toString());
+        await input.onRedirect?.({ type: "response", hop: { fromUrl: currentUrl, toUrl,
+          statusCode: redirectResponse.statusCode,
+          headers: normalizeHeaders(redirectResponse.headers) } });
+        await input.validateUrl(toUrl);
+        await input.onRedirect?.({ type: "request", toUrl });
+        currentUrl = toUrl;
+      });
+    }],
+    requestHandler: async ({ body, request: crawleeRequest, response: crawleeResponse }) => {
+      const bytes = Buffer.from(body);
+      if (bytes.byteLength > input.maximumBytes) {
+        throw new Error(`来源响应超过最大字节：${input.maximumBytes}`);
+      }
+      response = { statusCode: crawleeResponse.statusCode ?? 0,
+        headers: normalizeHeaders(crawleeResponse.headers), body: Uint8Array.from(bytes),
+        finalUrl: crawleeRequest.loadedUrl ?? currentUrl.href };
+    },
+    failedRequestHandler: async (_context, error) => {
+      failure = new Error(error instanceof Error ? error.message : "Crawlee 公共资源请求失败");
+    },
+  }, createEphemeralCrawleeConfiguration());
+  try {
+    await crawler.run([input.url.href]);
+  } finally {
+    await crawler.teardown();
+  }
+  if (failure) throw failure;
+  if (!response) throw new Error("Crawlee 公共资源请求没有返回响应");
+  return response;
+}
+
+function pinnedLookup(
+  addresses: Map<string, LookupAddress>,
+  validateUrl: (url: URL) => Promise<void>,
+): LookupFunction {
+  return (hostname, options, callback) => {
+    const finish = async () => {
+      let selected = addresses.get(hostname);
+      if (!selected) {
+        await validateUrl(new URL(`https://${hostname}/`));
+        selected = addresses.get(hostname);
+      }
+      if (!selected) throw new Error(`DNS 没有返回地址：${hostname}`);
+      if (typeof options === "object" && options.all) {
+        // WHY：got-scraping 会请求 lookup(all=true)；必须遵守 Node DNS 重载，否则客户端会读到 undefined 地址。
+        (callback as unknown as (error: null, addresses: LookupAddress[]) => void)(null, [selected]);
+        return;
+      }
+      callback(null, selected.address, selected.family);
+    };
+    finish().catch((error: unknown) => {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (typeof options === "object" && options.all) {
+        (callback as unknown as (error: Error, addresses: LookupAddress[]) => void)(failure, []);
+        return;
+      }
+      callback(failure, "", 4);
+    });
+  };
 }

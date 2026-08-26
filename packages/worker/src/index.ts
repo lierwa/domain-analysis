@@ -2,8 +2,6 @@ export * from "./sourceAccessError";
 export * from "./pacedAccessGate";
 export * from "./pacedSessionHttpAccess";
 export * from "./ephemeralCrawleeConfiguration";
-export * from "./jdCatalogProvider";
-export * from "./jdCatalogParser";
 export * from "./publicNetworkPolicy";
 export * from "./publicResourceTransport";
 export * from "./publicWebResourceProvider";

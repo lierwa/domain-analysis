@@ -1,7 +1,7 @@
 # 数据抓取与清洗平台开发文档导航
 
 状态：开发入口
-更新日期：2026-08-21
+更新日期：2026-08-26
 
 ## 1. 用途
 
@@ -38,8 +38,8 @@
 | `ROADMAP.md` | 阶段、阶段产物和停止门 | 当前进度、选型结论 |
 | `RESEARCH.md` | 技术问题、候选开源方案、证据与处置状态 | 产品需求、实施进度 |
 | `CRAWL-PLANNING-DESIGN.md` | Capture Task 到版本化 Crawl Plan 的产品流程、contract、UI 和验收门 | Provider 实现、真实来源抓取和阶段进度 |
-| `JD-COLLECTION-DESIGN.md` | 京东分类、旗舰店、商品详情、评价采集的详细开发与验收方案 | 全局架构、当前完成度；用户复核通过前不作为实施完成证明 |
-| `JD-COLLECTION-ITERATION.md` | ROADMAP 1D 下一轮最小但完整的工程范围、Patch Disposition、实施切片和验收门 | 平行 roadmap/progress/architecture；代码已实现或真实抓取已通过的证明 |
+| `JD-COLLECTION-DESIGN.md` | 2026-08-21 的历史京东详情/评价方案，仅保留失败路径与既有资产证据 | 当前实现依据；其中详情、登录、旗舰店和评价承诺已被替代 |
+| `JD-COLLECTION-ITERATION.md` | 已被 ADR 0018 替代的京东目录历史迭代记录 | 当前 AI 深搜规划实现依据或完成证明 |
 | `PROGRESS.md` | 当前阶段、已验证事实、阻塞项、下一步和验证记录 | 详细架构和重复产品资料 |
 | `HANDOFF.md` | 跨电脑环境恢复、启动门和下一工作入口 | 充当进度、路线图或架构事实源 |
 | `AGENT-SCORECARD.md` | 用户明确加减分、原因、纠正和当前积分 | 项目开发进度和技术决策 |
@@ -88,7 +88,7 @@
 
 ## 7. 当前开发入口
 
-当前阶段和下一步以 `PROGRESS.md` 为准。项目已收口为“数据抓取、数据清洗”两个阶段。用户于 2026-08-19 明确授权进入 `ROADMAP.md` 1B 的最小规划纵切片；当前实现 Capture Task 到版本化 Crawl Plan 的可见规划、修订和确认。1A 的专业问答质量仍需真实 PC 人工验收，但不再阻塞这次已明确授权的 1B 实现；它和计划确认仍共同阻塞任何真实来源抓取。
+当前阶段和下一步以 `PROGRESS.md` 为准。项目已收口为“数据抓取、数据清洗”两个阶段。Workbench → Graphile → Batch/Run → 不可变 Snapshot → 页面/JSONL/CSV → 重启持久化的 1C 闭环已通过；历史电视 v9 只保留为失败与内容质量证据。当前入口是 1E 的 `public.web-resource@2.0.0`：新 v4 Plan 显式组合 exact/site 路由，Crawlee 持久队列执行同源发现，Source Dataset 分开保存原始快照和内容验收。新计划仍必须由负责人确认后才能 Start。
 
 ## 8. 历史文档处置
 

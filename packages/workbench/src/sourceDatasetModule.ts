@@ -48,6 +48,7 @@ import { contentHash } from "./contentHash";
 import { createCacacheSourceAssetStore, type SourceAssetStore } from "./sourceAssetStore";
 import { serializeSourceDataset } from "./sourceDatasetExport";
 import { SourceDatasetError } from "./sourceDatasetError";
+import { acquireSourceBatchLease, recoverInterruptedSourceBatches } from "./sourceExecutionRecovery";
 import {
   acquireSourceRunLease,
   createSourceRequestAdmission,
@@ -67,6 +68,8 @@ export interface SourceDatasetModule extends SourceRequestAdmissionPort {
   exportRun(input: { runId: string; format: "jsonl" | "csv" }): AsyncIterable<string>;
   openAsset(input: { runId: string; assetId: string }): Promise<{ asset: SourceAsset; content: Readable }>;
   acquireRunLease(runId: string): Promise<{ release(): Promise<void> }>;
+  acquireBatchLease(batchId: string): Promise<{ release(): Promise<void> }>;
+  recoverInterruptedBatches(input?: { taskId?: string }): Promise<string[]>;
   prepareRunForResume(runId: string): Promise<SourceCollectionRun>;
   startBatch(input: { taskId: string; planId: string; planVersion: number; taskRevision: number;
     plannedSourceCount: number }): Promise<SourceCollectionBatch>;
@@ -106,6 +109,8 @@ export function createSourceDatasetModule(
     exportRun: (input) => exportRun(db, input),
     openAsset: (input) => openAsset(db, store, input),
     acquireRunLease: (runId) => acquireSourceRunLease(db, runId),
+    acquireBatchLease: (batchId) => acquireSourceBatchLease(db, batchId),
+    recoverInterruptedBatches: (input) => recoverInterruptedSourceBatches(db, input?.taskId),
     prepareRunForResume: (runId) => prepareSourceRunForResume(db, runId),
     startBatch: (input) => startBatch(db, input),
     finishBatch: (input) => finishBatch(db, input),
@@ -291,8 +296,10 @@ async function commitSnapshot(db: WorkbenchDb, store: SourceAssetStore, raw: Sna
         ...reference,
       })));
     }
-    await incrementCounters(transaction, run.id, target.id,
-      input.observation.state === "accessible", prepared.length);
+    const counterOutcome = input.observation.state !== "accessible"
+      || input.observation.contentAssessment?.status === "rejected" ? "failed"
+      : input.observation.contentAssessment?.status === "supporting" ? "supporting" : "accepted";
+    await incrementCounters(transaction, run.id, target.id, counterOutcome, prepared.length);
   });
   return (await loadRun(db, input.runId))!;
 }
@@ -338,16 +345,16 @@ async function assertIdempotentReplay(transaction: WorkbenchTransaction, runId: 
 }
 
 async function incrementCounters(transaction: WorkbenchTransaction, runId: string, targetId: string,
-  accessible: boolean, assetCount: number) {
+  outcome: "accepted" | "supporting" | "failed", assetCount: number) {
   const runUpdate = { snapshotCount: sql`${sourceCollectionRuns.snapshotCount} + 1`,
-    accessibleCount: accessible ? sql`${sourceCollectionRuns.accessibleCount} + 1` : sourceCollectionRuns.accessibleCount,
-    failedCount: accessible ? sourceCollectionRuns.failedCount : sql`${sourceCollectionRuns.failedCount} + 1`,
+    accessibleCount: outcome === "accepted" ? sql`${sourceCollectionRuns.accessibleCount} + 1` : sourceCollectionRuns.accessibleCount,
+    failedCount: outcome === "failed" ? sql`${sourceCollectionRuns.failedCount} + 1` : sourceCollectionRuns.failedCount,
     assetCount: assetCount > 0 ? sql`${sourceCollectionRuns.assetCount} + ${assetCount}` : sourceCollectionRuns.assetCount };
   await transaction.update(sourceCollectionRuns).set(runUpdate).where(eq(sourceCollectionRuns.id, runId));
   await transaction.update(sourceCollectionTargetRuns).set({
     snapshotCount: sql`${sourceCollectionTargetRuns.snapshotCount} + 1`,
-    accessibleCount: accessible ? sql`${sourceCollectionTargetRuns.accessibleCount} + 1` : sourceCollectionTargetRuns.accessibleCount,
-    failedCount: accessible ? sourceCollectionTargetRuns.failedCount : sql`${sourceCollectionTargetRuns.failedCount} + 1`,
+    accessibleCount: outcome === "accepted" ? sql`${sourceCollectionTargetRuns.accessibleCount} + 1` : sourceCollectionTargetRuns.accessibleCount,
+    failedCount: outcome === "failed" ? sql`${sourceCollectionTargetRuns.failedCount} + 1` : sourceCollectionTargetRuns.failedCount,
     assetCount: assetCount > 0 ? sql`${sourceCollectionTargetRuns.assetCount} + ${assetCount}` : sourceCollectionTargetRuns.assetCount,
   }).where(eq(sourceCollectionTargetRuns.id, targetId));
 }
@@ -437,6 +444,7 @@ function normalizeSnapshot(row: typeof sourceSnapshots.$inferSelect) {
     finalUrl: rawObservation.finalUrl ?? undefined, observedAt: rawObservation.observedAt,
     state: normalizeState(rawObservation.state), httpStatus: rawObservation.httpStatus ?? legacyHttp?.status,
     responseHeaders: rawObservation.responseHeaders ?? {},
+    contentAssessment: rawObservation.contentAssessment ?? undefined,
     error: rawObservation.error ?? rawObservation.failureDetail ?? undefined });
   const parsedPayload = rawSourcePayloadSchema.safeParse(row.payload);
   return sourceSnapshotSchema.parse({ id: row.id, runId: row.runId, targetKey: row.targetKey ?? undefined,

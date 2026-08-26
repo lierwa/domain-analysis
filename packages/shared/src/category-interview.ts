@@ -126,11 +126,8 @@ const decisionWithdrawalSchema = z.object({
 const draftCoverageUrlSchema = z.string().url().max(2048);
 
 export const categoryInterviewDraftCoverageSchema = z.object({
-  retailMarketUrls: z.array(draftCoverageUrlSchema).min(1).max(100),
-  // WHY：专业导购的横向比较至少要有两个独立品牌入口；固定草案总数没有意义，但单一品牌不能代表市场。
-  brandOfficialUrls: z.array(draftCoverageUrlSchema).min(2).max(100),
-  standardsRegulationUrls: z.array(draftCoverageUrlSchema).min(1).max(100),
-  technicalPrincipleUrls: z.array(draftCoverageUrlSchema).min(1).max(100),
+  // WHY：采访只需证明品类边界经过真实调查；品牌、官网、标准和原理的执行入口由确认后的 Planning Agent 深搜并对账。
+  scopeEvidenceUrls: z.array(draftCoverageUrlSchema).min(1).max(100),
 }).strict();
 
 export const categoryInterviewRuntimeOutputSchema = z.object({
@@ -147,7 +144,7 @@ export const categoryInterviewRuntimeOutputSchema = z.object({
   // WHY：采访只交付可读范围草案；正式业务结构必须晚于用户确认，避免来源字段反向阻断自然语言回答。
   draftMarkdown: z.string().min(1).max(100_000).nullable().optional()
     .transform((value) => value ?? undefined),
-  // WHY：这只是把草案中的四类入口交给 Workbench 交叉校验的最小凭证，不是提前生成 Capture Task 或来源对象。
+  // WHY：这只是把草案中的品类范围依据交给 Workbench 交叉校验，不是提前生成执行来源清单。
   draftCoverage: categoryInterviewDraftCoverageSchema.nullable().optional()
     .transform((value) => value ?? undefined),
 }).strict().superRefine((output, context) => {
@@ -194,14 +191,14 @@ export const categoryInterviewRuntimeOutputSchema = z.object({
     context.addIssue({
       code: "custom",
       path: ["draftCoverage"],
-      message: "生成草案时必须同时返回四类来源覆盖凭证",
+      message: "生成草案时必须同时返回品类范围调查凭证",
     });
   }
   if (!output.draftMarkdown && output.draftCoverage) {
     context.addIssue({
       code: "custom",
       path: ["draftCoverage"],
-      message: "只有生成草案时才能返回来源覆盖凭证",
+      message: "只有生成草案时才能返回品类范围调查凭证",
     });
   }
 });

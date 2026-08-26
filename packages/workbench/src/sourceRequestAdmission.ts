@@ -19,6 +19,7 @@ import {
 import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 
 import { SourceDatasetError } from "./sourceDatasetError";
+import { acquireSourceExecutionLease } from "./sourceExecutionLease";
 
 type WorkbenchTransaction = Parameters<Parameters<WorkbenchDb["transaction"]>[0]>[0];
 
@@ -37,41 +38,12 @@ export function createSourceRequestAdmission(
 }
 
 export async function acquireSourceRunLease(db: WorkbenchDb, runId: string) {
-  const client = await db.$client.connect();
-  let released = false;
-  let acquired = false;
-  try {
-    const result = await client.query<{ acquired: boolean }>(
-      "select pg_try_advisory_lock(hashtext('source-run-lease'), hashtext($1)) as acquired",
-      [runId],
-    );
-    if (!result.rows[0]?.acquired) {
-      throw new SourceDatasetError("invalid_state", "Source Run 仍由活动执行进程持有，不能继续");
-    }
-    acquired = true;
-    const run = await db.query.sourceCollectionRuns.findFirst({ where: eq(sourceCollectionRuns.id, runId) });
-    if (!run) throw new SourceDatasetError("run_not_found", `来源运行不存在：${runId}`);
-    return { async release() {
-      if (released) return;
-      released = true;
-      try {
-        await client.query("select pg_advisory_unlock(hashtext('source-run-lease'), hashtext($1))", [runId]);
-      } finally { client.release(); }
-    } };
-  } catch (error) {
-    if (!released) {
-      try {
-        if (acquired) {
-          await client.query("select pg_advisory_unlock(hashtext('source-run-lease'), hashtext($1))", [runId]);
-        }
-        client.release();
-      } catch {
-        // WHY：解锁语句本身失败时不能把可能仍持有 session lock 的连接放回池中。
-        client.release(true);
-      }
-    }
-    throw error;
-  }
+  const lease = await acquireSourceExecutionLease(db, "source-run-lease", runId,
+    "Source Run 仍由活动执行进程持有，不能继续");
+  const run = await db.query.sourceCollectionRuns.findFirst({ where: eq(sourceCollectionRuns.id, runId) });
+  if (run) return lease;
+  await lease.release();
+  throw new SourceDatasetError("run_not_found", `来源运行不存在：${runId}`);
 }
 
 export async function prepareSourceRunForResume(db: WorkbenchDb, runId: string) {
@@ -223,11 +195,12 @@ async function reserveRequest(
       throw new SourceDatasetError("invalid_state", `捕获工作项不存在：${input.workKey}`);
     }
     await ensureGate(transaction, input);
-    const gate = await transaction.query.sourceAccessGateStates.findFirst({
+    const existingGate = await transaction.query.sourceAccessGateStates.findFirst({
       where: eq(sourceAccessGateStates.key, input.gateKey),
     });
-    if (!gate) throw new SourceDatasetError("invalid_state", `请求 gate 创建失败：${input.gateKey}`);
-    assertGateIdentity(gate, input);
+    if (!existingGate) throw new SourceDatasetError("invalid_state", `请求 gate 创建失败：${input.gateKey}`);
+    const admissionTime = now();
+    const gate = await alignGatePolicy(transaction, existingGate, input, admissionTime);
     if (gate.circuitState === "open") return {
       status: "blocked", reason: gate.blockedReason ?? "circuit_open",
       manualResumeRequired: gate.manualResumeRequired,
@@ -238,7 +211,6 @@ async function reserveRequest(
     if (!run.requestBudget || attempted[0]!.count >= run.requestBudget) {
       return { status: "blocked", reason: "request_budget_exhausted", manualResumeRequired: false };
     }
-    const admissionTime = now();
     const deferred = deferredAdmission(gate, admissionTime, input.maxRequestsPerMinute);
     if (deferred) return deferred;
     const attempt = await insertAttempt(transaction, input, admissionTime);
@@ -368,14 +340,34 @@ function currentWindow(gate: typeof sourceAccessGateStates.$inferSelect, at: Dat
   return { startedAt: normalizeTimestamp(gate.windowStartedAt), count: gate.windowRequestCount };
 }
 
-function assertGateIdentity(
+async function alignGatePolicy(
+  transaction: WorkbenchTransaction,
   gate: typeof sourceAccessGateStates.$inferSelect,
   input: Parameters<SourceRequestAdmissionPort["reserveRequest"]>[0],
+  at: Date,
 ) {
-  if (gate.providerKey !== input.providerKey || gate.providerVersion !== input.providerVersion
-    || gate.policyVersion !== input.policyVersion) {
+  if (gate.providerKey !== input.providerKey || gate.providerVersion !== input.providerVersion) {
     throw new SourceDatasetError("invalid_state", `请求 gate 身份或策略冲突：${input.gateKey}`);
   }
+  if (gate.policyVersion === input.policyVersion) return gate;
+  const active = await transaction.select({ count: sql<number>`count(*)::int` })
+    .from(sourceRequestAttempts).where(and(eq(sourceRequestAttempts.gateKey, input.gateKey),
+      eq(sourceRequestAttempts.state, "started")));
+  if (gate.circuitState !== "closed" || gate.manualResumeRequired || active[0]!.count > 0) {
+    throw new SourceDatasetError("invalid_state", `请求 gate 身份或策略冲突：${input.gateKey}`);
+  }
+  const inheritedNext = Math.max(
+    gate.nextEligibleAt ? new Date(gate.nextEligibleAt).getTime() : 0,
+    gate.lastAttemptAt ? new Date(gate.lastAttemptAt).getTime() + input.minimumIntervalMs : 0,
+  );
+  // WHY：计划可增量升级限速版本，但不能借换版本清空旧请求时间；更严格的新间隔从上次真实请求继续计算。
+  const updated = await transaction.update(sourceAccessGateStates).set({
+    policyVersion: input.policyVersion,
+    nextEligibleAt: inheritedNext > 0 ? new Date(inheritedNext).toISOString() : null,
+    updatedAt: at.toISOString(),
+  }).where(eq(sourceAccessGateStates.key, input.gateKey)).returning();
+  if (!updated[0]) throw new SourceDatasetError("invalid_state", `请求 gate 策略升级失败：${input.gateKey}`);
+  return updated[0];
 }
 
 function validateAdmissionInput(input: Parameters<SourceRequestAdmissionPort["reserveRequest"]>[0]) {

@@ -1,304 +1,414 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { rm } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
-import { crawlPlanningRuntimeOutputSchema, type CaptureTask,
-  type CrawlPlanningRuntimeOutput } from "@domain-analysis/shared";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CodexAppServerError } from "../src/codexAppServerClient";
 import { createCodexCrawlPlanningRuntime } from "../src/codexCrawlPlanningRuntime";
+import {
+  brandCandidateTask,
+  collect,
+  fakeExecutable,
+  type FakeScenario,
+  historicalPlan,
+  invalidPlannedMapping,
+  knowledge,
+  landscape,
+  landscapeWithAlias,
+  marketCatalog,
+  mappingWithAdditional,
+  pdfTask,
+  plannedMapping,
+  saturation,
+  saturationWithBrand,
+  task,
+  unresolvedMapping,
+  validStageOutputs,
+} from "./codexCrawlPlanningRuntimeTestSupport";
 
 const temporaryRoots: string[] = [];
 const runtimeClosers: Array<() => Promise<void>> = [];
+const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const firstMappingOutput = 4;
+const knowledgeOutput = 6;
 
 afterEach(async () => {
   await Promise.all(runtimeClosers.splice(0).map((close) => close()));
   await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe("Codex 抓取规划运行时", () => {
-  it("通过显式 Skill 和网页搜索交付 typed 计划候选", async () => {
-    const runtime = createCodexCrawlPlanningRuntime({
-      repositoryRoot: process.cwd(), model: "gpt-5.6-terra", reasoningEffort: "medium",
-      executable: await fakeExecutable(true),
-    });
-    runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
-
-    const events = await collect(runtime.run({ task: task(), previousPlans: [] }));
-
-    expect(events).toContainEqual({ type: "activity", activity: {
-      id: "turn-lifecycle", kind: "agent", label: "启动抓取计划 Agent", status: "running",
-    } });
-    expect(events).toContainEqual(expect.objectContaining({
-      type: "activity", activity: expect.objectContaining({ kind: "web_search", status: "completed" }),
-    }));
-    expect(events).toContainEqual({ type: "text_delta", delta: "正在核实来源。" });
-    expect(events).not.toContainEqual(expect.objectContaining({
-      type: "text_delta", delta: expect.stringContaining("planCandidate"),
-    }));
-    expect(events.at(-1)).toMatchObject({
-      type: "completed",
-      output: { planCandidate: { sources: [{ key: "jd" }] } },
-    });
-  });
-
-  it("没有真实 web_search item 时拒绝生成计划", async () => {
-    const runtime = createCodexCrawlPlanningRuntime({
-      repositoryRoot: process.cwd(), model: "gpt-5.6-terra", reasoningEffort: "medium",
-      executable: await fakeExecutable(false),
-    });
-    runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
-
-    await expect(collect(runtime.run({ task: task(), previousPlans: [] }))).rejects.toMatchObject({
-      code: "invalid_output",
-      message: "抓取计划缺少本轮真实网页搜索记录，请重试。",
-    } satisfies Partial<CodexAppServerError>);
-  });
-
-  it("现有校验失败时在同一个 thread 回填错误并只修正一次", async () => {
-    const runtime = createCodexCrawlPlanningRuntime({
-      repositoryRoot: process.cwd(), model: "gpt-5.6-terra", reasoningEffort: "medium",
-      executable: await fakeExecutable(true),
-    });
-    runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
+describe("Codex 分阶段抓取规划运行时", () => {
+  it("先冻结品牌分母，再按可调单品牌批次核对，最后确定性组装计划", async () => {
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs: validStageOutputs() });
     let validations = 0;
 
     const events = await collect(runtime.run({
-      task: task(), previousPlans: [],
-      validateOutput: async () => {
-        validations += 1;
-        if (validations === 1) throw new Error("抓取计划遗漏了任务中必须覆盖的京东来源");
-      },
+      task: task(), previousPlans: [], validateOutput: async () => { validations += 1; },
     }));
 
-    expect(validations).toBe(2);
-    expect(events).toContainEqual({
-      type: "text_delta",
-      delta: "第一次计划未通过现有校验，已回填错误并修正一次：抓取计划遗漏了任务中必须覆盖的京东来源",
+    expect(events.filter((event) => event.type === "text_delta").map((event) =>
+      event.type === "text_delta" ? event.delta : "").join("\n")).toContain("核对品牌官网（1-1/2）");
+    expect(events.filter((event) => event.type === "text_delta").map((event) =>
+      event.type === "text_delta" ? event.delta : "").join("\n")).toContain("核对品牌官网（2-2/2）");
+    expect(validations).toBe(1);
+    expect(events.at(-1)).toMatchObject({
+      type: "completed",
+      output: {
+        planCandidate: {
+          executionChecklistVersion: 4,
+          sources: expect.arrayContaining([
+            expect.objectContaining({ sourceKind: "brand_official" }),
+            expect.objectContaining({ sourceKind: "other" }),
+            expect.objectContaining({ sourceKind: "standards_body" }),
+            expect.objectContaining({ sourceKind: "technical_publisher" }),
+          ]),
+          researchAudit: { denominator: { brandCount: 2 }, completeness: "partial" },
+        },
+      },
     });
+    const completed = events.at(-1);
+    if (completed?.type !== "completed") throw new Error("测试没有收到完成计划");
+    const officialSource = completed.output.planCandidate.sources.find((source) => source.sourceKind === "brand_official");
+    expect(officialSource).toMatchObject({ provider: { version: "2.0.0" } });
+    const siteTarget = officialSource?.targets.find((target) => target.providerConfiguration
+      .some((item) => item.key === "route" && item.value === "site"));
+    expect(siteTarget).toMatchObject({ quantity: { mode: "all_available" },
+      providerConfiguration: expect.arrayContaining([
+        { key: "route", value: "site" }, { key: "minimum_accepted_pages", value: 2 },
+      ]) });
+    const marketSource = completed.output.planCandidate.sources.find((source) => source.sourceKind === "other");
+    expect(marketSource).toMatchObject({
+      entryUrls: ["https://catalog.example.net/brands"],
+      targets: [expect.objectContaining({ quantity: expect.objectContaining({ mode: "all_available" }),
+        providerConfiguration: expect.arrayContaining([
+          { key: "route", value: "site" }, { key: "minimum_accepted_pages", value: 2 },
+        ]) })],
+    });
+    const landscapePasses = completed.output.planCandidate.researchAudit.passes
+      .filter((pass) => pass.area === "brand_landscape");
+    expect(landscapePasses[0]?.newlyAddedBrands).toEqual(["品牌一", "品牌二"]);
+    expect(landscapePasses.slice(-2).every((pass) => pass.newlyAddedBrands.length === 0)).toBe(true);
+  });
+
+  it("饱和查询发现新品牌时重置计数并继续到连续两次零新增", async () => {
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs: [
+      [landscape()],
+      [saturationWithBrand(1, "品牌三")],
+      [saturation(2)],
+      [saturation(3)],
+      [marketCatalog()],
+      [plannedMapping("品牌一")],
+      [unresolvedMapping("品牌二")],
+      [unresolvedMapping("品牌三")],
+      [knowledge()],
+    ] });
+
+    const events = await collect(runtime.run({ task: task(), previousPlans: [] }));
+    const completed = events.at(-1);
+
+    if (completed?.type !== "completed") throw new Error("测试没有收到完成计划");
+    expect(completed.output.planCandidate.researchAudit.denominator.brandCount).toBe(3);
+    expect(completed.output.planCandidate.researchAudit.brands.map((brand) => brand.name))
+      .toEqual(["品牌一", "品牌二", "品牌三"]);
+    const saturationPasses = completed.output.planCandidate.researchAudit.passes
+      .filter((pass) => pass.area === "brand_landscape")
+      .filter((pass) => pass.lens === "saturation_check");
+    expect(saturationPasses.map((pass) => pass.newlyAddedBrands)).toEqual([["品牌三"], [], []]);
+  });
+
+  it("饱和查询命中已有品牌别名时不重复计为新增", async () => {
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs: [
+      [landscapeWithAlias("Brand One")],
+      [saturationWithBrand(1, "Brand One")],
+      [saturation(2)],
+      [marketCatalog()],
+      [plannedMapping("品牌一")],
+      [unresolvedMapping("品牌二")],
+      [knowledge()],
+    ] });
+
+    const events = await collect(runtime.run({ task: task(), previousPlans: [] }));
+    const completed = events.at(-1);
+
+    if (completed?.type !== "completed") throw new Error("测试没有收到完成计划");
+    expect(completed.output.planCandidate.researchAudit.denominator.brandCount).toBe(2);
+    const passes = completed.output.planCandidate.researchAudit.passes
+      .filter((pass) => pass.area === "brand_landscape");
+    expect(passes.slice(-2).map((pass) => pass.newlyAddedBrands)).toEqual([[], []]);
+  });
+
+  it("官网批次新增品牌携带原查询证据并入分母后只继续饱和核查", async () => {
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs: [
+      [landscape()],
+      [saturation(1)],
+      [saturation(2)],
+      [marketCatalog()],
+      [mappingWithAdditional("品牌一", "品牌三")],
+      [unresolvedMapping("品牌二")],
+      [saturation(3)],
+      [saturation(4)],
+      [unresolvedMapping("品牌三")],
+      [knowledge()],
+    ] });
+
+    const events = await collect(runtime.run({ task: task(), previousPlans: [] }));
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "text_delta",
+      delta: expect.stringContaining("复核新增品牌（1/2）：执行品牌饱和查询（1/6）"),
+    }));
+    expect(events.filter((event) => event.type === "text_delta"
+      && event.delta.includes("执行六类品牌发现"))).toHaveLength(0);
+    const completed = events.at(-1);
+    if (completed?.type !== "completed") throw new Error("测试没有收到完成计划");
+    expect(completed.output.planCandidate.researchAudit.denominator.brandCount).toBe(3);
+    expect(completed.output.planCandidate.researchAudit.passes).toContainEqual(expect.objectContaining({
+      area: "brand_landscape", lens: "saturation_check", query: "品牌三 电视品牌",
+      newlyAddedBrands: ["品牌三"],
+    }));
+  });
+
+  it("官网批次把已知英文别名报告成新增时确定性合并且不重复核对", async () => {
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs: [
+      [landscapeWithAlias("Brand One")], [saturation(1)], [saturation(2)],
+      [marketCatalog()],
+      [mappingWithAdditional("品牌一", "Brand One")], [unresolvedMapping("品牌二")],
+      [saturation(3)], [saturation(4)], [knowledge()],
+    ] });
+
+    const events = await collect(runtime.run({ task: task(), previousPlans: [] }));
+    const completed = events.at(-1);
+
+    if (completed?.type !== "completed") throw new Error("测试没有收到完成计划");
+    expect(completed.output.planCandidate.researchAudit.denominator.brandCount).toBe(2);
+    expect(completed.output.planCandidate.researchAudit.brands.map((brand) => brand.name))
+      .toEqual(["品牌一", "品牌二"]);
+  });
+
+  it("六镜头阶段把另一品牌名当别名时只修正当前阶段", async () => {
+    const overlapping = landscapeWithAlias("品牌二");
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs: [
+      [overlapping, landscape()],
+      [saturation(1)], [saturation(2)],
+      [marketCatalog()],
+      [plannedMapping("品牌一")], [unresolvedMapping("品牌二")], [knowledge()],
+    ] });
+
+    const events = await collect(runtime.run({ task: task(), previousPlans: [] }));
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "text_delta", delta: expect.stringContaining("品牌名称或别名与另一品牌重复"),
+    }));
     expect(events.at(-1)).toMatchObject({ type: "completed" });
   });
 
-  it("第二次仍未通过现有校验时直接失败，不继续增加重试", async () => {
-    const runtime = createCodexCrawlPlanningRuntime({
-      repositoryRoot: process.cwd(), model: "gpt-5.6-terra", reasoningEffort: "medium",
-      executable: await fakeExecutable(true),
-    });
-    runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
-    let validations = 0;
+  it("六镜头阶段混入模型占位品牌时在进入官网批次前修正", async () => {
+    const polluted = landscape();
+    polluted.brands[0] = { ...polluted.brands[0]!, name: "placeholder" };
+    polluted.passes = polluted.passes.map((pass) => ({
+      ...pass,
+      discoveredBrands: pass.discoveredBrands.map((name) => name === "品牌一" ? "placeholder" : name),
+    }));
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs: [
+      [polluted, landscape()],
+      [saturation(1)], [saturation(2)],
+      [marketCatalog()],
+      [plannedMapping("品牌一")], [unresolvedMapping("品牌二")], [knowledge()],
+    ] });
 
-    await expect(collect(runtime.run({
-      task: task(), previousPlans: [],
-      validateOutput: async () => {
-        validations += 1;
-        throw new Error("抓取计划遗漏了任务中必须覆盖的京东来源");
-      },
-    }))).rejects.toThrow("抓取计划遗漏了任务中必须覆盖的京东来源");
-    expect(validations).toBe(2);
+    const events = await collect(runtime.run({ task: task(), previousPlans: [] }));
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "text_delta", delta: expect.stringContaining("品牌名称不能使用占位标记"),
+    }));
+    expect(events.at(-1)).toMatchObject({ type: "completed" });
   });
 
-  it("把 Crawl Planning 的独立单轮预算传给 App Server client", async () => {
-    const runtime = createCodexCrawlPlanningRuntime({
-      repositoryRoot: process.cwd(), model: "gpt-5.6-terra", reasoningEffort: "medium",
-      executable: await fakeExecutable(true, 80), timeoutMs: 20,
+  it("某个品牌批次校验失败时只在该独立 thread 内有界修正", async () => {
+    const outputs = validStageOutputs();
+    outputs[firstMappingOutput] = [invalidPlannedMapping("品牌一"), plannedMapping("品牌一")];
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs });
+
+    const events = await collect(runtime.run({ task: task(), previousPlans: [] }));
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "text_delta",
+      delta: expect.stringContaining("第一次未通过校验，已在本阶段修正一次"),
+    }));
+    expect(events.at(-1)).toMatchObject({ type: "completed" });
+  });
+
+  it("品牌批次首次校验一次报告字段错误和重复 URL", async () => {
+    const outputs = validStageOutputs();
+    const invalid = plannedMapping("品牌一");
+    invalid.brands[0]!.officialMappingPasses[0]!.evidenceUrls = [];
+    invalid.sources.push({ ...invalid.sources[0]!, name: "重复官网来源" });
+    outputs[firstMappingOutput] = [invalid, plannedMapping("品牌一")];
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs });
+
+    const events = await collect(runtime.run({ task: task(), previousPlans: [] }));
+    const timeline = events.filter((event) => event.type === "text_delta")
+      .map((event) => event.type === "text_delta" ? event.delta : "").join("\n");
+
+    expect(timeline).toContain("Array must contain at least 1 element");
+    expect(timeline).toContain("阶段来源重复使用同一精确 URL");
+    expect(events.at(-1)).toMatchObject({ type: "completed" });
+  });
+
+  it("第一次修正引入新的重复 URL 时仍可在同一阶段完成第二次修正", async () => {
+    const outputs = validStageOutputs();
+    const missingEvidence = plannedMapping("品牌一");
+    missingEvidence.brands[0]!.officialMappingPasses[0]!.evidenceUrls = [];
+    const duplicated = plannedMapping("品牌一");
+    duplicated.sources.push({ ...duplicated.sources[0]!, name: "重复官网来源" });
+    outputs[firstMappingOutput] = [missingEvidence, duplicated, plannedMapping("品牌一")];
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs });
+
+    const events = await collect(runtime.run({ task: task(), previousPlans: [] }));
+    const timeline = events.filter((event) => event.type === "text_delta")
+      .map((event) => event.type === "text_delta" ? event.delta : "").join("\n");
+
+    expect(timeline).toContain("第一次未通过校验，已在本阶段修正一次");
+    expect(timeline).toContain("第二次未通过校验，已在本阶段修正第二次");
+    expect(timeline).toContain("阶段来源重复使用同一精确 URL");
+    expect(events.at(-1)).toMatchObject({ type: "completed" });
+  });
+
+  it("当前任务确认的品牌官网候选遗漏时在所属品牌批次内修正", async () => {
+    const candidateUrl = "https://brand.example.com/confirmed-catalog";
+    const outputs = validStageOutputs();
+    outputs[firstMappingOutput] = [
+      plannedMapping("品牌一"), plannedMapping("品牌一", "品牌与型号", candidateUrl),
+    ];
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs });
+
+    const events = await collect(runtime.run({
+      task: brandCandidateTask(candidateUrl), previousPlans: [],
+    }));
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "text_delta",
+      delta: expect.stringContaining("当前任务已确认的来源候选"),
+    }));
+    const completed = events.at(-1);
+    if (completed?.type !== "completed") throw new Error("测试没有收到完成计划");
+    expect(completed.output.planCandidate.sources).toContainEqual(expect.objectContaining({
+      sourceCandidateIds: ["candidate-brand-one"],
+      entryUrls: [candidateUrl],
+    }));
+  });
+
+  it("当前任务确认的标准候选遗漏时在标准阶段内修正", async () => {
+    const candidateUrl = "https://standards.example.com/confirmed-rule.pdf";
+    const outputs = validStageOutputs("国家标准");
+    outputs[knowledgeOutput] = [knowledge("国家标准"), knowledge("国家标准", {
+      standardUrl: candidateUrl, standardKind: "regulator",
+    })];
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs });
+
+    const events = await collect(runtime.run({ task: pdfTask(candidateUrl), previousPlans: [] }));
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "text_delta",
+      delta: expect.stringContaining("当前任务已确认的来源候选"),
+    }));
+    expect(events.at(-1)).toMatchObject({ type: "completed" });
+  });
+
+  it("品牌检索证据嵌套在对应品牌项，不能用另一品牌的记录补齐", async () => {
+    const outputs = validStageOutputs();
+    const invalid = plannedMapping("品牌一");
+    invalid.brands[0]!.officialMappingPasses = [];
+    outputs[firstMappingOutput] = [invalid, plannedMapping("品牌一")];
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs });
+
+    const events = await collect(runtime.run({ task: task(), previousPlans: [] }));
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "text_delta",
+      delta: expect.stringContaining("第一次未通过校验，已在本阶段修正一次"),
+    }));
+    expect(events.at(-1)).toMatchObject({ type: "completed" });
+  });
+
+  it("任一研究阶段没有真实 web_search 时整轮失败关闭", async () => {
+    const runtime = await createRuntime({
+      brandBatchSize: 1, outputs: validStageOutputs(), missingSearchThreads: [2],
     });
-    runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
+
+    await expect(collect(runtime.run({ task: task(), previousPlans: [] }))).rejects.toMatchObject({
+      code: "invalid_output", message: expect.stringContaining("缺少真实网页搜索记录"),
+    } satisfies Partial<CodexAppServerError>);
+  });
+
+  it("每个阶段继续使用独立的有界执行预算", async () => {
+    const runtime = await createRuntime({
+      brandBatchSize: 1, outputs: validStageOutputs(), delayMs: 80, timeoutMs: 20,
+    });
 
     await expect(collect(runtime.run({ task: task(), previousPlans: [] }))).rejects.toMatchObject({
       code: "execution_failed", message: "Codex 本轮执行超时，本轮未保存，请重试。",
     } satisfies Partial<CodexAppServerError>);
   });
 
-  it("把已确认的精确 PDF 候选收窄为原始 document 附件", async () => {
-    const runtime = createCodexCrawlPlanningRuntime({
-      repositoryRoot: process.cwd(), model: "gpt-5.6-terra", reasoningEffort: "medium",
-      executable: await fakeExecutable(true, 0, pdfAsHtmlOutput()),
+  it("确定性组装仍把任务中的精确 PDF 入口收窄为原始文档附件", async () => {
+    const pdfUrl = "https://standards.example.com/refrigerator-rule.pdf";
+    const runtime = await createRuntime({
+      brandBatchSize: 1,
+      outputs: validStageOutputs("国家标准", { standardUrl: pdfUrl, standardKind: "regulator" }),
     });
-    runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
 
-    const events = await collect(runtime.run({ task: pdfTask(), previousPlans: [] }));
+    const events = await collect(runtime.run({ task: pdfTask(pdfUrl), previousPlans: [] }));
     const completed = events.at(-1);
 
     expect(completed?.type).toBe("completed");
-    if (completed?.type !== "completed") throw new Error("测试没有收到完成事件");
-    const [pdfSource] = completed.output.planCandidate.sources;
-    expect(pdfSource).toMatchObject({
+    if (completed?.type !== "completed") throw new Error("测试没有收到完成计划");
+    const source = completed.output.planCandidate.sources.find((item) =>
+      item.sourceCandidateIds.includes("candidate-pdf"));
+    expect(source).toMatchObject({
+      sourceKind: "regulator",
+      provider: {
+        configuration: expect.arrayContaining([{ key: "maximum_bytes", value: 25_000_000 }]),
+      },
+      accessPolicy: {
+        version: "public-web-resource-low-frequency-v3",
+        maximumRunMs: 1_800_000,
+      },
       rawOutputPolicy: { formats: expect.arrayContaining(["document"]), retainAssets: true },
+      targets: [expect.objectContaining({ rawFormats: ["document"] })],
     });
-    expect(pdfSource?.targets).toEqual([expect.objectContaining({ key: "energy-rule-pdf", rawFormats: ["document"] })]);
+    if (!source) throw new Error("测试没有生成标准来源");
+    const originCount = new Set(source.entryUrls.map((entry) => new URL(entry).origin)).size;
+    expect(source.stopPolicy.requestBudget).toBe((source.targets.length + originCount) * 2);
+  });
+
+  it("历史计划只作复核线索，不把旧 source key 强塞进新计划", async () => {
+    const runtime = await createRuntime({ brandBatchSize: 1, outputs: validStageOutputs() });
+
+    const events = await collect(runtime.run({ task: task(), previousPlans: [historicalPlan()] }));
+    const completed = events.at(-1);
+
+    if (completed?.type !== "completed") throw new Error("测试没有收到完成计划");
+    expect(completed.output.planCandidate.sources.flatMap((source) => source.entryUrls))
+      .not.toContain("https://obsolete.example.com/old-brand-page");
+  });
+
+  it("拒绝超过小批量边界的配置", () => {
+    expect(() => createCodexCrawlPlanningRuntime({
+      repositoryRoot, model: "gpt-5.6-terra", reasoningEffort: "medium",
+      brandBatchSize: 11,
+    })).toThrow("品牌规划批量必须是 1 到 10 的整数");
   });
 });
 
-async function fakeExecutable(includeSearch: boolean, delayMs = 0, output = runtimeOutput()) {
-  const root = await mkdtemp(path.join(tmpdir(), "domain-analysis-fake-crawl-plan-"));
-  temporaryRoots.push(root);
-  const executable = path.join(root, "codex-fake.mjs");
-  await writeFile(executable, fakeSource(includeSearch, delayMs, output));
-  await chmod(executable, 0o755);
-  return executable;
-}
-
-function fakeSource(includeSearch: boolean, delayMs: number, runtimeResult: CrawlPlanningRuntimeOutput) {
-  const output = JSON.stringify(runtimeResult);
-  return `#!/usr/bin/env node
-import { createInterface } from "node:readline";
-const emit = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
-const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const lines = createInterface({ input: process.stdin });
-let threadCount = 0;
-let turnCount = 0;
-lines.on("line", (line) => void handle(JSON.parse(line)));
-async function handle(message) {
-  if (message.method === "initialize") {
-    emit({ id: message.id, result: { userAgent: "fake" } });
-    return;
-  }
-  if (message.method === "thread/start") {
-    threadCount += 1;
-    if (threadCount !== 1) process.exit(13);
-    if (message.params.ephemeral !== true || !String(message.params.cwd).endsWith("domain-analysis-crawl-planning")) process.exit(5);
-    emit({ id: message.id, result: { thread: { id: "thread-1", ephemeral: true } } });
-    emit({ method: "thread/started", params: {} });
-    return;
-  }
-  if (message.method === "turn/interrupt") {
-    emit({ id: message.id, result: {} });
-    emit({ method: "turn/completed", params: { turn: { status: "interrupted", error: null, items: [] } } });
-    return;
-  }
-  if (message.method !== "turn/start") return;
-  turnCount += 1;
-  if (turnCount > 2 || message.params.threadId !== "thread-1") process.exit(14);
-  const prompt = message.params.input.find((item) => item.type === "text")?.text ?? "";
-  const skill = message.params.input.find((item) => item.type === "skill");
-  if (turnCount === 1 && (!prompt.includes("$plan-product-crawl") || !prompt.includes("Required task topics") || !prompt.includes("严禁 provider_missing") || !prompt.includes("Candidate execution checklist") || !prompt.includes("requiredProvider") || !prompt.includes("generic JD search/root snapshot does not satisfy JD product coverage") || !prompt.includes("search.jd.com is public.web-resource") || !prompt.includes("Every exact public target configuration url MUST appear in that same source.entryUrls") || !prompt.includes("Topic coverage checklist") || !prompt.includes("Provider binding checklist") || !prompt.includes("never represent a PDF URL as an HTML target") || !prompt.includes("Final answer local validation JSON Schema"))) process.exit(6);
-  if (turnCount === 2 && !prompt.includes("现有校验错误：")) process.exit(15);
-  if (message.params.outputSchema?.type !== "object" || !message.params.outputSchema?.properties?.planCandidate) process.exit(8);
-  const normalizedSkillPath = String(skill?.path).replaceAll("\\\\", "/");
-  if (skill?.name !== "plan-product-crawl" || !normalizedSkillPath.endsWith(".agents/skills/plan-product-crawl/SKILL.md")) process.exit(7);
-  emit({ id: message.id, result: { turn: { id: "turn-" + turnCount } } });
-  emit({ method: "turn/started", params: {} });
-  ${includeSearch ? `emit({ method: "item/started", params: { item: { id: "search-1", type: "webSearch", query: "京东 冰箱" } } });
-  emit({ method: "item/completed", params: { item: { id: "search-1", type: "webSearch", query: "京东 冰箱", results: [{ url: "https://www.jd.com/" }] } } });` : ""}
-  const commentaryText = JSON.stringify({ assistantText: "正在核实来源。", planCandidate: { summary: "处理中", sources: [], excludedContent: [], executionChecklistVersion: 2 } });
-  const commentaryItem = { id: "message-commentary", type: "agentMessage", text: commentaryText, phase: "commentary" };
-  emit({ method: "item/started", params: { item: { ...commentaryItem, text: "" } } });
-  emit({ method: "item/agentMessage/delta", params: { itemId: "message-commentary", delta: commentaryText.slice(0, 37) } });
-  emit({ method: "item/agentMessage/delta", params: { itemId: "message-commentary", delta: commentaryText.slice(37) } });
-  emit({ method: "item/completed", params: { item: commentaryItem } });
-  await pause(${delayMs});
-  const finalItem = { id: "message-final", type: "agentMessage", text: ${JSON.stringify(output)}, phase: "final_answer" };
-  emit({ method: "item/started", params: { item: { ...finalItem, text: "" } } });
-  emit({ method: "item/completed", params: { item: finalItem } });
-  emit({ method: "turn/completed", params: { turn: { status: "completed", error: null, items: [finalItem] } } });
-}
-`;
-}
-
-function runtimeOutput(): CrawlPlanningRuntimeOutput {
-  return crawlPlanningRuntimeOutputSchema.parse({
-    assistantText: "已核对来源并形成计划。",
-    planCandidate: {
-      executionChecklistVersion: 2,
-      summary: "冰箱计划", excludedContent: [],
-      sources: [{
-        key: "jd", name: "京东", publisher: "京东", sourceKind: "retailer",
-        sourceCandidateIds: [],
-        role: "覆盖商品详情", entryUrls: ["https://www.jd.com/"],
-        provider: { key: "jd.catalog-product", version: "2.0.0", configuration: [
-          { key: "mode", value: "explicit_http" }, { key: "include_text", value: "冰箱" }, { key: "exclude_text", value: "二手|冷柜|冰吧" },
-        ] },
-        accessPolicy: { kind: "paced_http", version: "jd-explicit-http-v2", maxRequestsPerMinute: 1, minimumIntervalMs: 60_000, maximumRunMs: 3_600_000 },
-        stopPolicy: { requestBudget: 12, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true },
-        rawOutputPolicy: { formats: ["html", "source_json"], retainAssets: false },
-        observationLevel: "search_discovered", accessState: "unknown",
-        observedAt: "2026-08-19T00:00:00.000Z",
-        targets: [runtimeTarget("catalog_pages"), runtimeTarget("store_catalogs"),
-          runtimeTarget("product_details"), runtimeTarget("review_summaries"),
-          runtimeTarget("review_samples")],
-        executionBlockers: [],
-      }],
-    },
+async function createRuntime(scenario: FakeScenario & { brandBatchSize: number; timeoutMs?: number }) {
+  const fake = await fakeExecutable(scenario);
+  temporaryRoots.push(fake.root);
+  const runtime = createCodexCrawlPlanningRuntime({
+    repositoryRoot, model: "gpt-5.6-terra", reasoningEffort: "medium",
+    brandBatchSize: scenario.brandBatchSize,
+    executable: fake.executable, timeoutMs: scenario.timeoutMs,
   });
-}
-
-function runtimeTarget(operation: "catalog_pages" | "store_catalogs" | "product_details"
-  | "review_summaries" | "review_samples") {
-  const review = operation === "review_summaries" || operation === "review_samples";
-  return {
-    key: operation, name: operation, taskTopics: ["品牌与型号"],
-    providerConfiguration: operation === "review_samples"
-      ? [{ key: "operation" as const, value: operation }, { key: "samples_per_product" as const, value: 100 as const }]
-      : [{ key: "operation" as const, value: operation }],
-    captureUnit: "源站响应", rawFormats: review ? ["source_json" as const] : ["html" as const],
-    quantity: { mode: "all_available" as const, unit: "份",
-      denominator: "动态发现工作项", rationale: "逐工作项严格对账" },
-    uniqueKey: "规范化 GET URL", traversal: "只从已保存前序响应发现",
-    stopCondition: "全部工作完成或首次受限",
-  };
-}
-
-function pdfAsHtmlOutput(): CrawlPlanningRuntimeOutput {
-  const entryUrl = "https://example.com/tv-energy-rule.pdf";
-  return crawlPlanningRuntimeOutputSchema.parse({
-    assistantText: "已核对规则原文入口。",
-    planCandidate: {
-      executionChecklistVersion: 2, summary: "电视能效规则原文", excludedContent: [],
-      sources: [{
-        key: "energy-rule", name: "平板电视能源效率标识实施规则", publisher: "监管机构",
-        sourceKind: "regulator", sourceCandidateIds: ["candidate-energy-rule"],
-        role: "保留监管规则原文", entryUrls: [entryUrl],
-        provider: { key: "public.web-resource", version: "1.0.0", configuration: [
-          { key: "mode", value: "exact_https" }, { key: "maximum_bytes", value: 5_000_000 },
-        ] },
-        accessPolicy: { kind: "paced_http", version: "public-web-resource-low-frequency-v1",
-          maxRequestsPerMinute: 2, minimumIntervalMs: 30_000, maximumRunMs: 120_000 },
-        stopPolicy: { requestBudget: 2, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true },
-        rawOutputPolicy: { formats: ["html"], retainAssets: false },
-        observationLevel: "search_discovered", accessState: "unknown",
-        observedAt: "2026-08-19T00:00:00.000Z", executionBlockers: [],
-        targets: [{
-          key: "energy-rule-pdf", name: "规则 PDF", taskTopics: ["国家标准"],
-          providerConfiguration: [{ key: "url", value: entryUrl }], captureUnit: "一份规则原文",
-          rawFormats: ["html"], quantity: { mode: "target_count", targetCount: 1, unit: "份",
-            denominator: "计划冻结的精确 PDF URL", rationale: "保留一份原始规则正文" },
-          uniqueKey: "规范化 PDF URL", traversal: "只请求精确入口",
-          stopCondition: "保存一份响应或遇访问限制",
-        }],
-      }],
-    },
-  });
-}
-
-function pdfTask(): CaptureTask {
-  const value = task();
-  value.content.generalTopics = ["国家标准"];
-  value.content.sourceCandidates = [{
-    id: "candidate-energy-rule", name: "平板电视能源效率标识实施规则", publisher: "监管机构",
-    entryUrl: "https://example.com/tv-energy-rule.pdf", sourceKind: "regulator",
-    expectedContents: ["PDF 正文"], observedFormats: ["PDF"], accessState: "public",
-    observedAt: "2026-08-19T00:00:00.000Z",
-  }];
-  return value;
-}
-
-function task(): CaptureTask {
-  const now = "2026-08-19T00:00:00.000Z";
-  return {
-    id: "task-1", name: "冰箱抓取任务", status: "ready", revision: 1,
-    content: {
-      originalRequest: "抓冰箱", category: { code: "refrigerator", label: "冰箱" },
-      marketScope: "中国大陆", generalTopics: ["品牌与型号"], categoryTopics: [],
-      jd: { applicable: true, disposition: "included", scope: ["product_details"], rationale: "核心平台" },
-      sourceCandidates: [], excludedContent: [], unresolvedItems: [], decisionIds: [],
-    },
-    createdAt: now, updatedAt: now, confirmedAt: now,
-  };
-}
-
-async function collect<T>(iterable: AsyncIterable<T>) {
-  const items: T[] = [];
-  for await (const item of iterable) items.push(item);
-  return items;
+  runtimeClosers.push(() => runtime.close?.() ?? Promise.resolve());
+  return runtime;
 }

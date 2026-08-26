@@ -2,6 +2,9 @@ import { z } from "zod";
 
 import { sourceAccessStates, sourceKinds } from "./capture-task";
 import { interviewMessageTimelinePartSchema, interviewTurnActivitySchema } from "./category-interview";
+import { crawlPlanResearchAuditSchema, crawlPlanResearchAuditV3Schema } from "./crawl-planning-research";
+
+export { brandDiscoveryLenses, crawlPlanningResearchAreas } from "./crawl-planning-research";
 
 const idSchema = z.string().min(1).max(240);
 const keySchema = z.string().regex(/^[a-z][a-z0-9_.-]+$/);
@@ -23,7 +26,7 @@ export const captureQuantitySchema = z.discriminatedUnion("mode", [
 
 const providerConfigurationSchema = z.array(z.object({
   key: keySchema,
-  value: z.union([z.string(), z.number(), z.boolean()]),
+  value: z.union([z.string(), z.number(), z.boolean(), z.array(boundedText).max(30)]),
 }).strict()).max(50);
 
 const crawlPlanProviderSchema = z.object({
@@ -32,23 +35,14 @@ const crawlPlanProviderSchema = z.object({
   configuration: providerConfigurationSchema,
 }).strict();
 
-const jdV2CandidateProviderSchema = z.object({
-  key: z.literal("jd.catalog-product"),
-  version: z.literal("2.0.0"),
-  configuration: z.array(z.discriminatedUnion("key", [
-    z.object({ key: z.literal("mode"), value: z.literal("explicit_http") }).strict(),
-    z.object({ key: z.literal("include_text"), value: boundedText }).strict(),
-    z.object({ key: z.literal("exclude_text"), value: boundedText }).strict(),
-  ])).length(3),
-}).strict();
-
 const publicCandidateProviderSchema = z.object({
   key: z.literal("public.web-resource"),
-  version: z.literal("1.0.0"),
+  version: z.literal("2.0.0"),
   configuration: z.array(z.discriminatedUnion("key", [
-    z.object({ key: z.literal("mode"), value: z.literal("exact_https") }).strict(),
+    z.object({ key: z.literal("mode"), value: z.literal("planned_routes") }).strict(),
     z.object({ key: z.literal("maximum_bytes"), value: z.number().int().positive().max(25_000_000) }).strict(),
-  ])).length(2),
+    z.object({ key: z.literal("maximum_pages_per_target"), value: z.number().int().positive().max(100) }).strict(),
+  ])).length(3),
 }).strict();
 
 const crawlPlanTargetShape = {
@@ -67,40 +61,26 @@ export const crawlPlanTargetSchema = z.object({ ...crawlPlanTargetShape,
   providerConfiguration: providerConfigurationSchema.default([]),
 }).strict();
 
-const jdV2BasicTargetSchema = z.object({ ...crawlPlanTargetShape,
-  rawFormats: z.array(z.enum(["html", "source_json"])).min(1).max(2),
-  providerConfiguration: z.array(z.object({
-    key: z.literal("operation"),
-    value: z.enum(["catalog_pages", "store_catalogs", "product_details", "review_summaries"]),
-  }).strict()).length(1),
-}).strict();
-
-const jdV2ReviewSamplesTargetSchema = z.object({ ...crawlPlanTargetShape,
-  rawFormats: z.array(z.literal("source_json")).length(1),
-  providerConfiguration: z.array(z.union([
-    z.object({ key: z.literal("operation"), value: z.literal("review_samples") }).strict(),
-    z.object({ key: z.literal("samples_per_product"), value: z.union([z.literal(50), z.literal(100)]) }).strict(),
-  ])).length(2),
-}).strict();
-
-const jdV2CandidateTargetSchema = z.union([jdV2BasicTargetSchema, jdV2ReviewSamplesTargetSchema]);
-
 const publicExactTargetSchema = z.object({ ...crawlPlanTargetShape,
-  providerConfiguration: z.array(z.object({
-    key: z.literal("url"), value: z.string().url().max(2_048),
-  }).strict()).length(1),
+  providerConfiguration: z.array(z.discriminatedUnion("key", [
+    z.object({ key: z.literal("route"), value: z.literal("exact") }).strict(),
+    z.object({ key: z.literal("url"), value: z.string().url().max(2_048) }).strict(),
+  ])).length(2),
 }).strict();
 
-const publicLinkedTargetSchema = z.object({ ...crawlPlanTargetShape,
+const publicSiteTargetSchema = z.object({ ...crawlPlanTargetShape,
   providerConfiguration: z.array(z.discriminatedUnion("key", [
-    z.object({ key: z.literal("from_target"), value: keySchema }).strict(),
-    z.object({ key: z.literal("link_text"), value: boundedText }).strict(),
-  ])).length(2),
+    z.object({ key: z.literal("route"), value: z.literal("site") }).strict(),
+    z.object({ key: z.literal("url"), value: z.string().url().max(2_048) }).strict(),
+    z.object({ key: z.literal("required_terms"), value: z.array(boundedText).min(2).max(30) }).strict(),
+    z.object({ key: z.literal("maximum_depth"), value: z.number().int().min(1).max(3) }).strict(),
+    z.object({ key: z.literal("minimum_accepted_pages"), value: z.number().int().positive().max(100) }).strict(),
+  ])).length(5),
 }).strict();
 
 const publicCandidateTargetSchema = z.union([
   publicExactTargetSchema,
-  publicLinkedTargetSchema,
+  publicSiteTargetSchema,
 ]);
 
 const crawlPlanSourceShape = {
@@ -141,28 +121,6 @@ export const crawlPlanSourceSchema = z.object({ ...crawlPlanSourceShape,
   addDuplicateKeyIssues(source.targets, context, ["targets"]);
 });
 
-const jdV2CandidateSourceSchema = z.object({ ...crawlPlanSourceShape,
-  provider: jdV2CandidateProviderSchema,
-  accessPolicy: z.object({
-    kind: z.literal("paced_http"), version: z.literal("jd-explicit-http-v2"),
-    maxRequestsPerMinute: z.literal(1), minimumIntervalMs: z.literal(60_000),
-    maximumRunMs: z.number().int().min(300_000).max(86_400_000),
-  }).strict(),
-  stopPolicy: z.object({
-    requestBudget: z.number().int().min(5).max(100_000), noNewUniqueKeysLimit: z.literal(1),
-    stopOnAccessRestriction: z.literal(true),
-  }).strict(),
-  rawOutputPolicy: z.object({ formats: z.array(z.enum(["html", "source_json"])).length(2),
-    retainAssets: z.literal(false) }).strict(),
-  sourceCandidateIds: z.array(idSchema).max(100),
-  targets: z.array(jdV2CandidateTargetSchema).length(5),
-  executionBlockers: z.array(boundedText).length(0),
-}).strict().superRefine((source, context) => {
-  addDuplicateKeyIssues(source.targets, context, ["targets"]);
-  addExactConfigurationIssues(source.provider.configuration, ["mode", "include_text", "exclude_text"], context);
-  addExactJdV2SourceIssues(source, context);
-});
-
 const publicCandidateSourceSchema = z.object({ ...crawlPlanSourceShape,
   provider: publicCandidateProviderSchema,
   sourceCandidateIds: z.array(idSchema).max(100),
@@ -170,15 +128,13 @@ const publicCandidateSourceSchema = z.object({ ...crawlPlanSourceShape,
   executionBlockers: z.array(boundedText).length(0),
 }).strict().superRefine((source, context) => {
   addDuplicateKeyIssues(source.targets, context, ["targets"]);
-  addExactConfigurationIssues(source.provider.configuration, ["mode", "maximum_bytes"], context);
+  addExactConfigurationIssues(source.provider.configuration,
+    ["mode", "maximum_bytes", "maximum_pages_per_target"], context);
   addExactPublicSourceIssues(source, context);
 });
 
 // WHY：输出 Schema 直接表达两种真实执行协议；模型不能再把 Provider 配置当自由文本猜测。
-const crawlPlanCandidateSourceSchema = z.union([
-  jdV2CandidateSourceSchema,
-  publicCandidateSourceSchema,
-]);
+const crawlPlanCandidateSourceSchema = publicCandidateSourceSchema;
 
 const crawlPlanBaseShape = {
   summary: z.string().trim().min(1).max(4_000),
@@ -187,15 +143,18 @@ const crawlPlanBaseShape = {
 
 export const crawlPlanCandidateSchema = z.object({ ...crawlPlanBaseShape,
   sources: z.array(crawlPlanCandidateSourceSchema).min(1).max(100),
-  executionChecklistVersion: z.literal(2),
+  researchAudit: crawlPlanResearchAuditV3Schema,
+  executionChecklistVersion: z.literal(4),
 }).strict().superRefine((candidate, context) => {
   addDuplicateKeyIssues(candidate.sources, context, ["sources"]);
+  addResearchSourceAlignmentIssues(candidate, context);
 });
 
 export const crawlPlanContentSchema = z.object({ ...crawlPlanBaseShape,
   sources: z.array(crawlPlanSourceSchema).min(1).max(100),
-  // WHY：旧京东纵切片仍需只读展示；只有显式 v2 才能通过当前确认和启动门。
-  executionChecklistVersion: z.literal(2).optional(),
+  researchAudit: crawlPlanResearchAuditSchema.optional(),
+  // WHY：历史计划仍需只读展示；只有当前候选 schema 才能通过确认和启动门。
+  executionChecklistVersion: z.union([z.literal(2), z.literal(3), z.literal(4)]).optional(),
   taskId: idSchema,
   taskRevision: z.number().int().positive(),
 }).strict().superRefine((candidate, context) => {
@@ -310,6 +269,7 @@ export type CaptureQuantity = z.infer<typeof captureQuantitySchema>;
 export type CrawlPlanTarget = z.infer<typeof crawlPlanTargetSchema>;
 export type CrawlPlanSource = z.infer<typeof crawlPlanSourceSchema>;
 export type CrawlPlanCandidate = z.infer<typeof crawlPlanCandidateSchema>;
+export type CrawlPlanResearchAudit = z.infer<typeof crawlPlanResearchAuditSchema>;
 export type CrawlPlanContent = z.infer<typeof crawlPlanContentSchema>;
 export type CrawlPlan = z.infer<typeof crawlPlanSchema>;
 export type CrawlPlanningRun = z.infer<typeof crawlPlanningRunSchema>;
@@ -332,84 +292,86 @@ function addExactConfigurationIssues(
   }
 }
 
-function addExactJdV2SourceIssues(
-  source: {
-    sourceKind: string;
-    entryUrls: string[];
-    rawOutputPolicy: { formats: string[] };
-    stopPolicy: { requestBudget: number };
-    targets: Array<{ key: string; providerConfiguration: Array<{ key: string; value: string | number }>;
-      quantity: CaptureQuantity }>;
+function addResearchSourceAlignmentIssues(
+  candidate: {
+    sources: Array<{ key: string; sourceKind: string }>;
+    researchAudit: { brands: Array<{ name: string; status: "planned" | "unresolved"; officialSourceKeys: string[] }> };
   },
   context: z.RefinementCtx,
 ) {
-  if (source.entryUrls.length === 0 || source.entryUrls.some((entry) => !isExactPublicHttps(entry, "www.jd.com"))) {
-    context.addIssue({ code: "custom", path: ["entryUrls"], message: "JD Provider 只接受 www.jd.com HTTPS 目录入口" });
+  const sourceKinds = new Map(candidate.sources.map((source) => [source.key, source.sourceKind]));
+  const officialSources = new Set(candidate.sources
+    .filter((source) => source.sourceKind === "brand_official")
+    .map((source) => source.key));
+  for (const brand of candidate.researchAudit.brands.filter((item) => item.status === "planned")) {
+    for (const sourceKey of brand.officialSourceKeys) {
+      if (sourceKinds.get(sourceKey) !== "brand_official") {
+        context.addIssue({ code: "custom", path: ["researchAudit", "brands"],
+          message: `品牌 ${brand.name} 引用了不存在或非官网的来源：${sourceKey}` });
+      }
+    }
   }
-  if (source.sourceKind !== "retailer") {
-    context.addIssue({ code: "custom", path: ["sourceKind"], message: "JD Provider 只承担零售来源" });
-  }
-  const operations = source.targets.map((target) => target.providerConfiguration
-    .find((item) => item.key === "operation")?.value).sort();
-  const required = ["catalog_pages", "product_details", "review_samples", "review_summaries", "store_catalogs"];
-  if (operations.join(",") !== required.join(",")) {
-    context.addIssue({ code: "custom", path: ["targets"], message: `JD v2 来源必须各有一个：${required.join("、")}` });
-  }
-  if (source.targets.some((target) => target.quantity.mode !== "all_available")) {
-    context.addIssue({ code: "custom", path: ["targets"], message: "JD v2 每个 target 必须声明 all_available 动态覆盖" });
-  }
-  if (![...source.rawOutputPolicy.formats].sort().every((value, index) => value === ["html", "source_json"][index])) {
-    context.addIssue({ code: "custom", path: ["rawOutputPolicy", "formats"],
-      message: "JD v2 必须原样保留 html 与 source_json" });
-  }
-  if (source.stopPolicy.requestBudget < source.entryUrls.length + 4) {
-    context.addIssue({ code: "custom", path: ["stopPolicy", "requestBudget"],
-      message: "JD v2 请求预算至少覆盖目录入口和四类后续捕获" });
+  const referenced = new Set(candidate.researchAudit.brands
+    .filter((brand) => brand.status === "planned")
+    .flatMap((brand) => brand.officialSourceKeys));
+  for (const sourceKey of officialSources) {
+    if (!referenced.has(sourceKey)) {
+      // WHY：来源连续性可能保留旧官网；若品牌账不再承认它，继续执行会让同一计划自相矛盾。
+      context.addIssue({ code: "custom", path: ["researchAudit", "brands"],
+        message: `官网来源 ${sourceKey} 必须归属至少一个已规划品牌` });
+    }
   }
 }
 
 function addExactPublicSourceIssues(
   source: {
     entryUrls: string[];
+    provider: { configuration: Array<{ key: string; value: string | number | boolean | string[] }> };
     stopPolicy: { requestBudget: number };
-    targets: Array<{ key: string; providerConfiguration: Array<{ key: string; value: string }>; quantity: CaptureQuantity }>;
+    targets: Array<{ key: string; providerConfiguration: Array<{
+      key: string; value: string | number | boolean | string[];
+    }>; quantity: CaptureQuantity }>;
   },
   context: z.RefinementCtx,
 ) {
   const targetPlans = source.targets.map((target) => Object.fromEntries(
     target.providerConfiguration.map((item) => [item.key, item.value]),
   ));
-  const exactUrls = targetPlans.flatMap((plan) => typeof plan.url === "string" ? [plan.url] : []);
-  if ([...source.entryUrls, ...exactUrls].some((url) => !isExactPublicHttps(url))) {
+  const plannedUrls = targetPlans.flatMap((plan) => typeof plan.url === "string" ? [plan.url] : []);
+  if ([...source.entryUrls, ...plannedUrls].some((url) => !isExactPublicHttps(url))) {
     context.addIssue({ code: "custom", path: ["entryUrls"], message: "公共资源只接受无凭证的公网 HTTPS 443 精确 URL" });
   }
-  if (new Set(exactUrls).size !== exactUrls.length
-    || !sameStringSet(source.entryUrls, exactUrls)) {
-    context.addIssue({ code: "custom", path: ["targets"], message: "每个公共资源入口必须恰好对应一个同 URL target" });
-  }
-  if (source.targets.some((target) => target.quantity.mode !== "target_count" || target.quantity.targetCount !== 1)) {
-    context.addIssue({ code: "custom", path: ["targets"], message: "公共资源每个 target 必须声明 target_count=1" });
+  if (new Set(plannedUrls).size !== plannedUrls.length
+    || !sameStringSet(source.entryUrls, plannedUrls)) {
+    context.addIssue({ code: "custom", path: ["targets"], message: "每个公共资源入口必须恰好对应一个计划路由 target" });
   }
   source.targets.forEach((target, index) => {
     const plan = targetPlans[index]!;
     const configurationKeys = target.providerConfiguration.map((item) => item.key).sort();
-    if (configurationKeys.join(",") === "url") return;
-    if (configurationKeys.join(",") !== "from_target,link_text"
-      || typeof plan.from_target !== "string" || typeof plan.link_text !== "string") {
-      context.addIssue({ code: "custom", path: ["targets", index, "providerConfiguration"],
-        message: "同源链接 target 必须且只能配置 from_target 与 link_text" });
+    if (plan.route === "exact") {
+      if (configurationKeys.join(",") !== "route,url"
+        || target.quantity.mode !== "target_count" || target.quantity.targetCount !== 1) {
+        context.addIssue({ code: "custom", path: ["targets", index],
+          message: "exact target 必须只配置 route+url，并声明 target_count=1" });
+      }
       return;
     }
-    const parentIndex = source.targets.findIndex((item) => item.key === plan.from_target);
-    if (parentIndex < 0 || parentIndex >= index) {
+    if (plan.route !== "site"
+      || configurationKeys.join(",") !== "maximum_depth,minimum_accepted_pages,required_terms,route,url"
+      || !Array.isArray(plan.required_terms)
+      || target.quantity.mode !== "all_available") {
       context.addIssue({ code: "custom", path: ["targets", index, "providerConfiguration"],
-        message: "同源链接 target 的 from_target 必须引用排在它之前的 target" });
+        message: "site target 必须配置有界发现参数，并声明 all_available" });
     }
   });
-  const origins = new Set(exactUrls.filter((url) => isExactPublicHttps(url)).map((url) => new URL(url).origin));
-  if (source.stopPolicy.requestBudget < source.targets.length + origins.size) {
+  const origins = new Set(plannedUrls.filter((url) => isExactPublicHttps(url)).map((url) => new URL(url).origin));
+  const values = Object.fromEntries(source.provider.configuration.map((item) => [item.key, item.value]));
+  const siteTargets = targetPlans.filter((plan) => plan.route === "site").length;
+  const maximumPages = typeof values.maximum_pages_per_target === "number" ? values.maximum_pages_per_target : 0;
+  const minimumBudget = (source.targets.length + origins.size + siteTargets * (maximumPages + 4)) * 2;
+  if (source.stopPolicy.requestBudget < minimumBudget) {
     context.addIssue({ code: "custom", path: ["stopPolicy", "requestBudget"],
-      message: "公共资源请求预算必须包含每个 target 与每个 origin 的 robots.txt" });
+      message: "公共资源请求预算必须覆盖 robots、sitemap、页面与同源 redirect 上限" });
   }
 }
 

@@ -12,7 +12,6 @@ import {
 import { CategoryInterviewError } from "./categoryInterviewRecords";
 import {
   applyProfessionalShoppingGuideDefaults,
-  findCaptureTaskReadinessGaps,
 } from "./captureTaskReadiness";
 
 export interface InterviewDecisionChange {
@@ -20,13 +19,6 @@ export interface InterviewDecisionChange {
   confirmed?: InterviewDecision;
   withdrawalRationale?: string;
 }
-
-const draftCoverageGroups = [
-  { key: "retailMarketUrls", label: "核心零售/市场平台" },
-  { key: "brandOfficialUrls", label: "品牌官方资料" },
-  { key: "standardsRegulationUrls", label: "国家标准/监管" },
-  { key: "technicalPrincipleUrls", label: "技术原理" },
-] as const;
 
 export function prepareInterviewTurn(
   view: CategoryInterviewView,
@@ -101,10 +93,6 @@ export function materializeCaptureTaskContent(
       observedAt: timestamp,
     })),
   })));
-  const gaps = findCaptureTaskReadinessGaps(content);
-  if (gaps.length > 0) {
-    throw invalidState(`抓取范围尚不足以服务专业导购 Agent，请继续调查并补齐：${gaps.join("、")}`);
-  }
   return content;
 }
 
@@ -181,16 +169,12 @@ function requireDraftCoverage(
   if (!output.draftMarkdown) return;
   const coverage = output.draftCoverage;
   if (!coverage) {
-    throw invalidState("草案来源覆盖尚未完成：缺少核心零售/市场平台、至少两个品牌官方站点、国家标准/监管或技术原理入口");
+    throw invalidState("草案品类范围调查尚未完成：缺少可核对的搜索证据");
   }
-  const entries = draftCoverageGroups.flatMap((group) => coverage[group.key]
-    .map((url) => ({ role: group.label, url, canonicalUrl: canonicalizeUrl(url) })));
+  const entries = coverage.scopeEvidenceUrls
+    .map((url) => ({ role: "品类范围依据", url, canonicalUrl: canonicalizeUrl(url) }));
   if (new Set(entries.map((entry) => entry.canonicalUrl)).size !== entries.length) {
-    throw invalidState("草案来源覆盖尚未完成：同一入口不能重复或同时充当多个来源角色");
-  }
-  const brandOrigins = new Set(coverage.brandOfficialUrls.map((url) => new URL(url).origin));
-  if (brandOrigins.size < 2) {
-    throw invalidState("草案来源覆盖尚未完成：品牌官方资料至少需要两个独立官方站点，才能支持多品牌对比");
+    throw invalidState("草案品类范围调查尚未完成：证据 URL 不能重复");
   }
   const searchedUrls = collectCompletedSearchUrls(view, currentTimelineParts);
   const unsearched = entries.filter((entry) => !searchedUrls.has(entry.canonicalUrl));

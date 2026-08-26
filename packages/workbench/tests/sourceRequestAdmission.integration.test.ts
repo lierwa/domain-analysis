@@ -35,7 +35,7 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
     await migrateWorkbenchDatabase(databaseUrl!);
     db = createWorkbenchDb(databaseUrl!);
     taskId = `task-request-admission-${randomUUID()}`;
-    const gateKey = `jd.catalog-product@2.0.0:${randomUUID()}`;
+    const gateKey = `public.web-resource@1.0.0:${randomUUID()}`;
     const at = "2026-08-21T00:00:00.000Z";
     await insertConfirmedTaskAndPlan(db, taskId, at);
     const module = createSourceDatasetModule(db, {
@@ -43,17 +43,17 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
       assetStore: { async put() { throw new Error("不应写附件"); }, open() { return Readable.from([]); } },
     });
     const run = await module.startRun({ taskId, planId: "plan-request-admission", planVersion: 1,
-      sourceKey: "jd", providerKey: "jd.catalog-product", providerVersion: "2.0.0", requestBudget: 2,
+      sourceKey: "brand", providerKey: "public.web-resource", providerVersion: "1.0.0", requestBudget: 2,
       accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 1,
         minimumIntervalMs: 60_000, jitterMs: { min: 0, max: 0 }, batchSize: 1,
-        batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product_details"] });
-    await module.startTarget({ runId: run.id, targetKey: "product_details" });
-    await module.ensureCaptureWorkItem({ runId: run.id, targetKey: "product_details",
-      workKey: "product:sku-1", captureUnit: "product_detail", expectedUnitCount: 1 });
-    await module.startCaptureWorkItem({ runId: run.id, workKey: "product:sku-1" });
-    const request = { runId: run.id, targetKey: "product_details", workKey: "product:sku-1",
-      gateKey, providerKey: "jd.catalog-product", providerVersion: "2.0.0", policyVersion: "fixture",
-      requestedUrl: "https://item.jd.com/sku-1.html", minimumIntervalMs: 60_000,
+        batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product-detail"] });
+    await module.startTarget({ runId: run.id, targetKey: "product-detail" });
+    await module.ensureCaptureWorkItem({ runId: run.id, targetKey: "product-detail",
+      workKey: "product:model-1", captureUnit: "exact_page", expectedUnitCount: 1 });
+    await module.startCaptureWorkItem({ runId: run.id, workKey: "product:model-1" });
+    const request = { runId: run.id, targetKey: "product-detail", workKey: "product:model-1",
+      gateKey, providerKey: "public.web-resource", providerVersion: "1.0.0", policyVersion: "fixture",
+      requestedUrl: "https://brand.example/products/model-1", minimumIntervalMs: 60_000,
       maxRequestsPerMinute: 1 };
 
     const results = await Promise.all([module.reserveRequest(request), module.reserveRequest(request)]);
@@ -74,7 +74,7 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
     await expect(restarted.reserveRequest(request)).resolves.toMatchObject({
       status: "blocked", reason: "rate_limited", manualResumeRequired: true,
     });
-    await restarted.finishCaptureWorkItem({ runId: run.id, workKey: "product:sku-1",
+    await restarted.finishCaptureWorkItem({ runId: run.id, workKey: "product:model-1",
       status: "failed", observedUnitCount: 0, terminationReason: "rate_limited" });
     const view = await restarted.getRun(run.id);
     expect(view?.workItems).toEqual([expect.objectContaining({ status: "failed",
@@ -84,48 +84,116 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
     expect(view?.accessGates).toHaveLength(1);
     expect(view?.accessGates[0]).toMatchObject({ circuitState: "open", manualResumeRequired: true });
 
-    await restarted.finishTarget({ runId: run.id, targetKey: "product_details",
+    await restarted.finishTarget({ runId: run.id, targetKey: "product-detail",
       status: "failed", terminationReason: "rate_limited" });
     await restarted.finishRun({ runId: run.id, status: "failed", terminationReason: "rate_limited" });
     const resumed = await restarted.startRun({ taskId, planId: "plan-request-admission", planVersion: 1,
-      sourceKey: "jd", providerKey: "jd.catalog-product", providerVersion: "2.0.0", requestBudget: 2,
+      sourceKey: "brand", providerKey: "public.web-resource", providerVersion: "1.0.0", requestBudget: 2,
       accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 1,
         minimumIntervalMs: 60_000, jitterMs: { min: 0, max: 0 }, batchSize: 1,
-        batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product_details"],
+        batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product-detail"],
       resumedFromRunId: run.id });
     expect(resumed.resumedFromRunId).toBe(run.id);
     await expect(restarted.getAccessGate(gateKey)).resolves.toMatchObject({
       circuitState: "closed", manualResumeRequired: false,
       nextEligibleAt: "2026-08-21T00:01:00.000Z",
     });
-    await restarted.startTarget({ runId: resumed.id, targetKey: "product_details" });
-    await restarted.ensureCaptureWorkItem({ runId: resumed.id, targetKey: "product_details",
-      workKey: "product:sku-2", captureUnit: "product_detail", expectedUnitCount: 1 });
-    await restarted.startCaptureWorkItem({ runId: resumed.id, workKey: "product:sku-2" });
-    const resumedRequest = { ...request, runId: resumed.id, workKey: "product:sku-2",
-      requestedUrl: "https://item.jd.com/sku-2.html" };
+    await restarted.startTarget({ runId: resumed.id, targetKey: "product-detail" });
+    await restarted.ensureCaptureWorkItem({ runId: resumed.id, targetKey: "product-detail",
+      workKey: "product:model-2", captureUnit: "exact_page", expectedUnitCount: 1 });
+    await restarted.startCaptureWorkItem({ runId: resumed.id, workKey: "product:model-2" });
+    const resumedRequest = { ...request, runId: resumed.id, workKey: "product:model-2",
+      requestedUrl: "https://brand.example/products/model-2" };
     const second = await restarted.reserveRequest(resumedRequest);
     expect(second.status).toBe("admitted");
     if (second.status !== "admitted") throw new Error("恢复运行请求未获准");
     await restarted.finishRequest({ attemptId: second.attempt.id, state: "completed",
       finalUrl: resumedRequest.requestedUrl, httpStatus: 200, bytes: 1 });
-    await restarted.ensureCaptureWorkItem({ runId: resumed.id, targetKey: "product_details",
-      workKey: "product:sku-3", captureUnit: "product_detail", expectedUnitCount: 1 });
-    await restarted.startCaptureWorkItem({ runId: resumed.id, workKey: "product:sku-3" });
-    await expect(restarted.reserveRequest({ ...resumedRequest, workKey: "product:sku-3",
-      requestedUrl: "https://item.jd.com/sku-3.html" })).resolves.toMatchObject({
+    await restarted.ensureCaptureWorkItem({ runId: resumed.id, targetKey: "product-detail",
+      workKey: "product:model-3", captureUnit: "exact_page", expectedUnitCount: 1 });
+    await restarted.startCaptureWorkItem({ runId: resumed.id, workKey: "product:model-3" });
+    await expect(restarted.reserveRequest({ ...resumedRequest, workKey: "product:model-3",
+      requestedUrl: "https://brand.example/products/model-3" })).resolves.toMatchObject({
       status: "blocked", reason: "request_budget_exhausted",
     });
   });
+
+  it("关闭且无在途请求的 origin gate 接受新版策略，并继承更严格的下一次时间", async () => {
+    await migrateWorkbenchDatabase(databaseUrl!);
+    db = createWorkbenchDb(databaseUrl!);
+    taskId = `task-policy-upgrade-${randomUUID()}`;
+    let now = new Date("2026-08-21T00:00:00.000Z");
+    await insertConfirmedTaskAndPlan(db, taskId, now.toISOString());
+    const module = createSourceDatasetModule(db, { now: () => now,
+      assetStore: { async put() { throw new Error("不应写附件"); }, open() { return Readable.from([]); } },
+    });
+    const gateKey = `public.web-resource@1.0.0:${randomUUID()}`;
+    const first = await startAdmissionRun(module, taskId, "policy-v1", 60_000, "first");
+    const firstRequest = admissionRequest(first.id, gateKey, "policy-v1", 60_000, "first");
+    const admitted = await module.reserveRequest(firstRequest);
+    expect(admitted.status).toBe("admitted");
+    if (admitted.status !== "admitted") throw new Error("首个请求未获准");
+    await module.finishRequest({ attemptId: admitted.attempt.id, state: "completed",
+      finalUrl: firstRequest.requestedUrl, httpStatus: 200, bytes: 1 });
+    await module.finishCaptureWorkItem({ runId: first.id, workKey: "work-first",
+      status: "completed", observedUnitCount: 1 });
+    await module.finishTarget({ runId: first.id, targetKey: "product-detail",
+      status: "completed", terminationReason: "target_scope_completed" });
+    await module.finishRun({ runId: first.id, status: "completed",
+      terminationReason: "plan_scope_completed" });
+
+    now = new Date("2026-08-21T00:01:30.000Z");
+    const second = await startAdmissionRun(module, taskId, "policy-v2", 120_000, "second");
+    const secondRequest = admissionRequest(second.id, gateKey, "policy-v2", 120_000, "second");
+    await expect(module.reserveRequest(secondRequest)).resolves.toMatchObject({
+      status: "deferred", retryAt: "2026-08-21T00:02:00.000Z",
+    });
+    await expect(module.getAccessGate(gateKey)).resolves.toMatchObject({ policyVersion: "policy-v2" });
+
+    now = new Date("2026-08-21T00:02:01.000Z");
+    await expect(module.reserveRequest(secondRequest)).resolves.toMatchObject({ status: "admitted" });
+  });
 });
+
+async function startAdmissionRun(
+  module: ReturnType<typeof createSourceDatasetModule>,
+  taskId: string,
+  policyVersion: string,
+  minimumIntervalMs: number,
+  suffix: string,
+) {
+  const run = await module.startRun({ taskId, planId: "plan-request-admission", planVersion: 1,
+    sourceKey: `brand-${suffix}`, providerKey: "public.web-resource", providerVersion: "1.0.0",
+    requestBudget: 1, accessPolicy: { kind: "paced_http", version: policyVersion,
+      maxRequestsPerMinute: 1, minimumIntervalMs, jitterMs: { min: 0, max: 0 }, batchSize: 1,
+      batchCooldownMs: 60_000, maximumRunMs: 180_000 }, targetKeys: ["product-detail"] });
+  await module.startTarget({ runId: run.id, targetKey: "product-detail" });
+  await module.ensureCaptureWorkItem({ runId: run.id, targetKey: "product-detail",
+    workKey: `work-${suffix}`, captureUnit: "exact_page", expectedUnitCount: 1 });
+  await module.startCaptureWorkItem({ runId: run.id, workKey: `work-${suffix}` });
+  return run;
+}
+
+function admissionRequest(
+  runId: string,
+  gateKey: string,
+  policyVersion: string,
+  minimumIntervalMs: number,
+  suffix: string,
+) {
+  return { runId, targetKey: "product-detail", workKey: `work-${suffix}`, gateKey,
+    providerKey: "public.web-resource", providerVersion: "1.0.0", policyVersion,
+    requestedUrl: `https://brand.example/products/${suffix}`,
+    minimumIntervalMs, maxRequestsPerMinute: 1 };
+}
 
 async function insertConfirmedTaskAndPlan(db: WorkbenchDb, taskId: string, at: string) {
   await db.insert(captureTasks).values({ id: taskId, name: "请求准入测试", originalRequest: "本地 fixture",
     marketScope: "本地 fixture", status: "ready", revision: 1, createdAt: at, updatedAt: at, confirmedAt: at });
   await db.insert(sourceCollectionPlans).values({ id: "plan-request-admission", taskId, taskRevision: 1,
     version: 1, status: "confirmed", contentHash: "1".repeat(64), confirmedAt: at,
-    content: { taskId, taskRevision: 1, sources: [{ key: "jd", providerKey: "jd.catalog-product",
-      entryUrl: "https://www.jd.com/", expectedContents: ["详情"],
+    content: { taskId, taskRevision: 1, sources: [{ key: "brand", providerKey: "public.web-resource",
+      entryUrl: "https://brand.example/products/model-1", expectedContents: ["产品详情"],
       accessPolicy: { kind: "manual", version: "fixture" } }] } });
 }
 

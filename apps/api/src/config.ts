@@ -8,7 +8,7 @@ const configSchema = z.object({
     .default("postgresql://guojunxi@127.0.0.1:5432/domain_analysis"),
   interviewModelId: z.string().min(1).default("gpt-5.6-terra"),
   interviewReasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).default("medium"),
-  jdRealHttpEnabled: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  crawlPlanningBrandBatchSize: z.coerce.number().int().min(1).max(10).default(3),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -21,6 +21,6 @@ export function loadConfig(env = process.env): AppConfig {
     postgresDatabaseUrl: env.POSTGRES_DATABASE_URL,
     interviewModelId: env.INTERVIEW_MODEL_ID,
     interviewReasoningEffort: env.INTERVIEW_REASONING_EFFORT,
-    jdRealHttpEnabled: env.JD_REAL_HTTP_ENABLED,
+    crawlPlanningBrandBatchSize: env.CRAWL_PLANNING_BRAND_BATCH_SIZE,
   });
 }

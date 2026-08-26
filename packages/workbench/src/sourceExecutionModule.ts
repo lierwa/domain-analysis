@@ -84,6 +84,7 @@ export function createSourceExecutionModule(
       const sources = resolveExecutableSources(plan, resolve);
       const batch = await datasets.startBatch({ taskId: plan.taskId, planId: plan.id,
         planVersion: plan.version, taskRevision: plan.taskRevision, plannedSourceCount: sources.length });
+      const batchLease = await datasets.acquireBatchLease(batch.id);
       yield parseExecutionEvent({ type: "batch.started", batch });
       const terminals = { completed: 0, failed: 0, stopped: 0 };
       let finalized = false;
@@ -124,6 +125,7 @@ export function createSourceExecutionModule(
           await datasets.finishBatch({ batchId: batch.id, status: "stopped",
             terminationReason: "operator_cancelled" }).catch(() => undefined);
         }
+        await batchLease.release();
       }
     },
     resume: async function* (raw) {
@@ -141,9 +143,11 @@ export function createSourceExecutionModule(
       await preflightSource(source, provider);
       const preparedRun = await datasets.prepareRunForResume(previous.run.id);
       const queueRunId = await findResumeRootRunId(datasets, preparedRun);
+      // WHY：恢复产生新 Source Run，但仍属于用户最初启动的同一批次；只继承批次关系，
+      // 不修改旧运行和批次事实，确保 UI、导出与失败重试都能按一次抓取聚合。
       yield* executeSource(plan, source, provider, datasets, raw.signal,
         sourceProviderCollectionContextSchema.parse({ resumedFromRunId: preparedRun.id, queueRunId,
-          accessPolicy: effectiveAccessPolicy(source) }));
+          accessPolicy: effectiveAccessPolicy(source) }), preparedRun.executionBatchId);
     },
   };
 }
@@ -213,7 +217,11 @@ async function* executeSource(
         const view = await datasets.commitSnapshot({ ...event.snapshot, runId: run.id,
           targetKey: event.targetKey, assets: event.assets,
           resourceReferences: event.resourceReferences });
-        if (event.snapshot.observation.state === "accessible") state.accessibleCount += 1;
+        if (event.snapshot.observation.state === "accessible"
+          && event.snapshot.observation.contentAssessment?.status !== "rejected"
+          && event.snapshot.observation.contentAssessment?.status !== "supporting") {
+          state.accessibleCount += 1;
+        }
         yield parseRunEvent({ type: "run.updated", run: view.run });
         if (event.snapshot.observation.state !== "accessible" && source.stopPolicy.stopOnAccessRestriction) {
           state.status = "failed";

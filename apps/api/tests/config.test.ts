@@ -1,18 +1,16 @@
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
 import { loadConfig } from "../src/config";
 
 describe("API 安全配置", () => {
-  it("未配置的部署默认关闭 JD 真实 HTTP，只有精确 true 才开启", () => {
-    expect(loadConfig({}).jdRealHttpEnabled).toBe(false);
-    expect(loadConfig({ JD_REAL_HTTP_ENABLED: "false" }).jdRealHttpEnabled).toBe(false);
-    expect(loadConfig({ JD_REAL_HTTP_ENABLED: "true" }).jdRealHttpEnabled).toBe(true);
+  it("未配置时只监听本机并使用已验证的规划模型默认值", () => {
+    expect(loadConfig({})).toMatchObject({ host: "127.0.0.1", port: 4000,
+      interviewModelId: "gpt-5.6-terra", interviewReasoningEffort: "medium",
+      crawlPlanningBrandBatchSize: 3 });
   });
 
-  it("项目本地启动配置装配 JD HTTP，真正出网仍等待显式 Start", () => {
-    const localDevelopmentEnv = readFileSync(new URL("../../../.env.example", import.meta.url), "utf8");
-    expect(localDevelopmentEnv).toContain("JD_REAL_HTTP_ENABLED=true");
+  it("允许把官网核对批量调整为单品牌，但拒绝无界批量", () => {
+    expect(loadConfig({ CRAWL_PLANNING_BRAND_BATCH_SIZE: "1" }).crawlPlanningBrandBatchSize).toBe(1);
+    expect(() => loadConfig({ CRAWL_PLANNING_BRAND_BATCH_SIZE: "11" })).toThrow();
   });
 });

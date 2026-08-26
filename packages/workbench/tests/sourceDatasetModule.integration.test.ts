@@ -8,6 +8,7 @@ import {
   createWorkbenchDb,
   migrateWorkbenchDatabase,
   sourceCollectionPlans,
+  sourceCollectionBatches,
   sourceAssets,
   sourceCollectionRuns,
   sourceCollectionTargetRuns,
@@ -37,34 +38,34 @@ describeWithPostgres("Source Dataset 资源引用", () => {
     child = undefined;
   });
 
-  it("详情 Snapshot 原子保存 25 条图片 URL 且不生成 Asset", async () => {
+  it("公共产品页 Snapshot 原子保存 25 条图片 URL 且不生成 Asset", async () => {
     await migrateWorkbenchDatabase(databaseUrl!);
     db = createWorkbenchDb(databaseUrl!);
     taskId = `task-resource-reference-${randomUUID()}`;
     const at = "2026-08-21T00:00:00.000Z";
     await db.insert(captureTasks).values({ id: taskId, name: "图片 URL 测试",
-      originalRequest: "抓取详情图片 URL", marketScope: "本地 fixture", status: "ready",
+      originalRequest: "抓取品牌官网产品图片 URL", marketScope: "本地 fixture", status: "ready",
       revision: 1, createdAt: at, updatedAt: at, confirmedAt: at });
     await db.insert(sourceCollectionPlans).values({ id: "plan-1", taskId, taskRevision: 1,
       version: 1, status: "confirmed", contentHash: "0".repeat(64), confirmedAt: at,
-      content: { taskId, taskRevision: 1, sources: [{ key: "jd", providerKey: "jd.catalog-product",
-        entryUrl: "https://www.jd.com/", expectedContents: ["详情图片 URL"],
+      content: { taskId, taskRevision: 1, sources: [{ key: "brand", providerKey: "public.web-resource",
+        entryUrl: "https://brand.example/products/model-1", expectedContents: ["产品图片 URL"],
         accessPolicy: { kind: "manual", version: "fixture" } }] } });
     const datasets = createSourceDatasetModule(db, { assetStore: {
       async put() { throw new Error("URL-only 捕获不应写入 Asset Store"); },
       open() { return Readable.from([]); },
     } });
     const run = await datasets.startRun({ taskId, planId: "plan-1", planVersion: 1,
-      sourceKey: "jd", providerKey: "jd.catalog-product", providerVersion: "2.0.0",
+      sourceKey: "brand", providerKey: "public.web-resource", providerVersion: "1.0.0",
       requestBudget: 1,
       accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 1,
         minimumIntervalMs: 1, jitterMs: { min: 0, max: 0 }, batchSize: 1,
-        batchCooldownMs: 1, maximumRunMs: 1_000 }, targetKeys: ["product_details"] });
-    await datasets.startTarget({ runId: run.id, targetKey: "product_details" });
-    const html = "<html>detail</html>";
-    const view = await datasets.commitSnapshot({ runId: run.id, targetKey: "product_details",
-      idempotencyKey: "sku-1-detail", object: { sourceIdentity: "jd", kind: "product", externalKey: "sku-1" },
-      observation: { requestedUrl: "https://item.example.com/sku-1", observedAt: at,
+        batchCooldownMs: 1, maximumRunMs: 1_000 }, targetKeys: ["product-detail"] });
+    await datasets.startTarget({ runId: run.id, targetKey: "product-detail" });
+    const html = "<html>product</html>";
+    const view = await datasets.commitSnapshot({ runId: run.id, targetKey: "product-detail",
+      idempotencyKey: "model-1", object: { sourceIdentity: "brand.example", kind: "product", externalKey: "model-1" },
+      observation: { requestedUrl: "https://brand.example/products/model-1", observedAt: at,
         state: "accessible", responseHeaders: {} }, payload: { kind: "inline_text", mediaType: "text/html",
         charset: "utf-8", text: html, bytes: Buffer.byteLength(html), contentHash: hash(html) },
       assets: [], resourceReferences: references(25) });
@@ -81,6 +82,53 @@ describeWithPostgres("Source Dataset 资源引用", () => {
     expect(jsonl).toContain("https://img.example.com/24.webp");
   });
 
+  it("保存内容不合格的原文，但不把它计入 target 内容通过数", async () => {
+    await migrateWorkbenchDatabase(databaseUrl!);
+    db = createWorkbenchDb(databaseUrl!);
+    taskId = `task-content-assessment-${randomUUID()}`;
+    const at = "2026-08-26T00:00:00.000Z";
+    await db.insert(captureTasks).values({ id: taskId, name: "内容验收计数",
+      originalRequest: "抓官网目录", marketScope: "本地 fixture", status: "ready",
+      revision: 1, createdAt: at, updatedAt: at, confirmedAt: at });
+    await db.insert(sourceCollectionPlans).values({ id: "plan-content-assessment", taskId,
+      taskRevision: 1, version: 4, status: "confirmed", contentHash: "a".repeat(64), confirmedAt: at,
+      content: { taskId, taskRevision: 1, sources: [{ key: "brand", providerKey: "public.web-resource",
+        entryUrl: "https://brand.example/about", expectedContents: ["产品目录"],
+        accessPolicy: { kind: "manual", version: "fixture" } }] } });
+    const datasets = createSourceDatasetModule(db, { assetStore: {
+      async put() { throw new Error("不应写附件"); }, open() { return Readable.from([]); },
+    } });
+    const run = await datasets.startRun({ taskId, planId: "plan-content-assessment", planVersion: 4,
+      sourceKey: "brand", providerKey: "public.web-resource", providerVersion: "2.0.0", requestBudget: 10,
+      accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 1,
+        minimumIntervalMs: 1, jitterMs: { min: 0, max: 0 }, batchSize: 1,
+        batchCooldownMs: 1, maximumRunMs: 1_000 }, targetKeys: ["catalog"] });
+    await datasets.startTarget({ runId: run.id, targetKey: "catalog" });
+    const html = "<html>公司介绍</html>";
+    await datasets.commitSnapshot({ runId: run.id, targetKey: "catalog",
+      idempotencyKey: "about", object: { sourceIdentity: "brand.example", kind: "web_resource",
+        externalKey: "https://brand.example/about" },
+      observation: { requestedUrl: "https://brand.example/about", observedAt: at,
+        state: "accessible", responseHeaders: {}, contentAssessment: { status: "rejected",
+          ruleVersion: "public-content-v1", matchedSignals: ["品牌"], reason: "没有产品目录或型号" } },
+      payload: { kind: "inline_text", mediaType: "text/html", charset: "utf-8", text: html,
+        bytes: Buffer.byteLength(html), contentHash: hash(html) }, assets: [], resourceReferences: [] });
+    const sitemap = "<urlset></urlset>";
+    const view = await datasets.commitSnapshot({ runId: run.id, targetKey: "catalog",
+      idempotencyKey: "sitemap", object: { sourceIdentity: "brand.example", kind: "web_resource",
+        externalKey: "https://brand.example/sitemap.xml" },
+      observation: { requestedUrl: "https://brand.example/sitemap.xml", observedAt: at,
+        state: "accessible", responseHeaders: {}, contentAssessment: { status: "supporting",
+          ruleVersion: "public-content-v1", matchedSignals: ["sitemap_raw"], reason: "只支撑 URL 分母" } },
+      payload: { kind: "inline_text", mediaType: "application/xml", charset: "utf-8", text: sitemap,
+        bytes: Buffer.byteLength(sitemap), contentHash: hash(sitemap) }, assets: [], resourceReferences: [] });
+
+    expect(view.run).toMatchObject({ snapshotCount: 2, accessibleCount: 0, failedCount: 1 });
+    expect(view.targets[0]).toMatchObject({ snapshotCount: 2, accessibleCount: 0, failedCount: 1 });
+    expect(view.records.map((record) => record.snapshot.observation.contentAssessment?.status))
+      .toEqual(["rejected", "supporting"]);
+  });
+
   it("仍有未结束捕获工作时不得把 target 记为 completed", async () => {
     await migrateWorkbenchDatabase(databaseUrl!);
     db = createWorkbenchDb(databaseUrl!);
@@ -91,23 +139,23 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       revision: 1, createdAt: at, updatedAt: at, confirmedAt: at });
     await db.insert(sourceCollectionPlans).values({ id: "plan-target-work-gate", taskId, taskRevision: 1,
       version: 1, status: "confirmed", contentHash: "2".repeat(64), confirmedAt: at,
-      content: { taskId, taskRevision: 1, sources: [{ key: "jd", providerKey: "jd.catalog-product",
-        entryUrl: "https://www.jd.com/", expectedContents: ["详情"],
+      content: { taskId, taskRevision: 1, sources: [{ key: "brand", providerKey: "public.web-resource",
+        entryUrl: "https://brand.example/products/model-1", expectedContents: ["产品详情"],
         accessPolicy: { kind: "manual", version: "fixture" } }] } });
     const datasets = createSourceDatasetModule(db, { assetStore: {
       async put() { throw new Error("不应写附件"); }, open() { return Readable.from([]); },
     } });
     const run = await datasets.startRun({ taskId, planId: "plan-target-work-gate", planVersion: 1,
-      sourceKey: "jd", providerKey: "jd.catalog-product", providerVersion: "2.0.0", requestBudget: 1,
+      sourceKey: "brand", providerKey: "public.web-resource", providerVersion: "1.0.0", requestBudget: 1,
       accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 1,
         minimumIntervalMs: 60_000, jitterMs: { min: 0, max: 0 }, batchSize: 1,
-        batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product_details"] });
-    await datasets.startTarget({ runId: run.id, targetKey: "product_details" });
-    await datasets.ensureCaptureWorkItem({ runId: run.id, targetKey: "product_details",
-      workKey: "product:sku-1", captureUnit: "product_detail", expectedUnitCount: 1 });
-    await datasets.startCaptureWorkItem({ runId: run.id, workKey: "product:sku-1" });
+        batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product-detail"] });
+    await datasets.startTarget({ runId: run.id, targetKey: "product-detail" });
+    await datasets.ensureCaptureWorkItem({ runId: run.id, targetKey: "product-detail",
+      workKey: "product:model-1", captureUnit: "exact_page", expectedUnitCount: 1 });
+    await datasets.startCaptureWorkItem({ runId: run.id, workKey: "product:model-1" });
 
-    await expect(datasets.finishTarget({ runId: run.id, targetKey: "product_details",
+    await expect(datasets.finishTarget({ runId: run.id, targetKey: "product-detail",
       status: "completed", terminationReason: "target_scope_completed" }))
       .rejects.toThrow("仍有未完成捕获工作");
 
@@ -126,12 +174,62 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       workItems: [expect.objectContaining({ status: "stopped" })],
     });
     await expect(datasets.startRun({ taskId, planId: "plan-target-work-gate", planVersion: 1,
-      sourceKey: "jd", providerKey: "jd.catalog-product", providerVersion: "2.0.0", requestBudget: 1,
+      sourceKey: "brand", providerKey: "public.web-resource", providerVersion: "1.0.0", requestBudget: 1,
       accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 1,
         minimumIntervalMs: 60_000, jitterMs: { min: 0, max: 0 }, batchSize: 1,
-        batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product_details"],
+        batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product-detail"],
       resumedFromRunId: run.id })).resolves.toMatchObject({ resumedFromRunId: run.id, status: "running" });
   });
+
+  it("启动恢复把无活动执行进程的 running 批次和运行收口为 stopped", async () => {
+    await migrateWorkbenchDatabase(databaseUrl!);
+    db = createWorkbenchDb(databaseUrl!);
+    taskId = `task-interrupted-batch-${randomUUID()}`;
+    const at = "2026-08-21T00:00:00.000Z";
+    await db.insert(captureTasks).values({ id: taskId, name: "失联批次恢复测试",
+      originalRequest: "本地 fixture", marketScope: "本地 fixture", status: "ready",
+      revision: 1, createdAt: at, updatedAt: at, confirmedAt: at });
+    await db.insert(sourceCollectionPlans).values({ id: "plan-interrupted-batch", taskId,
+      taskRevision: 1, version: 3, status: "confirmed", contentHash: "3".repeat(64), confirmedAt: at,
+      content: { taskId, taskRevision: 1, sources: [{ key: "brand",
+        providerKey: "public.web-resource", entryUrl: "https://brand.example/products/model-1",
+        expectedContents: ["产品详情"], accessPolicy: { kind: "manual", version: "fixture" } }] } });
+    const datasets = createSourceDatasetModule(db, { assetStore: {
+      async put() { throw new Error("不应写附件"); }, open() { return Readable.from([]); },
+    } });
+    const batch = await datasets.startBatch({ taskId, planId: "plan-interrupted-batch",
+      planVersion: 3, taskRevision: 1, plannedSourceCount: 1 });
+    const run = await datasets.startRun({ taskId, planId: "plan-interrupted-batch", planVersion: 3,
+      batchId: batch.id, sourceKey: "brand", providerKey: "public.web-resource",
+      providerVersion: "1.0.0", requestBudget: 1,
+      accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 1,
+        minimumIntervalMs: 60_000, jitterMs: { min: 0, max: 0 }, batchSize: 1,
+        batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product-detail"] });
+    await datasets.startTarget({ runId: run.id, targetKey: "product-detail" });
+    await datasets.ensureCaptureWorkItem({ runId: run.id, targetKey: "product-detail",
+      workKey: "product:model-1", captureUnit: "exact_page", expectedUnitCount: 1 });
+    await datasets.startCaptureWorkItem({ runId: run.id, workKey: "product:model-1" });
+
+    const lease = await datasets.acquireBatchLease(batch.id);
+    await expect(datasets.recoverInterruptedBatches({ taskId })).resolves.toEqual([]);
+    await expect(datasets.listTask(taskId)).resolves.toMatchObject({
+      batches: [expect.objectContaining({ id: batch.id, status: "running" })],
+      runs: [expect.objectContaining({ id: run.id, status: "running" })],
+    });
+    await lease.release();
+    await expect(datasets.recoverInterruptedBatches({ taskId })).resolves.toEqual([batch.id]);
+    await expect(datasets.listTask(taskId)).resolves.toMatchObject({
+      batches: [expect.objectContaining({ id: batch.id, status: "stopped",
+        terminationReason: "execution_process_lost" })],
+      runs: [expect.objectContaining({ id: run.id, status: "stopped",
+        terminationReason: "execution_process_lost" })],
+    });
+    await expect(datasets.getRun(run.id)).resolves.toMatchObject({
+      targets: [expect.objectContaining({ status: "stopped" })],
+      workItems: [expect.objectContaining({ status: "stopped" })],
+    });
+  });
+
 });
 
 function references(count: number) {
@@ -191,6 +289,7 @@ async function clearTask(db: WorkbenchDb, taskId: string) {
     await db.delete(sourceCollectionTargetRuns).where(eq(sourceCollectionTargetRuns.runId, run.id));
   }
   await db.delete(sourceCollectionRuns).where(eq(sourceCollectionRuns.taskId, taskId));
+  await db.delete(sourceCollectionBatches).where(eq(sourceCollectionBatches.taskId, taskId));
   await db.delete(sourceObjects).where(eq(sourceObjects.taskId, taskId));
   await db.delete(sourceCollectionPlans).where(eq(sourceCollectionPlans.taskId, taskId));
   await db.delete(captureTasks).where(eq(captureTasks.id, taskId));

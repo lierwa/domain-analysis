@@ -9,7 +9,7 @@ import {
   type SourcePreparation,
 } from "@domain-analysis/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronRight, LoaderCircle, RefreshCw, Square } from "lucide-react";
+import { Check, ChevronRight, LoaderCircle, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -22,11 +22,16 @@ import {
 import { formatDateTime } from "../lib/format";
 import { InterviewActivity } from "./InterviewThread";
 import { collapseWebSearchActivities } from "./interviewTimelineModel";
+import { CrawlPlanningResearchAuditCard } from "./CrawlPlanningResearchAuditCard";
 
 export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
   const queryClient = useQueryClient();
   const queryKey = ["crawl-planning", task.id] as const;
-  const planning = useQuery({ queryKey, queryFn: () => fetchCrawlPlanning(task.id) });
+  const planning = useQuery({
+    queryKey,
+    queryFn: () => fetchCrawlPlanning(task.id),
+    refetchInterval: (query) => query.state.data?.runs[0]?.status === "running" ? 1_000 : false,
+  });
   const [instruction, setInstruction] = useState("");
   const [liveParts, setLiveParts] = useState<InterviewMessageTimelinePart[]>();
   const [runError, setRunError] = useState<string>();
@@ -44,7 +49,7 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
 
   async function runPlanning() {
     setRunError(undefined);
-    setLiveParts([]);
+    setLiveParts(undefined);
     setIsRunning(true);
     const abortController = new AbortController();
     abortRef.current = abortController;
@@ -68,7 +73,9 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
   }
 
   function handleEvent(event: CrawlPlanningEvent) {
-    if (event.type === "run.activity") {
+    if (event.type === "run.started") {
+      void planning.refetch();
+    } else if (event.type === "run.activity") {
       setLiveParts((current = []) => appendInterviewTimelineActivity(current, event.activity));
     } else if (event.type === "assistant.delta") {
       setLiveParts((current = []) => appendInterviewTimelineText(current, event.delta));
@@ -114,7 +121,7 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
 
   async function execute(plan: CrawlPlan) {
     if (!canStartAvailableSources(plan, preparation)) {
-      setRunError("请先完成抓取环境准备和登录检查");
+      setRunError("请先完成抓取条件检查");
       return;
     }
     setRunError(undefined); setIsExecuting(true);
@@ -138,6 +145,7 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
   }
   const latestPlan = planning.data.plans[0];
   const latestRun = planning.data.runs[0];
+  const planningRunning = isRunning || latestRun?.status === "running";
   const visibleParts = liveParts ?? latestRun?.timelineParts ?? [];
 
   return (
@@ -159,14 +167,14 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
           id="crawl-plan-instruction"
           className="mt-2 min-h-24 w-full resize-y rounded-lg border border-line bg-panel px-3 py-2 text-sm leading-6 outline-none focus:border-ink"
           value={instruction}
-          disabled={isRunning}
+          disabled={planningRunning}
           onChange={(event) => setInstruction(event.target.value)}
           placeholder={latestPlan ? "例如：减少评价样本量，增加国家标准和能效备案来源" : "首次制定可留空；如有额外边界，可在这里说明"}
         />
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          {isRunning ? (
-            <button type="button" className="button-secondary" onClick={() => abortRef.current?.abort()}>
-              <Square className="h-4 w-4 fill-current" aria-hidden="true" />停止本轮
+          {planningRunning ? (
+            <button type="button" className="button-secondary" disabled>
+              <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />后台规划中
             </button>
           ) : (
             <button type="button" className="button-primary" onClick={() => void runPlanning()}>
@@ -174,15 +182,15 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
               {latestPlan ? "重新规划并生成新版本" : "制定抓取计划"}
             </button>
           )}
-          <p className="text-xs leading-5 text-muted">运行留在当前页面可见；离开页面会中止，已完成版本会保留。</p>
+          <p className="text-xs leading-5 text-muted">可以离开或刷新页面；后台会按已完成阶段继续，最终只生成一个新草稿。</p>
         </div>
         {runError && <p className="mt-3 text-sm text-danger" role="alert">{runError}</p>}
       </section>
 
-      {(visibleParts.length > 0 || isRunning) && (
-        <PlanningTimeline parts={visibleParts} isRunning={isRunning} />
+      {(visibleParts.length > 0 || planningRunning) && (
+        <PlanningTimeline parts={visibleParts} isRunning={planningRunning} />
       )}
-      {!isRunning && latestRun && (latestRun.status === "interrupted" || latestRun.status === "failed") && (
+      {!planningRunning && latestRun && (latestRun.status === "interrupted" || latestRun.status === "failed") && (
         <p className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-900" role="alert">
           本次重新规划{latestRun.status === "interrupted" ? "已中断" : "失败"}，没有生成可用的新计划。
           下方仍是此前保留的计划版本，必须通过当前执行完整性检查后才能开始抓取。
@@ -199,7 +207,6 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
           onPrepare={() => void prepareEnvironment(latestPlan)}
           isExecuting={isExecuting}
           onExecute={() => void execute(latestPlan)}
-          executionBlockReason={planExecutionBlockReason(task, latestPlan)}
           executionAccepted={executionAccepted}
         />
       ) : (
@@ -268,7 +275,8 @@ export function CrawlPlanCard({
   const current = plan.taskRevision === currentTaskRevision;
   // WHY：服务端会拒绝任何带 blocker 的计划；页面必须在点击前表达同一事实，避免把纸面候选伪装成可确认计划。
   const hasExecutionBlockers = plan.content.sources.some((source) => source.executionBlockers.length > 0);
-  const isExecutionChecklist = plan.content.executionChecklistVersion === 2
+  const isExecutionChecklist = plan.content.executionChecklistVersion === 4
+    && plan.content.researchAudit?.strategyVersion === 3
     && plan.content.sources.every((source) => source.targets.every((target) => target.providerConfiguration.length > 0));
   const canStart = canStartAvailableSources(plan, preparation);
   const targetCount = plan.content.sources.reduce((count, source) => count + source.targets.length, 0);
@@ -282,6 +290,7 @@ export function CrawlPlanCard({
         </div>
         <span className="status-badge">{planStatus(plan, current, hasExecutionBlockers, isExecutionChecklist)}</span>
       </div>
+      {plan.content.researchAudit && <CrawlPlanningResearchAuditCard audit={plan.content.researchAudit} />}
       <div className="mt-5 space-y-5">
         {plan.content.sources.map((source) => <CrawlPlanSourceCard key={source.key} source={source} />)}
       </div>
@@ -345,15 +354,6 @@ export function CrawlPlanCard({
       </div>
     </section>
   );
-}
-
-function planExecutionBlockReason(task: CaptureTask, plan: CrawlPlan) {
-  if (task.content.jd.applicable && task.content.jd.disposition === "included"
-    && !plan.content.sources.some((source) => source.provider.key === "jd.catalog-product"
-      && source.provider.version === "2.0.0")) {
-    return "这个旧计划没有京东商品抓取 Provider，不能开始；请重新规划并确认包含 jd.catalog-product@2.0.0 的新版本。";
-  }
-  return undefined;
 }
 
 function canStartAvailableSources(plan: CrawlPlan, preparation?: SourcePreparation) {

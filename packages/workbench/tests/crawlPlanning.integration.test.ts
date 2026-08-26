@@ -1,11 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 
-import {
-  crawlPlanningRuntimeOutputSchema,
-  type CaptureTaskContent,
-  type CrawlPlanningRuntimeOutput,
-} from "@domain-analysis/shared";
+import type { CrawlPlanningRuntimeOutput } from "@domain-analysis/shared";
 import {
   captureTasks,
   crawlPlanningRuns,
@@ -33,6 +29,7 @@ import {
   type CrawlPlanningRuntime,
   type CrawlPlanningRuntimeEvent,
 } from "../src";
+import { target, taskContent, validOutput } from "./crawlPlanningIntegrationTestSupport";
 
 const databaseUrl = process.env.POSTGRES_DATABASE_URL;
 const describeWithPostgres = databaseUrl ? describe.sequential : describe.skip;
@@ -94,6 +91,34 @@ describeWithPostgres("抓取计划版本与确认", () => {
     expect(await db.select().from(sourceCollectionRuns).where(eq(sourceCollectionRuns.taskId, taskId))).toHaveLength(0);
   });
 
+  it("历史计划来源只读保留，但未在本轮核实且非当前候选时不复制到新计划", async () => {
+    const opened = await openModules();
+    db = opened.db;
+    taskId = opened.task.id;
+    const first = validOutput(1);
+    const extra = structuredClone(first.planCandidate.sources.find((source) => source.key === "technical")!);
+    extra.key = "extra-technical";
+    extra.name = "已发现补充技术来源";
+    extra.sourceCandidateIds = [];
+    extra.entryUrls = ["https://extra.example.com/principles"];
+    extra.targets[0]!.key = "extra-principles";
+    extra.targets[0]!.providerConfiguration = [
+      { key: "route", value: "exact" }, { key: "url", value: extra.entryUrls[0]! },
+    ];
+    first.planCandidate.sources.push(extra);
+    opened.runtime.push(first);
+    await collect(opened.planning.run({ taskId, expectedTaskRevision: 1 }));
+
+    opened.runtime.push(validOutput(2));
+    const events = await collect(opened.planning.run({ taskId, expectedTaskRevision: 1 }));
+
+    expect(events).toContainEqual(expect.objectContaining({ type: "run.completed" }));
+    const view = (await opened.planning.get(taskId))!;
+    expect(view.plans).toHaveLength(2);
+    expect(view.plans[0]!.content.sources.some((source) => source.key === "extra-technical")).toBe(false);
+    expect(view.plans[1]!.content.sources.some((source) => source.key === "extra-technical")).toBe(true);
+  });
+
   it("任务 topic 缺失时失败关闭且不保存计划", async () => {
     const opened = await openModules();
     db = opened.db;
@@ -123,12 +148,12 @@ describeWithPostgres("抓取计划版本与确认", () => {
     await collect(opened.planning.run({ taskId, expectedTaskRevision: 1 }));
     let view = (await opened.planning.get(taskId))!;
     expect(phases).toEqual([
-      "validate:jd", "validate:brand", "validate:brand-secondary", "validate:standard", "validate:technical",
+      "validate:brand", "validate:brand-secondary", "validate:standard", "validate:technical",
     ]);
 
     await opened.planning.confirm({ taskId, planId: view.plans[0]!.id, expectedTaskRevision: 1 });
-    expect(phases.slice(5)).toEqual([
-      "validate:jd", "validate:brand", "validate:brand-secondary", "validate:standard", "validate:technical",
+    expect(phases.slice(4)).toEqual([
+      "validate:brand", "validate:brand-secondary", "validate:standard", "validate:technical",
     ]);
   });
 
@@ -149,22 +174,22 @@ describeWithPostgres("抓取计划版本与确认", () => {
     expect((await opened.planning.get(taskId))!.plans).toHaveLength(0);
   });
 
-  it("任务只有品牌官网时，即使模型返回计划也因专业来源组合不完整而失败关闭", async () => {
+  it("任务候选只有品牌官网时，规划阶段可以深搜补齐标准与技术来源", async () => {
     const content = taskContent();
     content.jd = { applicable: false, disposition: "excluded", scope: [], rationale: "旧采访误判为不适用" };
     content.sourceCandidates = content.sourceCandidates.filter((item) => item.sourceKind === "brand_official");
     const opened = await openModules(content);
     db = opened.db;
     taskId = opened.task.id;
-    opened.runtime.push(validOutput(1));
+    const output = validOutput(1);
+    output.planCandidate.sources.filter((source) => source.sourceKind !== "brand_official")
+      .forEach((source) => { source.sourceCandidateIds = []; });
+    opened.runtime.push(output);
 
     const events = await collect(opened.planning.run({ taskId, expectedTaskRevision: 1 }));
 
-    expect(events).toContainEqual(expect.objectContaining({
-      type: "run.failed",
-      error: expect.stringContaining("核心零售/市场平台、国家标准或监管来源、权威技术原理来源"),
-    }));
-    expect((await opened.planning.get(taskId))!.plans).toHaveLength(0);
+    expect(events).toContainEqual(expect.objectContaining({ type: "run.completed" }));
+    expect((await opened.planning.get(taskId))!.plans).toHaveLength(1);
   });
 
   it("即使 topic 文字被挂到其他来源，遗漏采访来源候选仍失败关闭", async () => {
@@ -200,7 +225,7 @@ describeWithPostgres("抓取计划版本与确认", () => {
     expect((await opened.planning.get(taskId))!.plans).toHaveLength(0);
   });
 
-  it("品牌说明书为 H5 时，单列一次同源跟进 target 即可形成可执行清单", async () => {
+  it("version 4 拒绝旧链接文字协议，H5 发现必须由 site route 冻结", async () => {
     const content = taskContent();
     const brandCandidate = content.sourceCandidates.find((item) => item.id === "candidate-brand")!;
     brandCandidate.expectedContents = ["型号参数", "说明书"];
@@ -222,26 +247,22 @@ describeWithPostgres("抓取计划版本与确认", () => {
 
     const events = await collect(opened.planning.run({ taskId, expectedTaskRevision: 1 }));
 
-    expect(events).toContainEqual(expect.objectContaining({ type: "run.completed" }));
-    expect((await opened.planning.get(taskId))!.plans).toHaveLength(1);
+    expect(events).toContainEqual(expect.objectContaining({ type: "run.failed" }));
+    expect((await opened.planning.get(taskId))!.plans).toHaveLength(0);
   });
 
-  it("京东任务不能只用通用搜索页冒充 JD v2 商品抓取", async () => {
+  it("version 4 正式计划出现任何京东 URL 时失败关闭", async () => {
     const content = taskContent();
     const entryUrl = "https://search.jd.com/Search?keyword=%E5%86%B0%E7%AE%B1";
-    content.sourceCandidates[0] = candidate("candidate-jd", "京东搜索", entryUrl, "retailer");
     const opened = await openModules(content);
     db = opened.db;
     taskId = opened.task.id;
     const output = validOutput(1);
-    const jd = output.planCandidate.sources[0]!;
-    jd.entryUrls = [entryUrl];
-    jd.provider = { key: "public.web-resource", version: "1.0.0", configuration: [
-      { key: "mode", value: "exact_https" }, { key: "maximum_bytes", value: 5_000_000 },
-    ] };
-    jd.targets = [{
+    const brand = output.planCandidate.sources[0]!;
+    brand.entryUrls = [entryUrl];
+    brand.targets = [{
       ...target("jd-search", "品牌与型号"), taskTopics: ["品牌与型号", "配置参数"],
-      providerConfiguration: [{ key: "url", value: entryUrl }],
+      providerConfiguration: [{ key: "route", value: "exact" }, { key: "url", value: entryUrl }],
     }];
     opened.runtime.push(output);
 
@@ -249,54 +270,45 @@ describeWithPostgres("抓取计划版本与确认", () => {
 
     expect(events).toContainEqual(expect.objectContaining({
       type: "run.failed",
-      error: expect.stringContaining("jd.catalog-product@2.0.0"),
+      error: expect.stringContaining("当前正式计划不执行京东来源"),
     }));
     expect((await opened.planning.get(taskId))!.plans).toHaveLength(0);
   });
 
-  it("历史已确认计划缺少 JD v2 时也在执行前拒绝", async () => {
+  it("历史 version 2 已确认计划在执行前拒绝", async () => {
     const opened = await openModules();
     db = opened.db;
     taskId = opened.task.id;
-    const entryUrl = "https://search.jd.com/Search?keyword=%E5%86%B0%E7%AE%B1";
     const output = validOutput(1);
-    const oldContent = { ...output.planCandidate, taskId, taskRevision: 1 };
-    const jd = oldContent.sources[0]!;
-    jd.entryUrls = [entryUrl];
-    jd.provider = { key: "public.web-resource", version: "1.0.0", configuration: [
-      { key: "mode", value: "exact_https" }, { key: "maximum_bytes", value: 5_000_000 },
-    ] };
-    jd.targets = [{ ...target("jd-search", "品牌与型号"), taskTopics: ["品牌与型号", "配置参数"],
-      providerConfiguration: [{ key: "url", value: entryUrl }] }];
+    const oldContent = { ...output.planCandidate, executionChecklistVersion: 2 as const,
+      researchAudit: undefined, taskId, taskRevision: 1 };
     const planningRunId = `crawl-planning-run-old-${randomUUID()}`;
     await db.insert(crawlPlanningRuns).values({ id: planningRunId, taskId, taskRevision: 1,
       status: "completed", timelineParts: [], startedAt: "2026-08-20T00:00:00.000Z",
       finishedAt: "2026-08-20T00:00:01.000Z" });
-    await db.insert(sourceCollectionPlans).values({ id: "plan-old-without-jd-v2", taskId,
+    await db.insert(sourceCollectionPlans).values({ id: "plan-old-v2", taskId,
       taskRevision: 1, planningRunId, version: 1, status: "confirmed", contentHash: "9".repeat(64),
       content: oldContent, createdAt: "2026-08-20T00:00:01.000Z", confirmedAt: "2026-08-20T00:00:02.000Z" });
 
-    await expect(opened.planning.requireExecutablePlan({ taskId, planId: "plan-old-without-jd-v2",
+    await expect(opened.planning.requireExecutablePlan({ taskId, planId: "plan-old-v2",
       expectedTaskRevision: 1, expectedPlanVersion: 1 }))
-      .rejects.toThrow("缺少 jd.catalog-product@2.0.0");
+      .rejects.toThrow("缺少当前多路径与内容验收契约");
   });
 
-  it("拒绝把多个京东候选入口合并成一个只访问首个 URL 的来源", async () => {
-    const content = taskContent();
-    content.sourceCandidates.push(candidate(
-      "candidate-jd-brand", "京东品牌旗舰店", "https://mall.jd.com/index-1000001719.html", "retailer",
-    ));
-    const opened = await openModules(content);
+  it("品牌发现不足四个独立来源时失败关闭", async () => {
+    const opened = await openModules();
     db = opened.db;
     taskId = opened.task.id;
     const output = validOutput(1);
-    output.planCandidate.sources[0]!.sourceCandidateIds.push("candidate-jd-brand");
-    output.planCandidate.sources[0]!.entryUrls.push("https://mall.jd.com/index-1000001719.html");
+    output.planCandidate.researchAudit.passes
+      .filter((pass) => pass.area === "brand_landscape")
+      .forEach((pass, index) => { pass.evidenceUrls = [`https://industry.example.com/brands/${index}`]; });
     opened.runtime.push(output);
 
     const events = await collect(opened.planning.run({ taskId, expectedTaskRevision: 1 }));
 
-    expect(events).toContainEqual(expect.objectContaining({ type: "run.failed" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "run.failed",
+      error: expect.stringContaining("至少需要四个独立公开来源") }));
     expect((await opened.planning.get(taskId))!.plans).toHaveLength(0);
   });
 
@@ -362,10 +374,8 @@ describeWithPostgres("抓取计划版本与确认", () => {
           yield { type: "target.completed" as const, targetKey: target.key };
         }
     };
-    const providers = new Map([["jd.catalog-product", {
-      key: "jd.catalog-product", version: "2.0.0", validate() {}, async preflight() {}, collect: collectProvider,
-    }], ["public.web-resource", {
-      key: "public.web-resource", version: "1.0.0", validate() {}, async preflight() {}, collect: collectProvider,
+    const providers = new Map([["public.web-resource", {
+      key: "public.web-resource", version: "2.0.0", validate() {}, async preflight() {}, collect: collectProvider,
     }]]);
     const stored = new Map<string, Uint8Array>();
     const datasets = createSourceDatasetModule(db, { assetStore: {
@@ -375,13 +385,12 @@ describeWithPostgres("抓取计划版本与确认", () => {
     const execution = createSourceExecutionModule(opened.planning, datasets, providers);
     const events = [];
     for await (const event of execution.start({ taskId, planId: view.plans[0]!.id, expectedTaskRevision: 1, expectedPlanVersion: 1 })) events.push(event);
-    expect(events.filter((event) => event.type === "run.completed")).toHaveLength(5);
+    expect(events.filter((event) => event.type === "run.completed")).toHaveLength(4);
     const runs = await db.select().from(sourceCollectionRuns).where(eq(sourceCollectionRuns.taskId, taskId));
     // WHY：数据库未承诺无 ORDER BY 查询的行序；按来源身份对账，保护真实执行结果而非偶然插入顺序。
     expect(Object.fromEntries(runs.map((run) => [run.sourceCollectionPlanSourceKey,
       [run.status, run.snapshotCount]]))).toEqual({
-      jd: ["completed", 5], brand: ["completed", 1],
-      "brand-secondary": ["completed", 1],
+      brand: ["completed", 1], "brand-secondary": ["completed", 1],
       standard: ["completed", 1], technical: ["completed", 1],
     });
     const standardRun = runs.find((run) => run.sourceCollectionPlanSourceKey === "standard")!;
@@ -440,110 +449,11 @@ class QueueRuntime implements CrawlPlanningRuntime {
     if (!output) throw new Error("测试没有准备规划输出");
     yield { type: "activity", activity: {
       id: "search", kind: "web_search", label: "搜索网页", status: "completed",
-      urls: ["https://www.jd.com/"],
+      urls: ["https://industry.example.com/refrigerator-brands"],
     } };
-    yield { type: "text_delta", delta: "已核实京东与标准来源。" };
+    yield { type: "text_delta", delta: "已核实品牌官网与标准来源。" };
     yield { type: "completed", output };
   }
-}
-
-function validOutput(variant: number): CrawlPlanningRuntimeOutput {
-  return crawlPlanningRuntimeOutputSchema.parse({
-    assistantText: "计划覆盖平台、品牌官网、国家标准和底层原理原始数据。",
-    planCandidate: {
-      executionChecklistVersion: 2,
-      summary: `冰箱多来源抓取计划 ${variant}`,
-      sources: [source("jd", "candidate-jd", "京东", "https://www.jd.com/", [
-        jdTarget("catalog-pages", "品牌与型号", "catalog_pages"),
-        jdTarget("store-catalogs", "配置参数", "store_catalogs"),
-        jdTarget("product-details", "配置参数", "product_details"),
-        jdTarget("review-summaries", "品牌与型号", "review_summaries"),
-        jdTarget("review-samples", "品牌与型号", "review_samples"),
-      ]), source("brand", "candidate-brand", "品牌官网", "https://example.com/products", [
-        target("official_parameters", "配置参数"),
-      ]), source("brand-secondary", "candidate-brand-secondary", "第二品牌官网", "https://second-brand.example.com/products", [
-        target("official_parameters_secondary", "配置参数"),
-      ]), source("standard", "candidate-standard", "国家标准全文公开系统", "https://example.com/standard.pdf", [
-        target("standard_document", "国家标准"),
-      ]), source("technical", "candidate-technical", "权威技术资料", "https://example.com/principles", [
-        target("principles", "底层原理"),
-      ])],
-      excludedContent: ["用户账户信息"],
-    },
-  });
-}
-
-function source(key: string, candidateId: string, name: string, entryUrl: string,
-  targets: Array<ReturnType<typeof target> | ReturnType<typeof jdTarget>>) {
-  const jd = key === "jd";
-  const brand = key.startsWith("brand");
-  return {
-    key, name, publisher: name, sourceKind: jd ? "retailer" as const : brand ? "brand_official" as const
-      : key === "standard" ? "standards_body" as const : "technical_publisher" as const,
-    sourceCandidateIds: [candidateId],
-    role: "提供任务所需原始数据", entryUrls: [entryUrl], observationLevel: "search_discovered" as const,
-    provider: { key: jd ? "jd.catalog-product" : "public.web-resource", version: jd ? "2.0.0" : "1.0.0", configuration: jd
-      ? [{ key: "mode", value: "explicit_http" }, { key: "include_text", value: "冰箱" },
-        { key: "exclude_text", value: "二手|冷柜|酒柜" }]
-      : [{ key: "mode", value: "exact_https" }, { key: "maximum_bytes", value: 5_000_000 }] },
-    accessPolicy: { kind: "paced_http" as const, version: jd ? "jd-explicit-http-v2" : "public-low-frequency-v1",
-      maxRequestsPerMinute: jd ? 1 : 2, minimumIntervalMs: jd ? 60_000 : 10_000,
-      maximumRunMs: jd ? 3_600_000 : 180_000 },
-    stopPolicy: { requestBudget: jd ? 10 : 2, noNewUniqueKeysLimit: 1, stopOnAccessRestriction: true as const },
-    rawOutputPolicy: { formats: jd ? ["html" as const, "source_json" as const]
-      : [entryUrl.endsWith(".pdf") ? "document" as const : "html" as const],
-      retainAssets: jd ? false : entryUrl.endsWith(".pdf") },
-    accessState: "unknown" as const, observedAt: "2026-08-19T00:00:00.000Z",
-    targets: jd ? targets : targets.map((target) => ({ ...target,
-      rawFormats: entryUrl.endsWith(".pdf") ? ["document" as const] : target.rawFormats,
-      providerConfiguration: [{ key: "url", value: entryUrl }] })),
-    executionBlockers: [],
-  };
-}
-
-function jdTarget(key: string, topic: string, operation: "catalog_pages" | "store_catalogs"
-  | "product_details" | "review_summaries" | "review_samples") {
-  const review = operation === "review_summaries" || operation === "review_samples";
-  return { key, name: topic, taskTopics: [topic], captureUnit: "来源记录",
-    rawFormats: [review ? "source_json" as const : "html" as const],
-    providerConfiguration: operation === "review_samples"
-      ? [{ key: "operation" as const, value: operation }, { key: "samples_per_product" as const, value: 50 as const }]
-      : [{ key: "operation" as const, value: operation }],
-    quantity: { mode: "all_available" as const, unit: "份",
-      denominator: "动态工作项", rationale: "逐工作项严格对账" },
-    uniqueKey: "规范化 GET URL", traversal: "从前序响应发现", stopCondition: "全部完成或首次受限" };
-}
-
-function target(key: string, topic: string, operation = "exact_resource") {
-  return {
-    key, name: topic, taskTopics: [topic], captureUnit: "来源记录", rawFormats: ["html"],
-    providerConfiguration: [{ key: "operation", value: operation }],
-    quantity: { mode: "target_count" as const, targetCount: 1, unit: "份",
-      denominator: "计划冻结抓取项", rationale: "每项一份原始响应" },
-    uniqueKey: "来源 URL", traversal: "按 Provider 配置执行", stopCondition: "保存 1 份响应或遇访问限制",
-  };
-}
-
-function taskContent(): CaptureTaskContent {
-  return {
-    originalRequest: "抓冰箱", category: { code: "refrigerator", label: "冰箱" },
-    marketScope: "中国大陆家用冰箱", generalTopics: ["品牌与型号", "底层原理"],
-    categoryTopics: ["配置参数", "国家标准"],
-    jd: { applicable: true, disposition: "included", scope: ["product_details"], rationale: "家电核心平台来源" },
-    sourceCandidates: [
-      candidate("candidate-jd", "京东", "https://www.jd.com/", "retailer"),
-      candidate("candidate-brand", "品牌官网", "https://example.com/products", "brand_official"),
-      candidate("candidate-brand-secondary", "第二品牌官网", "https://second-brand.example.com/products", "brand_official"),
-      candidate("candidate-standard", "国家标准全文公开系统", "https://example.com/standard.pdf", "standards_body"),
-      candidate("candidate-technical", "权威技术资料", "https://example.com/principles", "technical_publisher"),
-    ], excludedContent: [], unresolvedItems: [], decisionIds: [],
-  };
-}
-
-function candidate(id: string, name: string, entryUrl: string, sourceKind: CaptureTaskContent["sourceCandidates"][number]["sourceKind"]) {
-  return { id, name, publisher: name, entryUrl, sourceKind, expectedContents: ["原始资料"],
-    observedFormats: [entryUrl.endsWith(".pdf") ? "PDF" : "HTML"], accessState: "unknown" as const,
-    observedAt: "2026-08-19T00:00:00.000Z" };
 }
 
 async function collect(events: ReturnType<CrawlPlanningModule["run"]>) {

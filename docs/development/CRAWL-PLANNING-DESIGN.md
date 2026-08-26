@@ -1,8 +1,8 @@
 # Crawl Planning 开发设计
 
 状态：已获用户授权实施
-更新日期：2026-08-19
-服务阶段：`ROADMAP.md` 1B
+更新日期：2026-08-26
+服务阶段：`ROADMAP.md` 1B–1E
 
 ## 1. 简单说明
 
@@ -28,18 +28,21 @@ Crawl Plan 必须直接决定三件事：
 
 ## 2. 当前实施范围
 
-本轮实现一条最小生产纵切片：
+当前系统实现一条从规划到原始数据验收的生产纵切片：
 
 - 已确认 Capture Task 页面新增“抓取计划”；
 - 用户显式启动一次 Codex Planning Run；
 - Workbench 展示真实 commentary、网页搜索和整理状态；
-- Codex 只做来源调查和计划综合，不执行批量抓取；
+- Codex 只做来源调查，不执行批量抓取；
 - Workbench 校验并保存版本化 Crawl Plan Draft；
+- Workbench 确定性组装 `public.web-resource@2.0.0` 的 `exact/site` typed route、内容信号、数量和停止门；
 - 用户可以输入补充要求重新规划；
 - 用户显式确认后得到不可变 Confirmed Crawl Plan；
+- Prepare 不访问来源；Start 后由持久后台 Batch 执行；
+- Provider 通过持久准入读取 robots/sitemap/页面，原始响应全部保存并单独记录内容 assessment；
 - Capture Task revision 改变后，旧计划保留但不能冒充当前计划。
 
-本轮不实现 Provider、批量来源访问、后台持久工作流或自动开始抓取。
+系统不自动确认计划，不从 HTTP 自动切换浏览器，不绕过访问限制，也不进入阶段 2 清洗。
 
 ## 3. 用户流程
 
@@ -55,7 +58,7 @@ Capture Task 页面固定包含：
 
 ### 3.2 规划运行
 
-点击后启动前台可见的 Planning Run：
+点击后启动后台可恢复、前台可见的 Planning Run：
 
 - 读取当前 Capture Task revision；
 - 读取任务内已经调查过的 Source Candidate；
@@ -64,7 +67,9 @@ Capture Task 页面固定包含：
 - 为每个抓取目标给出数量口径与停止条件；
 - 明确 Provider、许可、登录、验证码、风控或频控等执行缺口。
 
-Planning Run 最长沿用当前 App Server 三分钟上限。页面连接关闭时本轮中止；已完成的计划和历史运行保存在 PostgreSQL，运行中离开页面不承诺后台继续。后续只有真实使用证明跨页面持续是必要需求时，才单独调研持久工作流。
+DBOS 用 Planning Run ID 和稳定阶段 key 保存内部执行检查点；品牌发现、每次饱和查询、市场目录、每个品牌官网批次和知识来源分别执行。已完成阶段在 API 重启后不重做，正在进行的单个模型阶段按至少一次语义可能重做；每个 App Server 阶段仍有独立十分钟上限。页面连接只显示进度，关闭或刷新不会取消后台规划；Workbench PostgreSQL 保存用户可见的阶段状态、时间线和最终结果，Web 不读取 DBOS 内部表。
+
+运行完成只生成一个新 Plan Draft。它不会自动确认计划、Prepare 或 Start；同一任务已有 `running` Planning Run 时拒绝再开第二轮。
 
 ### 3.3 计划审查与修订
 
@@ -89,7 +94,7 @@ Planning Run 最长沿用当前 App Server 三分钟上限。页面连接关闭�
 - 计划内容与 content hash 保持不可变；
 - 不创建 Source Run，不访问外部来源。
 
-正式“开始抓取”必须等某个计划来源已经绑定真实 Provider、访问政策和停止门后再设计。当前页面只如实展示执行阻塞，不提供假启动按钮。
+确认后必须再显式 Prepare 和 Start。Prepare 只检查当前 Provider/计划契约；Start 才创建持久 Batch 并提交后台执行。刷新或离开页面不取消批次，执行状态只从 Source Dataset 读取。
 
 ## 4. 领域契约
 
@@ -104,7 +109,7 @@ Planning Run 最长沿用当前 App Server 三分钟上限。页面连接关闭�
 - `running / completed / interrupted / failed` 状态；
 - 可选输出计划版本。
 
-它是生成过程记录，不拥有抓取范围，也不是 Source Run。
+它是生成过程记录，不拥有抓取范围，也不是 Source Run。阶段检查点只投影 Planning Run 的可见进度；DBOS 内部工作流历史不成为第二个产品状态接口。
 
 ### 4.2 Crawl Plan Version
 
@@ -134,7 +139,14 @@ Planning Run 最长沿用当前 App Server 三分钟上限。页面连接关闭�
 
 `target_count` 与 `sample` 必须给出正整数数量。`all_available` 也必须给出可审核分母，不能用“尽量多”等模糊表达。
 
-### 4.4 确定性校验
+### 4.4 当前 version 4 路由与内容验收
+
+- `exact`：只请求计划冻结的 URL，适合明确正文、标准、规格页和附件；成功要求响应状态与计划原始格式一致。
+- `site`：只用于品牌官网 HTML 种子；计划冻结同源边界、内容信号、最大深度、最大页数、最少 accepted 页面、时长、频率和请求预算。
+- sitemap 原文保存为 `supporting`，相关性不足的页面保存为 `rejected`，满足计划信号与商品结构的页面保存为 `accepted`；三者都是不可变原始 Snapshot，但只有 `accepted` 增加有效完成数。
+- Source Run 不搜索新来源、不跨源扩张、不修改计划；新增入口必须通过新的 Planning Run 和 Plan version。
+
+### 4.5 确定性校验
 
 Workbench 而不是 Codex 保护以下不变量：
 
@@ -216,6 +228,7 @@ Web 只调用上述 interface：
 - 不做批量分页、商品枚举或文件下载来冒充规划；
 - URL 字符串或 search item 不自动证明页面已打开；
 - 许可、登录、验证码、风控、频控或 Provider 缺失必须作为执行阻塞展示；
+- 运行时禁止自动 retry、代理轮换、账号切换、TLS 忽略和 HTTP→浏览器 fallback；
 - 京东当前仍受许可与真实 reader/频控门约束，本轮不得发真实批量请求；
 - 确认计划不越过任何访问门。
 

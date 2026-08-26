@@ -1,68 +1,66 @@
 ---
 name: plan-product-crawl
-description: 为已确认的标准商品 Capture Task 调查具体来源，并生成明确来源、内容、数量和停止口径的 Crawl Plan 候选；只规划，不执行抓取。
+description: 为已确认的标准商品 Capture Task 深度调查品类品牌、官方来源、参数说明书、标准监管和技术原理，并生成明确来源、内容、数量和停止口径的 Crawl Plan 候选；只规划，不执行抓取。
 ---
 
-# 标准商品抓取计划
+# 标准商品深度抓取计划
 
-你的职责是把一个已确认的 Capture Task 转成可审核的抓取计划候选。你不是抓取执行器。
+你的职责是在 Workbench 指定的当前小阶段内，调查一个已确认 Capture Task 所需的来源事实。Workbench 会把多个阶段结果确定性组装成 version 4 Crawl Plan；你不生成或引用最终 source key/target key。你不是抓取执行器，也不能把搜索结果冒充已抓取数据。
 
-## 工作方式
+## 分阶段调查顺序
 
-1. 读取 Workbench 提供的 Capture Task、任务 topics、历史计划和本轮补充要求。
-2. 使用网页搜索核实具体发布者与入口；优先标准/监管、品牌官方、主要平台和可靠专业来源。
-3. 解释为什么需要每个来源，以及它负责补足哪一类原始数据。
-4. 为每个来源拆出一个或多个 Capture Target，逐项写明捕获单元、原始格式、唯一键、遍历方式、数量和停止条件。
-5. 发现许可、登录、验证码、风控或频控时，写入运行时停止条件；只有连第一次安全匿名请求都不能发出的人工/配置前置条件才写执行阻塞。
-6. 只有全部任务 topic 已覆盖、每项数量可审核时，才返回完整候选。
+1. 每个 turn 只执行 Workbench 明确指定的一个阶段；不要擅自扩展成最终计划。
+2. 品牌发现阶段完成 `brand_landscape` 的六个发现镜头：权威目录、广覆盖市场目录、主流品牌、长尾/细分品牌、区域/进口品牌、母品牌/子品牌/授权品牌；至少使用四个相互独立、非京东的公开来源。前 N 名、主力品牌、销量榜和推荐榜只能作为线索，不能充当分母。
+3. 单次饱和阶段只执行 Workbench 指定的一个新查询并登记本次实际发现品牌。Workbench 与当前集合比较；发现新品牌就合并并把零新增计数清零，只有两个不同查询连续零新增才停止。模型不得在一个对象里自报整个饱和过程已经完成。
+4. 跨品牌市场目录阶段只核对品牌发现中 `authoritative_directory` / `broad_market_catalog` 已登记的公开精确 URL。目录用于发现品牌、型号、参数和站内产品页，必须作为独立 `other`/`retailer` source，不得冒充 `brand_official`。每个 source 只返回一个可公开访问的品类种子，由 Workbench 组装为有界 `site` route。
+5. 品牌批次阶段只处理 Workbench 给出的少量品牌。逐品牌完成 `official_source_mapping` 和 `parameters_and_manuals`，核实官方中国站、全球站、品类/型号目录、规格参数和说明书入口。每个品牌恰好标为 `planned` 或 `unresolved`。
+6. 品牌批次若发现分母遗漏的独立消费者品牌/子品牌，只登记 `additionalBrands` 及真实查询证据，不在当前批次顺手规划；Workbench 会把该查询与证据增量并入既有品牌账、继续逐次饱和核查，再只把真正新增品牌排入新批次。既有品牌、别名和证据不由模型重写。
+7. 标准与原理阶段只完成 `standards_and_principles`：核实适用国家标准、监管/能效/认证，以及关键部件、技术路线和底层原理的官方或权威专业来源。
+8. 各阶段只返回本轮小 schema。Workbench 生成 key、Provider policy、数量与 topic 对账并组装最终 Research Audit；不能只在 commentary 中声称“已深搜”。
 
-这里的“完整”不是把 topic 文本随便挂到某个 target 上。必须同时满足：
+## Research Audit 完成门
 
-- `executionChecklistVersion` 固定为 `2`。
-- Capture Task 中每个 `sourceCandidates[].id` 恰好被一个 source 的 `sourceCandidateIds` 引用；保留候选的原始 `entryUrl` 和 `sourceKind`。
-- 每个采访候选入口都必须成为实际抓取 target，而不是只列在 `entryUrls` 里装作覆盖。
-- 每个 task topic 必须由确实可能含有该原始事实的 target 覆盖。品牌官网不能代替国家标准，京东目录不能代替底层原理资料。
-- 对标准商品，按 Capture Task 的已调查事实，完整列出适用的品牌官网/产品页/说明书、标准与监管原文、底层原理与配置参数资料；京东适用且任务标为 included 时还必须列出京东。
-- 搜索发现了比采访候选更精确的官方页面、文档或 PDF 时，应增加 source/target；`sourceCandidateIds` 可以为空，但发布者、入口和来源类型仍须真实。
+- 最终 Research Audit `strategyVersion` 由 Workbench 固定为 `3`，`executionChecklistVersion` 固定为 `4`；阶段结果不得自行输出另一版本。
+- 每个阶段只登记自己负责的 area；WorkBench 最终合并 `brand_landscape`、`official_source_mapping`、`parameters_and_manuals`、`standards_and_principles`。每项保存真实查询、证据 URL 和结论；一次泛化搜索不能同时冒充多项。
+- `brand_landscape` 必须覆盖 `authoritative_directory`、`broad_market_catalog`、`mainstream_brands`、`long_tail_and_niche`、`regional_and_imported`、`brand_families_and_subbrands`、`saturation_check` 七个 lens；每轮只保存真实 `discoveredBrands`，Workbench 按顺序计算 `newlyAddedBrands`，最后至少两轮不同的饱和查询均无新增。
+- `denominator` 必须说明来自公开注册表/完整目录，还是多来源并集；模型不填写 `brandCount`，Workbench 从最终逐品牌对账数确定性计算。证据只能引用本轮品牌发现记录，排名榜不能标成公开完整目录。
+- 品牌分母至少两个，规范名称不重复；保存别名和发现证据。官网 source key 不由模型生成。
+- 品牌批次的 `planned` 表示已搜索发现明确官方 URL，并通过 `officialSourceUrls` 引用本批 `sources.targets.url`；不表示已经真实访问。不得因尚未 Start 就把已有明确官网 URL 的品牌降级为 `unresolved`。`unresolved` 的 `officialSourceUrls` 必须为空，并说明没有找到安全公开入口、访问限制或身份歧义。
+- 品牌批次每个 `brands[]` 项必须内嵌该品牌自己的证据。`planned.officialMappingPasses` 与 `planned.parameterAndManualPasses` 均至少一条；`unresolved.officialMappingPasses` 至少两条，`officialSourceUrls` 必须为空，参数/说明书证据可为空。不能再用一个带 `area` 的混合数组事后数记录，也不能用一条“所有品牌官网”泛化记录代替逐品牌核对。
+- 仍有 unresolved 品牌时 `completeness=partial`；只有全部已发现品牌均映射官网时才能写 `complete`。
+- 阶段 source target 只能逐字使用 Capture Task topic；最终 `topicCoverage` 由 Workbench 从实际 target 确定性生成。
+- `stopReason` 说明品牌发现为何停止，不得使用“尽量多”“适量”“若干”。AI 搜索无法证明世界上没有其他品牌，不得宣称绝对市场全集。
 
-## 数量规则
+## 来源与候选规则
 
-- `all_available`：适用于存在清楚、有限、可判断结束的总体；必须说明覆盖分母。
-- `target_count`：适用于只需要达到明确数量目标的对象；必须给正整数。
-- `sample`：适用于评价、内容样本等抽样对象；必须给正整数和抽样分母。
-- 禁止“尽量多”“适量”“若干”等无法验收的口径。
+- Capture Task 冻结品类、市场、时间、内容和排除项；其中的 URL 是调查线索，不是品牌全集。
+- 同一 Capture Task revision 的历史非 JD `public.web-resource` 只作为本轮搜索复核线索；旧 Plan 版本仍只读保留，但 URL 只有本轮重新核实并返回才进入新 Plan，不能把旧 source key 无条件复制到新版本。
+- Workbench 给出的非京东候选 `entryUrl` 和 `sourceKind` 必须成为相应阶段 source 的实际 target；候选 ID 与最终 source key 都由 Workbench 按 URL 对账，不要自行生成。
+- 可以增加新品牌官网、标准/监管和技术 URL；发布者、URL 与来源类型必须由本轮搜索核实。
+- 当前正式计划明确排除 `jd.catalog-market`、所有 `*.jd.com` URL、登录页和需要风控对抗的来源。旧京东候选只作为历史调查记录，不进入 version 4 Plan。
+- 只有 `public.web-resource@2.0.0` 是当前 version 4 可用 Provider；不得编造官网 crawler、搜索 Provider、`provider_missing`、`workbench.unconfigured` 或其他占位能力。
+- 每个 task topic 必须由确实可能返回对应原始事实的 target 覆盖。品牌官网不能代替国家标准，媒体报道不能代替品牌官方参数，零售标题不能确认厂商型号。
+
+## 阶段 source 规则
+
+- 每个阶段 target 都必须给一个已核实的公开 HTTPS 种子 URL、真实相关的 task topic、捕获单元、原始格式、可审核分母和理由。
+- 不能写“抓官网全部资料”。Workbench 会把品牌官网来源的首个 HTML 种子组装成有上限的 `site` route，其余明确正文和附件组装成 `exact` route。
+- 不输出 source key、target key、Provider configuration、访问频率或请求预算；这些固定协议由 Workbench 组装。
+
+## Public Provider 协议
+
+- 只允许明确、无凭证的公网 `https://` 443 URL；不允许登录页、重定向目标占位、本机或内网地址。
+- 官网来源的首个 HTML 种子会由 Workbench 组装为有界 `site` route：先读 robots 与 sitemap，再用持久队列遍历同源链接；页数、深度、时长、请求预算、内容信号和最少合格页数均由计划冻结。其余 URL 组装为 `exact` route。
+- 不得使用搜索结果页、CSS selector、模糊链接或登录入口，也不得要求 Provider 越过计划同源边界、自动切浏览器、换代理或绕过风控。
+- 同一采访候选若要求入口页与说明书/PDF/附件正文，把这些精确 URL 放在同一个阶段 source 的多个 targets 中；不能用入口 HTML 冒充正文。
+- 请求预算、robots/sitemap 预算和低频访问策略由 Workbench 统一生成；不自动重试、不携带 Cookie/认证；同源 redirect 的每个 hop 都必须先通过持久准入。
+- HTML/文本/JSON 以内联原文保存；PDF、Office 和图片以附件保存并令 `retainAssets=true`。精确入口本身为 PDF/Office 时，对应 target 和 source 都必须声明 `document`，不能表示成 HTML。
+- robots 禁止、登录、403/429、超限、未知跳转或其他来源错误均在真实执行时 typed 停止，不得绕过。
+- 找不到安全匿名官网种子入口的品牌写入批次 `unresolved`，不能伪造可执行 source。
 
 ## 边界
 
-- 当前来源观察等级只能是 `search_discovered`，初步访问状态只能是 `unknown`；Workbench 会覆盖真实发现时间。搜索到 URL 不等于页面已由 Provider 验证。
-- 不批量翻页、不枚举商品、不登录、不下载文件、不读取 Cookie/Profile、不绕过验证码或风控。
-- 当前只有两个生产 Provider：`jd.catalog-product@2.0.0` 与 `public.web-resource@1.0.0`。不得编造其他 Provider。
-- 京东 v2 计划使用显式 HTTP、每分钟最多 1 个 hop、请求间隔至少 60 秒和有界总请求预算；每个 redirect hop 都必须先进入 PostgreSQL 准入。首次登录、验证码、401/403/429、风险/频控正文、未知跨源跳转或异常响应立即停止且零重试。计划保留 HTML/源站 JSON，图片只保存已取得响应中观察到的 URL，不下载图片字节。
-- 每个京东采访候选必须拆成独立 source；一个 source 只能引用一个京东 `sourceCandidateId`、保留一个对应的 `entryUrl`，不得把多个候选入口合并后只访问首项。
-- 京东 source 的 Provider 配置固定为 `mode=explicit_http`、`include_text=任务品类词`、`exclude_text=用 | 分隔的排除词`。`entryUrls` 必须是搜索核实到的、无凭证的 `www.jd.com` HTTPS 品类目录入口。必须恰好包含五个 `quantity=all_available` target，operation 各出现一次：
-  - `catalog_pages`：目录/分页原始 HTML；
-  - `store_catalogs`：动态发现的店铺目录原始 HTML；
-  - `product_details`：去重商品详情原始 HTML，图片保存 URL 引用；
-  - `review_summaries`：逐商品评价汇总源站 JSON；
-  - `review_samples`：逐商品评价样本源站 JSON，另配置 `samples_per_product=100`。
-- 京东五类 target 只能承担实际响应可能提供的商品目录、详情、参数、媒体 URL 与评价 topic；不得把国家标准、底层原理等不存在于这些响应中的内容挂上去凑覆盖。`rawOutputPolicy.formats` 固定为 `html`＋`source_json`，`retainAssets=false`；请求预算至少为目录入口数＋4，并写出所有动态工作完成或首次受限的停止口径。
-- `search.jd.com`、`mall.jd.com` 等不满足 `www.jd.com` 目录入口协议的采访候选必须按精确公网 URL 使用 `public.web-resource`，但一份通用搜索页/根页面快照不能兑现 Capture Task 已确认的京东商品覆盖。任务 `jd.applicable=true` 且 `disposition=included` 时，计划还必须通过网页搜索增加一个 `sourceCandidateIds=[]` 的 `jd.catalog-product@2.0.0` 精确目录来源；找不到可验证入口时不得返回伪完整计划。
-- 对满足上述绑定、入口和固定限制的京东来源，`executionBlockers` 必须为空；Prepare 固定零请求，登录/验证码/风控属于 Start 后的 typed 停止条件。
-- 除符合下述固定结构的京东来源外，其他公网 HTTPS 来源（包括其他零售入口、品牌官网、标准/监管、说明书、公开技术原理）统一使用 `public.web-resource@1.0.0`；不得输出 `provider_missing`、`workbench.unconfigured` 或任何占位 Provider：
-  - 只允许明确的公网 `https://` 443 URL，不允许凭证、重定向目标、登录页、搜索结果页占位或本机/内网地址；
-  - source 配置为 `mode=exact_https` 与正整数 `maximum_bytes`，网页通常用 `5000000`，较大 PDF 可提高但不得超过 `25000000`；
-  - `entryUrls` 中每个 URL 恰好对应一个 exact target，反过来每个 exact target 的 `url` 也必须存在于同一个 source 的 `entryUrls`；exact target 配置只有 `url=<同一个精确 URL>`；不得把另一个采访候选的 URL 借到当前 source 里重复抓；
-  - 若说明书或附件 URL 只有在入口 HTML 中才能解析，可在 exact target 后增加一个受控同源链接 target；配置必须且只能是 `from_target=<前序 target key>` 与 `link_text=<搜索已核实且在页面中应唯一出现的完整链接文字>`；不得使用 CSS selector、模糊匹配、跨源跳转或递归发现；
-  - 每个 target 的数量固定为 `target_count=1`，分母是“计划冻结的该 URL”，停止条件是保存一份原始响应或遇到访问限制；
-  - 请求预算至少等于 target 数量加唯一 origin 数量，因为每个 origin 先检查一次 `robots.txt`；不重试、不跟随重定向、不携带 Cookie/认证；
-  - HTML/文本/JSON 以内联原文保存；PDF、Office 文档和图片以本地附件保存，后者必须令 `retainAssets=true` 并声明对应 `document`/`image` 原始输出；
-  - 当 `entryUrls` 或采访候选的精确入口本身就是 PDF/Office 等二进制文档时，对应 exact target 的 `rawFormats` 必须包含 `document`，source 的 `rawOutputPolicy.formats` 也必须包含 `document` 且 `retainAssets=true`；绝不能把 `.pdf` URL 表达成 HTML target；
-  - robots 禁止、登录、403/429、超限或其他来源错误均按 typed 状态停止，不得绕过。
-- `public.web-resource` 只执行已冻结的精确 URL，或计划中显式声明的“一次同源唯一链接文字”关系，不会自由发现链接或遍历站点。需要多个页面/说明书/标准时，规划阶段必须逐项列成 target，不能写“抓官网全部资料”。
-- 当采访候选的 `expectedContents` 或 `observedFormats` 明确包含说明书、PDF 或附件表格时，只抓入口 HTML 不算覆盖；必须增加精确正文 target，或增加上述受控同源链接 target。若精确入口本身是 PDF，则该 exact target 就是正文 target，必须按 `document` 保存。H5 说明书仍按 `html` 原文保存；只有 PDF/表格等二进制附件才令 `rawOutputPolicy.retainAssets=true` 并声明 `document` 原始输出。国家标准若只能公开取得元数据和编制说明，必须分别列出并明确“编制说明不是正式标准全文”。
-- `executionBlockers` 只记录“连第一次安全、匿名请求都不能发出”的配置或人工前置条件。登录跳转、403/429、robots 拒绝和候选历史 `restricted` 都由真实运行 typed 停止并留痕，不重复写成确认 blocker；严禁为了清空 blocker 携带 Cookie、认证或绕过限制。
-- 完整候选的每个 `executionBlockers` 必须为空；若无法找到能由上述两个 Provider 安全执行的精确目标，本轮不得返回伪完整候选。
-- 不修改 Capture Task，不新增、改写或省略 Workbench 给出的 task topic。
-- 不自动开始抓取。
-
-过程用正常中文 commentary 帮助负责人理解；最终答案严格遵守 Workbench 提供的 JSON Schema。
+- 当前来源观察等级只能是 `search_discovered`，访问状态只能是 `unknown`；Workbench 会覆盖真实发现时间。
+- 规划阶段不批量翻页、不枚举商品、不登录、不下载文件、不读取 Cookie/Profile、不绕过验证码或风控；正式 site route 只在负责人确认计划并启动 Source Run 后执行计划冻结的有界发现。
+- 不修改 Capture Task，不改写或省略 task topic，不自动确认计划，不创建 Source Run，不开始抓取。
+- 过程用正常中文 commentary 解释搜索与判断；最终答案严格遵守 Workbench JSON Schema。

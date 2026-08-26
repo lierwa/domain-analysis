@@ -63,7 +63,7 @@ describe("Codex 采访运行时事件边界", () => {
       itemType: "web_search",
       itemId: "web-search-pages",
       itemStatus: "completed",
-      urls: ["https://www.midea.cn/"],
+      urls: ["https://industry.example.com/refrigerator-scope"],
     });
     expect(remaining.at(-1)).toMatchObject({ type: "result", result: { interrupted: false } });
   });
@@ -127,7 +127,7 @@ describe("Codex 采访结果投影与连接复用", () => {
       } },
       { type: "activity", activity: {
         id: "web-search-pages", kind: "web_search", label: "搜索网页",
-        urls: ["https://www.midea.cn/"], status: "completed",
+        urls: ["https://industry.example.com/refrigerator-scope"], status: "completed",
       } },
       { type: "activity", activity: {
         id: "turn-finalizing", kind: "finalizing", label: "整理并校验采访记录", status: "running",
@@ -258,17 +258,10 @@ function successSource(failedSearch = false) {
     draftMarkdown: [
       "# 冰箱采访范围",
       "",
-      "- 零售市场：https://www.jd.com/",
-      "- 品牌官网：https://www.haier.com/refrigerators/",
-      "- 品牌官网：https://www.midea.cn/",
-      "- 国家标准：https://openstd.samr.gov.cn/",
-      "- 技术原理：https://www.nist.gov/refrigeration-cycle",
+      "- 品类范围依据：https://industry.example.com/refrigerator-scope",
     ].join("\n"),
     draftCoverage: {
-      retailMarketUrls: ["https://www.jd.com/"],
-      brandOfficialUrls: ["https://www.haier.com/refrigerators/", "https://www.midea.cn/"],
-      standardsRegulationUrls: ["https://openstd.samr.gov.cn/"],
-      technicalPrincipleUrls: ["https://www.nist.gov/refrigeration-cycle"],
+      scopeEvidenceUrls: ["https://industry.example.com/refrigerator-scope"],
     },
     unresolvedItems: [],
     resolvedUnresolvedKeys: [],
@@ -276,7 +269,7 @@ function successSource(failedSearch = false) {
   const rawCompletedSearch = failedSearch ? "" : `emit({ method: "rawResponseItem/completed", params: {
     threadId: "thread-1", turnId: "turn-1", item: {
       type: "web_search_call", id: "raw-search-1", status: "completed",
-      action: { type: "open_page", url: "https://www.midea.cn/" }
+      action: { type: "open_page", url: "https://industry.example.com/refrigerator-scope" }
     }
   } });`;
   return fakeServerPrelude() + `
@@ -306,11 +299,11 @@ async function handle(message) {
   if (isProductInterview) {
     const prompt = message.params.input.find((item) => item.type === "text")?.text ?? "";
     if (!prompt.includes("不要通过本地命令查找或读取 Skill、AGENTS.md、开发文档或 Git 状态")) process.exit(9);
-    if (!prompt.includes("不得把默认采集内容改写成采集深度问题")) process.exit(10);
-    if (!prompt.includes("draftCoverage 只是 Workbench 校验 Markdown 与搜索记录的四组 URL")) process.exit(11);
+    if (!prompt.includes("当前正式规划排除京东")) process.exit(10);
+    if (!prompt.includes("draftCoverage.scopeEvidenceUrls")) process.exit(11);
     if (!prompt.includes("逐项检查会改变纳入商品集合、市场范围或观察时间范围的边界依据")) process.exit(12);
-    if (!prompt.includes("四组 URL 只是最低失败门，不是来源调查的完成标准")) process.exit(13);
-    if (!prompt.includes("不得只提交最低数量的代表入口")) process.exit(14);
+    if (!prompt.includes("品牌官网、参数说明书、标准监管和技术原理由 Planning Agent")) process.exit(13);
+    if (!prompt.includes("不是品牌清单、执行来源或 Crawl Plan")) process.exit(14);
     const skill = message.params.input.find((item) => item.type === "skill");
     const normalizedSkillPath = String(skill?.path).replaceAll("\\\\", "/");
     const normalizedCwd = productInterviewCwd.replaceAll("\\\\", "/");

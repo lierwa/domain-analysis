@@ -215,10 +215,7 @@ function draftOutput(draftMarkdown: string): CategoryInterviewRuntimeOutput {
 
 function completeCoverage() {
   return {
-    retailMarketUrls: ["https://www.jd.com/category"],
-    brandOfficialUrls: ["https://brand.example.com/products", "https://second-brand.example.com/products"],
-    standardsRegulationUrls: ["https://standard.example.com/document"],
-    technicalPrincipleUrls: ["https://technical.example.com/principles"],
+    scopeEvidenceUrls: ["https://industry.example.com/category-scope"],
   };
 }
 
@@ -229,7 +226,7 @@ function coverageMarkdown(coverage: ReturnType<typeof completeCoverage>) {
 function completedCoverageSearch(coverage: ReturnType<typeof completeCoverage>) {
   return {
     id: "search-professional-coverage", kind: "web_search" as const,
-    label: "搜索专业导购四类来源", urls: Object.values(coverage).flat(), status: "completed" as const,
+    label: "搜索品类范围依据", urls: Object.values(coverage).flat(), status: "completed" as const,
   };
 }
 

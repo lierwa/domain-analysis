@@ -58,3 +58,25 @@ date: 2026-08-20
 - Web 在 Batch/Run 为 running 时轮询 Source Dataset；关闭、刷新或离开计划页不会 abort。来源限制和 Provider 失败由现有领域流结算，Graphile job 禁止自动 retry，避免再次发送真实请求。
 - 任务 payload 只含 task/plan/run/revision 标识，不含 Cookie、Profile、认证 Header 或原始响应；官方 job schema 不进入 UI/导出，也不得与 Batch 混为一个对象。
 - 本机真实原型已证明：HTTP 202 在延迟任务结束前返回，客户端关闭后任务完成；同 queue 在 concurrency 2 下仍 `maxActive=1`；runner 停止期间入队的未领取任务在新 runner 启动后完成；非法 payload 不进入 Source Execution。正在执行一半的 API 强杀还没有形成 exactly-once 保证，保持后续恢复门，不以这次断连修复冒充完成。
+
+## 2026-08-24 历史修订：专用人工登录会话与详情 canary（已被否决）
+
+本修订曾尝试替代“JD v2 使用匿名、隔离 Cookie 的 `request.newContext()`”装配，但真实账号异常已经否决该候选。以下内容只保留为历史实验记录，不得再进入生产组合根；当前决定以 ADR 0017 为准。
+
+- `JD_REAL_HTTP_ENABLED=true` 时只创建 Git 忽略的项目专用 persistent Chrome Profile，不连接日常 Chrome，不复制 `storageState`、Cookie 或 Header。Prepare 继续零请求，也不自动打开浏览器。
+- 页面通过 typed Fastify API 显式打开京东登录页；负责人自行完成登录并点击确认。系统不读取认证字段，也不把“确认”冒充源站验证；Provider 只有在会话 ready 后才取得 `BrowserContext.request`，首个计划请求仍负责识别登录、验证、403/429、风险正文和骨架。
+- `JD_DETAIL_CANARY_LIMIT` 是本次 1＋2 真实验收的临时运行安全门。每个 Source Run 达到成功详情数后如实失败关闭，剩余 Crawlee work 保持未完成，只有显式 Resume 才能继续。它不改变 Crawl Plan 的全量分母、Source Dataset 事实归属或请求预算/冷却累计。
+- 第一条真实详情先保存不可变原始 HTML；只有据此实现详情主图/详情图 URL parser 后，才用另外 2 个 SKU 验证。全部阶段只保存 URL 引用，图片字节请求必须为零。
+
+本地原型只证明夹具 Cookie jar 共享；真实首条详情仍是骨架，随后源站显示账号异常。登录 API/UI/adapter 与详情 canary 必须按 `JD-COLLECTION-ITERATION.md` 的 I0 删除。匿名目录历史快照保留；新执行语义使用目录-only `jd.catalog-market@1.0.0`，不登录、不跳详情、不抓评论。
+
+## 2026-08-25 修订：Batch 失联收口、gate 升级与内联原文无损保存
+
+本修订接受 R-046/R-047 的真实纵向验证，替代“执行中进程强杀仍只是后续恢复门”的现行结论，但不改写 Graphile 与网络副作用的至少一次边界。
+
+- Source Execution 从 Batch 创建到结算持有 PostgreSQL session advisory lease。API 启动时在 Graphile runner 之前检查 `running` Batch；只有能取得该 lease 时才认定旧执行进程已失联，并把未终结 Request/Work/Target/Run/Batch 收口为 unknown/stopped。活动 lease 下零副作用；历史 Snapshot 全部保留。
+- 启动恢复不读 Graphile 内部表、不自动 Resume、不发来源请求；Graphile job 继续 `maxAttempts=1`。系统只承诺进程失联后领域状态可审计收口，不承诺 exactly-once。
+- 持久访问 gate 的 Provider identity 不可改。只有 closed、无 manual resume 且当前零 `started` attempt 的空闲 gate 允许升级到新 policy version；升级后 `nextEligibleAt` 保留旧政策与新最小间隔中更严格的值。已受限、当前有在途请求或需人工继续的 gate 不自动改写。
+- `inline_text` 的 HTML/XHTML 使用 WHATWG `encoding-sniffer`。传输层 charset 在 fatal `TextDecoder` 下无法无损解码且页内 meta 结果更完整时，才采用页内编码；保存的 charset/bytes/payload hash 统一对应最终内联文本。Asset 仍保存原字节，历史有损 Snapshot 不覆盖。
+
+真实电视 v9 在本修订下连续三次通过 Workbench Start → Graphile → Batch/Run 终态 → 不可变 Snapshot → 原始数据页/JSONL/CSV → 重启持久化门。最终批次 13/24 来源完成、11 个按源站访问状态失败；这证明执行链路稳定，不把持续增量覆盖写成一轮已抓全。

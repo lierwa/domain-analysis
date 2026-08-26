@@ -24,11 +24,11 @@ import {
   type InterviewMessageTimelinePart,
   type InterviewTurnActivity,
 } from "@domain-analysis/shared";
-import { findCaptureTaskReadinessGaps } from "./captureTaskReadiness";
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 
 import type { CaptureTaskModule } from "./captureTaskModule";
 import { isDirectDocumentEntry } from "./crawlPlanningDocumentPolicy";
+import { isExcludedPlanningUrl, requirePlanningResearchAudit } from "./crawlPlanningResearchAudit";
 import { contentHash } from "./contentHash";
 
 export type CrawlPlanningRuntimeEvent =
@@ -63,11 +63,12 @@ export interface CrawlPlanningModule {
     planId: string;
     expectedTaskRevision: number;
   }): Promise<CrawlPlanningView>;
+  close?(): Promise<void>;
 }
 
 type SourceCheck = (source: CrawlPlan["content"]["sources"][number]) => void | Promise<void>;
 
-interface CrawlPlanningModuleOptions {
+export interface CrawlPlanningModuleOptions {
   now?: () => Date;
   createId?: (kind: string) => string;
   validateSource?: SourceCheck;
@@ -99,6 +100,7 @@ export function createCrawlPlanningModule(
     requireExecutablePlan: (input) => requireExecutablePlan(db, captureTasks, input),
     run: (input) => runPlanning(db, captureTasks, runtime, input, now, createId, options.validateSource),
     confirm: (input) => confirmPlan(db, captureTasks, input, now, options.validateSource),
+    close: () => runtime.close?.() ?? Promise.resolve(),
   };
 }
 
@@ -121,7 +123,7 @@ async function requireExecutablePlan(
   if (plan.status !== "confirmed") {
     throw new CrawlPlanningError("invalid_state", "只有当前已确认计划可以启动");
   }
-  // WHY：计划确认后任务规则仍可能升级；执行前必须重新使用规划事实源的完整性门，不能让历史计划绕过 JD v2。
+  // WHY：计划确认后任务规则仍可能升级；执行前必须重新使用规划事实源的完整性门，不能让历史清单绕过深搜审计。
   requireCompleteChecklist(task, plan.content);
   const blocker = plan.content.sources.flatMap((source) => source.executionBlockers)[0];
   if (blocker) throw new CrawlPlanningError("invalid_state", `来源仍有执行阻塞：${blocker}`);
@@ -202,7 +204,7 @@ async function* runPlanning(
   }
 }
 
-async function finishCompleted(
+export async function finishCompleted(
   db: WorkbenchDb,
   task: CaptureTask,
   runId: string,
@@ -212,12 +214,23 @@ async function finishCompleted(
   createId: (kind: string) => string,
 ) {
   const timestamp = now().toISOString();
-  const planId = createId("crawl-plan");
+  let planId: string | undefined;
   await db.transaction(async (transaction) => {
+    const existing = await transaction.query.sourceCollectionPlans.findFirst({
+      where: eq(sourceCollectionPlans.planningRunId, runId),
+    });
+    if (existing) {
+      planId = existing.id;
+      await transaction.update(crawlPlanningRuns).set({
+        status: "completed", timelineParts, error: null, finishedAt: timestamp,
+      }).where(and(eq(crawlPlanningRuns.id, runId), eq(crawlPlanningRuns.status, "running")));
+      return;
+    }
     const rows = await transaction.select({ version: sourceCollectionPlans.version })
       .from(sourceCollectionPlans)
       .where(and(eq(sourceCollectionPlans.taskId, task.id), isNotNull(sourceCollectionPlans.planningRunId)));
     const version = Math.max(0, ...rows.map((row) => row.version)) + 1;
+    planId = createId("crawl-plan");
     await transaction.update(sourceCollectionPlans).set({ status: "superseded" })
       .where(and(eq(sourceCollectionPlans.taskId, task.id), eq(sourceCollectionPlans.status, "draft"),
         isNotNull(sourceCollectionPlans.planningRunId)));
@@ -229,6 +242,7 @@ async function finishCompleted(
       status: "completed", timelineParts, finishedAt: timestamp,
     }).where(eq(crawlPlanningRuns.id, runId));
   });
+  if (!planId) throw new Error("抓取计划完成后缺少计划 ID");
   const view = await loadView(db, task);
   const run = view.runs.find((item) => item.id === runId);
   const plan = view.plans.find((item) => item.id === planId);
@@ -236,7 +250,7 @@ async function finishCompleted(
   return { run, plan };
 }
 
-async function validatePlanningOutput(
+export async function validatePlanningOutput(
   task: CaptureTask,
   rawOutput: CrawlPlanningRuntimeOutput,
   timestamp: string,
@@ -258,7 +272,7 @@ async function validatePlanningOutput(
   return content;
 }
 
-async function finishAbnormal(
+export async function finishAbnormal(
   db: WorkbenchDb,
   runId: string,
   status: "interrupted" | "failed",
@@ -268,10 +282,13 @@ async function finishAbnormal(
 ) {
   await db.update(crawlPlanningRuns).set({
     status, timelineParts, error, finishedAt: now().toISOString(),
-  }).where(eq(crawlPlanningRuns.id, runId));
+  }).where(and(eq(crawlPlanningRuns.id, runId), eq(crawlPlanningRuns.status, "running")));
   const row = await db.query.crawlPlanningRuns.findFirst({ where: eq(crawlPlanningRuns.id, runId) });
   if (!row) throw new Error("抓取规划运行记录不存在");
-  return normalizeRun(row);
+  const plan = row.status === "completed"
+    ? await db.query.sourceCollectionPlans.findFirst({ where: eq(sourceCollectionPlans.planningRunId, runId) })
+    : undefined;
+  return normalizeRun(row, plan?.id);
 }
 
 async function confirmPlan(
@@ -324,7 +341,7 @@ async function checkSources(sources: CrawlPlanContent["sources"], check: SourceC
   }
 }
 
-async function loadView(db: WorkbenchDb, task: CaptureTask): Promise<CrawlPlanningView> {
+export async function loadView(db: WorkbenchDb, task: CaptureTask): Promise<CrawlPlanningView> {
   const [runRows, planRows] = await Promise.all([
     db.select().from(crawlPlanningRuns).where(eq(crawlPlanningRuns.taskId, task.id))
       .orderBy(desc(crawlPlanningRuns.startedAt)),
@@ -364,30 +381,14 @@ function normalizeRun(row: typeof crawlPlanningRuns.$inferSelect, planId?: strin
 }
 
 function requireCompleteChecklist(task: CaptureTask, content: CrawlPlanContent) {
-  const taskGaps = findCaptureTaskReadinessGaps(task.content);
-  if (taskGaps.length > 0) {
-    throw new CrawlPlanningError("invalid_state",
-      `抓取任务缺少专业导购所需的调查来源，请先继续对话修订任务：${taskGaps.join("、")}`);
-  }
-  if (content.executionChecklistVersion !== 2) {
-    throw new CrawlPlanningError("invalid_state", "该计划只是历史技术纵切片，不是当前完整执行清单；请重新规划");
-  }
-  if (task.content.jd.applicable && task.content.jd.disposition === "included"
-    && !content.sources.some((source) => source.provider.key === "jd.catalog-product"
-      && source.provider.version === "2.0.0")) {
-    // WHY：通用搜索页只能保留一份网页响应，不能兑现任务已确认的目录、详情、媒体与评价范围。
-    // 保留候选入口不等于完成京东覆盖，计划必须另有 JD v2 动态工作来源。
-    throw new CrawlPlanningError("invalid_state", "任务已纳入京东，但抓取计划缺少 jd.catalog-product@2.0.0 商品数据来源");
-  }
+  requirePlanningResearchAudit(task, content, (message) => {
+    throw new CrawlPlanningError("invalid_state", message);
+  });
   const requiredTopics = new Set([...task.content.generalTopics, ...task.content.categoryTopics]);
   const coveredTopics = new Set<string>();
   const candidates = new Map(task.content.sourceCandidates.map((candidate) => [candidate.id, candidate]));
   const candidateUsage = new Map<string, string>();
   for (const source of content.sources) {
-    if (source.provider.key === "jd.catalog-product" && source.sourceCandidateIds.length > 1) {
-      // WHY：每个采访入口必须独立对账；合并多个候选会让来源级完成状态掩盖某个入口遗漏。
-      throw new CrawlPlanningError("invalid_state", `京东采访入口必须拆成独立执行来源：${source.name}`);
-    }
     for (const candidateId of source.sourceCandidateIds) {
       const candidate = candidates.get(candidateId);
       if (!candidate) {
@@ -399,10 +400,6 @@ function requireCompleteChecklist(task: CaptureTask, content: CrawlPlanContent) 
       if (source.provider.key === "public.web-resource" && !source.targets.some((target) =>
         target.providerConfiguration.some((item) => item.key === "url" && item.value === candidate.entryUrl))) {
         throw new CrawlPlanningError("invalid_state", `采访来源只被列出、没有成为实际抓取项：${candidate.name}`);
-      }
-      if (source.provider.key === "jd.catalog-product"
-        && (source.entryUrls.length !== 1 || source.entryUrls[0] !== candidate.entryUrl)) {
-        throw new CrawlPlanningError("invalid_state", `京东采访入口没有成为实际执行入口：${candidate.name}`);
       }
       requireCandidateAttachments(source, candidate);
       const previous = candidateUsage.get(candidateId);
@@ -427,7 +424,8 @@ function requireCompleteChecklist(task: CaptureTask, content: CrawlPlanContent) 
   if (missing.length > 0) {
     throw new CrawlPlanningError("invalid_state", `抓取计划没有覆盖任务内容方向：${missing.join("、")}`);
   }
-  const missingCandidates = task.content.sourceCandidates.filter((candidate) => !candidateUsage.has(candidate.id));
+  const missingCandidates = task.content.sourceCandidates
+    .filter((candidate) => !isExcludedPlanningUrl(candidate.entryUrl) && !candidateUsage.has(candidate.id));
   if (missingCandidates.length > 0) {
     throw new CrawlPlanningError("invalid_state", `抓取计划遗漏了采访已调查来源：${missingCandidates.map((item) => item.name).join("、")}`);
   }
@@ -459,13 +457,13 @@ function requireCandidateAttachments(
   }
 }
 
-async function requireTask(captureTasks: CaptureTaskModule, taskId: string) {
+export async function requireTask(captureTasks: CaptureTaskModule, taskId: string) {
   const task = await captureTasks.get(taskId);
   if (!task) throw new CrawlPlanningError("not_found", `抓取任务不存在：${taskId}`);
   return task;
 }
 
-function requireCurrentTask(task: CaptureTask, expectedRevision: number) {
+export function requireCurrentTask(task: CaptureTask, expectedRevision: number) {
   if (task.revision !== expectedRevision) throw revisionConflict(task.id);
   if (task.status !== "ready") throw new CrawlPlanningError("invalid_state", "抓取任务尚未确认，不能制定计划");
 }
@@ -474,11 +472,11 @@ function revisionConflict(taskId: string) {
   return new CrawlPlanningError("revision_conflict", `抓取任务已更新，请刷新后重试：${taskId}`);
 }
 
-function parseEvent(event: CrawlPlanningEvent) {
+export function parseEvent(event: CrawlPlanningEvent) {
   return crawlPlanningEventSchema.parse(event);
 }
 
-function boundedError(error: unknown) {
+export function boundedError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return message.slice(0, 2_000) || "抓取规划失败";
 }

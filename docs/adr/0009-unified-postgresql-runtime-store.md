@@ -8,6 +8,8 @@ supersedes: 0008-separate-workbench-and-orchestrator-stores
 
 > 2026-08-18：Workbench 使用 PostgreSQL 的决定继续有效；DBOS 工作流已退出当前生产组合根，旧 DBOS schema 只作为本机历史结构保留，不得按本 ADR 恢复运行链。
 
+> 2026-08-26：上述退出仍适用于旧知识流水线和 `domain_analysis_pipeline` schema；ADR 0020 另行接受 Crawl Planning 专用 DBOS adapter，并使用独立 `domain_analysis_crawl_planning` schema，不恢复旧业务模块。
+
 Workbench 的可变业务状态与 DBOS 执行历史使用同一个 PostgreSQL 服务和数据库。Workbench 表由 `workbench` schema 独占，DBOS 系统表由 `domain_analysis_pipeline` schema 独占；应用统一从 `POSTGRES_DATABASE_URL` 取得连接地址。
 
 ## 调查与实证

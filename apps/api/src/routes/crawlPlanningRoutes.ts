@@ -27,14 +27,15 @@ export async function registerCrawlPlanningRoutes(
   app.post("/api/capture-tasks/:taskId/crawl-planning/runs", async (request, reply) => {
     const { taskId } = taskParamsSchema.parse(request.params);
     const input = crawlPlanningRunRequestSchema.parse(request.body);
-    const abortController = new AbortController();
-    const abort = () => abortController.abort();
-    request.socket.once("close", abort);
-    const events = planning.run({ ...input, taskId, signal: abortController.signal });
+    const projectionController = new AbortController();
+    // WHY：连接只拥有 SSE 投影；DBOS 后台 Planning Run 不再由浏览器 socket 生命周期取消。
+    const stopProjection = () => projectionController.abort();
+    request.socket.once("close", stopProjection);
+    const events = planning.run({ ...input, taskId, signal: projectionController.signal });
     return reply.sse(toServerEvents(
       taskId,
       events,
-      () => request.socket.off("close", abort),
+      () => request.socket.off("close", stopProjection),
       (error) => app.log.error({ err: error }, "crawl planning stream failed"),
     ));
   });
@@ -61,7 +62,7 @@ async function* toServerEvents(
     } catch (error) {
       logFailure(error);
       const event = crawlPlanningEventSchema.parse({
-        type: "stream.failed", taskId, error: "抓取规划连接意外中断，请重试本轮。",
+        type: "stream.failed", taskId, error: "规划进度连接已中断；后台任务不受影响，请刷新查看。",
       });
       yield { event: event.type, data: JSON.stringify(event) };
     }

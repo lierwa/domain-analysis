@@ -1,8 +1,13 @@
-import { sourceDatasetRunViewSchema } from "@domain-analysis/shared";
+import { sourceDatasetRunViewSchema, sourceDatasetTaskViewSchema } from "@domain-analysis/shared";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { groupSourceRunsByBatch, shouldPollSourceDataset, SourceRunDetail } from "../src/pages/SourceDatasetPanel";
+import {
+  groupSourceRunsByBatch,
+  shouldPollSourceDataset,
+  shouldPollSourceRun,
+  SourceRunDetail,
+} from "../src/pages/SourceDatasetPanel";
 
 describe("原始来源逐项对账投影", () => {
   it("按一次开始抓取的批次分组，并把旧记录明确隔离", () => {
@@ -50,14 +55,55 @@ describe("原始来源逐项对账投影", () => {
     expect(shouldPollSourceDataset({ ...running, batches: running.batches.map((batch) => ({ ...batch,
       status: "completed" as const, finishedAt: "2026-08-21T08:01:00.000Z" })) })).toBe(false);
   });
+
+  it("最新批次已结束时不被历史僵尸运行触发永久刷新", () => {
+    const dataset = pollingView("partial");
+
+    expect(shouldPollSourceDataset(dataset)).toBe(false);
+    expect(shouldPollSourceRun(dataset, "run-stale")).toBe(false);
+  });
+
+  it("只刷新最新运行批次及其所属来源详情", () => {
+    const dataset = pollingView("running");
+
+    expect(shouldPollSourceDataset(dataset)).toBe(true);
+    expect(shouldPollSourceRun(dataset, "run-current")).toBe(true);
+    expect(shouldPollSourceRun(dataset, "run-stale")).toBe(false);
+  });
+
 });
+
+function pollingView(latestStatus: "running" | "partial") {
+  const startedAt = "2026-08-21T08:00:00.000Z";
+  const staleStartedAt = "2026-08-20T08:00:00.000Z";
+  return sourceDatasetTaskViewSchema.parse({
+    batches: [
+      { id: "batch-current", taskId: "task-1", sourceCollectionPlanId: "plan-2",
+        sourceCollectionPlanVersion: 2, taskRevision: 2, status: latestStatus, plannedSourceCount: 1,
+        startedAt, ...(latestStatus === "partial"
+          ? { finishedAt: "2026-08-21T08:01:00.000Z", terminationReason: "fixture partial" } : {}) },
+      { id: "batch-stale", taskId: "task-1", sourceCollectionPlanId: "plan-1",
+        sourceCollectionPlanVersion: 1, taskRevision: 1, status: "running", plannedSourceCount: 1,
+        startedAt: staleStartedAt },
+    ],
+    runs: [
+      { ...view().run, id: "run-current", executionBatchId: "batch-current",
+        sourceCollectionPlanId: "plan-2", sourceCollectionPlanVersion: 2,
+        status: latestStatus === "running" ? "running" : "failed",
+        startedAt, finishedAt: latestStatus === "running" ? undefined : "2026-08-21T08:01:00.000Z",
+        terminationReason: latestStatus === "running" ? undefined : "fixture failed" },
+      { ...view().run, id: "run-stale", executionBatchId: "batch-stale",
+        status: "running", startedAt: staleStartedAt, finishedAt: undefined, terminationReason: undefined },
+    ],
+  });
+}
 
 function view() {
   const timestamp = "2026-08-20T00:00:00.000Z";
   return sourceDatasetRunViewSchema.parse({
     run: { id: "run-1", taskId: "task-1", sourceCollectionPlanId: "plan-1",
       sourceCollectionPlanSourceKey: "standard", sourceCollectionPlanVersion: 2,
-      providerKey: "jd.catalog-product", providerVersion: "2.0.0",
+      providerKey: "public.web-resource", providerVersion: "2.0.0",
       accessPolicy: { kind: "manual", version: "fixture" }, status: "failed",
       requestBudget: 4,
       snapshotCount: 1, accessibleCount: 1, failedCount: 0, assetCount: 1,
@@ -73,7 +119,7 @@ function view() {
       requestedUrl: `https://example.com/gb.pdf?attempt=${ordinal}`, origin: "https://example.com",
       startedAt: timestamp, finishedAt: timestamp, finalUrl: "https://example.com/gb.pdf",
       httpStatus: 200, bytes: 4, state: "completed" })),
-    accessGates: [{ key: "public@1", providerKey: "jd.catalog-product", providerVersion: "2.0.0",
+    accessGates: [{ key: "public@1", providerKey: "public.web-resource", providerVersion: "2.0.0",
       policyVersion: "fixture", circuitState: "closed", windowRequestCount: 2,
       manualResumeRequired: false, updatedAt: timestamp }],
     records: [{ object: { id: "object-1", taskId: "task-1", sourceIdentity: "国家标准全文公开系统",
