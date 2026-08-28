@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { TaskModelSelection } from "@domain-analysis/shared";
 
 import {
   mapCodexAppServerNotification,
@@ -28,11 +29,10 @@ const turnStartResultSchema = z.object({
   turn: z.object({ id: z.string() }).passthrough(),
 }).passthrough();
 
-
 export interface CodexAppServerClientOptions {
   cwd: string;
   model: string;
-  reasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoningEffort: string;
   executable?: string;
   timeoutMs?: number;
   webSearch?: boolean;
@@ -80,6 +80,7 @@ export interface CodexAppServerClient {
     signal?: AbortSignal,
     threadId?: string,
     outputSchema?: Record<string, unknown>,
+    modelSelection?: TaskModelSelection,
   ): AsyncIterable<CodexAppServerStreamItem>;
   close(): Promise<void>;
 }
@@ -113,6 +114,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     signal?: AbortSignal,
     threadId?: string,
     outputSchema?: Record<string, unknown>,
+    modelSelection?: TaskModelSelection,
   ): AsyncIterable<CodexAppServerStreamItem> {
     if (this.active) {
       throw new CodexAppServerError(
@@ -128,7 +130,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     this.active = true;
     try {
       const transport = await this.ensureTransport();
-      yield* this.runTurn(transport, prompt, signal, threadId, outputSchema);
+      yield* this.runTurn(transport, prompt, signal, threadId, outputSchema, modelSelection);
     } finally {
       this.active = false;
     }
@@ -170,6 +172,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     signal?: AbortSignal,
     continuationThreadId?: string,
     outputSchema?: Record<string, unknown>,
+    modelSelection?: TaskModelSelection,
   ): AsyncIterable<CodexAppServerStreamItem> {
     const observedEvents = new Set<string>();
     const observedItemTypes = new Set<string>();
@@ -199,9 +202,9 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     }, this.options.timeoutMs ?? 180_000);
     if (threadId) {
       transport.send("turn/start", turnRequestId,
-        turnStartParams(this.options, threadId, prompt, outputSchema));
+        turnStartParams(this.options, threadId, prompt, outputSchema, modelSelection));
     } else {
-      transport.send("thread/start", threadRequestId!, threadStartParams(this.options));
+      transport.send("thread/start", threadRequestId!, threadStartParams(this.options, modelSelection));
     }
 
     try {
@@ -217,7 +220,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
           if (!parsed.success) throw protocolError("thread/start 没有返回 ephemeral thread", parsed.error.message);
           threadId = parsed.data.thread.id;
           transport.send("turn/start", turnRequestId,
-            turnStartParams(this.options, threadId, prompt, outputSchema));
+            turnStartParams(this.options, threadId, prompt, outputSchema, modelSelection));
         }
         if (response.success && response.data.id === turnRequestId) {
           const parsed = turnStartResultSchema.safeParse(response.data.result);
@@ -326,15 +329,19 @@ function initializeParams() {
   };
 }
 
-function threadStartParams(options: CodexAppServerClientOptions) {
+function threadStartParams(
+  options: CodexAppServerClientOptions,
+  selection?: TaskModelSelection,
+) {
+  const effective = selection ?? { modelId: options.model, reasoningEffort: options.reasoningEffort };
   return {
-    model: options.model,
+    model: effective.modelId,
     cwd: options.cwd,
     approvalPolicy: "never",
     sandbox: "read-only",
     ephemeral: true,
     config: {
-      model_reasoning_effort: options.reasoningEffort,
+      model_reasoning_effort: effective.reasoningEffort,
       ...(options.webSearch ? { web_search: "live" } : {}),
     },
   };
@@ -345,14 +352,16 @@ function turnStartParams(
   threadId: string,
   prompt: string,
   outputSchema?: Record<string, unknown>,
+  selection?: TaskModelSelection,
 ) {
+  const reasoningEffort = selection?.reasoningEffort ?? options.reasoningEffort;
   return {
     threadId,
     input: [
       { type: "text", text: prompt, text_elements: [] },
       ...(options.skill ? [{ type: "skill", name: options.skill.name, path: options.skill.path }] : []),
     ],
-    effort: options.reasoningEffort,
+    effort: reasoningEffort,
     // WHY：抓取规划的每个研究阶段使用独立小协议；官方 outputSchema 只约束当前 turn，
     // 因而无需为阶段结果新建第二套会话或 App Server client。
     ...(outputSchema ?? options.outputSchema

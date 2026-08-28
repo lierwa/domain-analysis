@@ -16,7 +16,7 @@ const viteCli = quoteCommandArgument(
 const { result } = concurrently(
   [
     {
-      command: `${nodeExecutable} --env-file=../../.env.example --import=tsx src/index.ts`,
+      command: `${nodeExecutable} --env-file=../../.env.example --env-file-if-exists=../../.env.local --import=tsx src/index.ts`,
       name: "api",
       prefixColor: "black",
       cwd: path.join(repositoryRoot, "apps", "api"),
@@ -30,7 +30,10 @@ const { result } = concurrently(
   ],
   {
     prefix: "name",
-    killOthersOn: ["failure", "success"],
+    restartTries: 3,
+    restartDelay: 1_000,
+    // WHY：任一开发服务正常结束时统一关闭其余服务，避免留下占用端口的孤立进程。
+    killOthersOn: ["success"],
   },
 );
 

@@ -41,6 +41,19 @@ export interface PublicResourceTransportOptions {
   proxyEnv?: NodeJS.ProcessEnv;
 }
 
+export function normalizePublicRedirectUrl(fromUrl: URL, toUrl: URL) {
+  const sameHttpsHost = fromUrl.protocol === "https:" && toUrl.hostname === fromUrl.hostname
+    && (fromUrl.port === "" || fromUrl.port === "443")
+    && (toUrl.port === "" || toUrl.port === "80");
+  if (!sameHttpsHost || toUrl.protocol !== "http:") return toUrl;
+  // WHY：部分公开站点用 HTTP 作为同主机 canonical Location，但 HTTPS 资源仍可直接读取。
+  // 只升级同主机默认端口，保留跨 origin、非默认端口和凭证跳转的拒绝边界。
+  const secureUrl = new URL(toUrl.href);
+  secureUrl.protocol = "https:";
+  secureUrl.port = "";
+  return secureUrl;
+}
+
 export function createPublicResourceTransport(options: PublicResourceTransportOptions = {}) {
   const proxyEnv = publicProxyEnvironment(options.proxyEnv ?? process.env);
   // WHY：Node 24.5+ 官方 Agent 已能读取代理环境；类型包仍锁在 Node 20，窄 cast 只补版本声明差异。
@@ -65,6 +78,38 @@ export function createPublicResourceTransport(options: PublicResourceTransportOp
     return downloadWithCrawlee({ url: initialUrl, maximumBytes, signal, proxyUrl,
       addresses, validateUrl, onRedirect });
   };
+}
+
+export async function preflightPublicResourceEnvironment(
+  options: PublicResourceTransportOptions = {},
+) {
+  const proxyEnv = publicProxyEnvironment(options.proxyEnv ?? process.env);
+  const agent = new Agent({ proxyEnv } as AgentOptions);
+  const lookup = options.lookup ?? lookupAll;
+  const resolveViaDoh = options.resolveViaDoh
+    ?? ((hostname: string, signal?: AbortSignal) => resolveGooglePublicDns(hostname, agent, signal));
+  const proxyAvailable = hasHttpsProxy(proxyEnv);
+  let systemAddresses: LookupAddress[];
+  try {
+    systemAddresses = await lookup("dns.google");
+  } catch {
+    throw new Error("公共网络环境 DNS 检查失败");
+  }
+  const fakeIpEnvironment = systemAddresses.length > 0
+    && systemAddresses.every((value) => isFakeIpAddress(value.address));
+  try {
+    // WHY：预检只访问公共 DNS 基础设施，不触达 Crawl Plan 来源；这样可在创建 Batch 前识别整批共享的网络错误。
+    await resolvePublicTarget("dns.google", async () => systemAddresses, resolveViaDoh, proxyAvailable);
+    if (proxyAvailable && !fakeIpEnvironment) {
+      selectPublicAddress("dns.google", await resolveViaDoh("dns.google"));
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "检测到 Fake-IP DNS，但没有配置受信任 HTTPS 代理") {
+      throw error;
+    }
+    // 代理 URL 可能含凭证；环境错误只返回可操作类别，不回显底层连接串。
+    throw new Error("公共网络环境检查失败，请检查 DNS 与受信任 HTTPS 代理配置");
+  }
 }
 
 export async function readBoundedBody(stream: Readable, maximumBytes: number) {
@@ -238,11 +283,14 @@ async function downloadWithCrawlee(input: {
       gotOptions.hooks.beforeRedirect ??= [];
       gotOptions.hooks.beforeRedirect.push(async (redirectOptions, redirectResponse) => {
         if (!redirectOptions.url) throw new Error("公共资源重定向缺少目标 URL");
-        const toUrl = new URL(redirectOptions.url.toString());
+        const rawToUrl = new URL(redirectOptions.url.toString());
+        const toUrl = normalizePublicRedirectUrl(currentUrl, rawToUrl);
         await input.onRedirect?.({ type: "response", hop: { fromUrl: currentUrl, toUrl,
           statusCode: redirectResponse.statusCode,
           headers: normalizeHeaders(redirectResponse.headers) } });
         await input.validateUrl(toUrl);
+        // WHY：只在已验证为同主机 HTTPS 等价地址后改写客户端下一跳，避免 got 实际连接到 HTTP。
+        (redirectOptions as { url?: URL }).url = toUrl;
         await input.onRedirect?.({ type: "request", toUrl });
         currentUrl = toUrl;
       });

@@ -94,13 +94,6 @@
       "breakpoints": true
     },
     {
-      "idx": 13,
-      "version": "7",
-      "when": 1787144400000,
-      "tag": "0013_repair_jd_owner_question",
-      "breakpoints": true
-    },
-    {
       "idx": 14,
       "version": "7",
       "when": 1787158157825,
@@ -168,6 +161,34 @@
       "version": "7",
       "when": 1787733940004,
       "tag": "0023_strange_amazoness",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1787746465748,
+      "tag": "0024_motionless_vanisher",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1787888777527,
+      "tag": "0025_easy_young_avengers",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1787889237870,
+      "tag": "0026_wild_jamie_braddock",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1787889368385,
+      "tag": "0027_fixed_photon",
       "breakpoints": true
     }
   ]

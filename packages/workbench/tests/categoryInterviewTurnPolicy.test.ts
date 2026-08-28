@@ -14,7 +14,7 @@ describe("采访草案完成门", () => {
     output.draftMarkdown = [
       "# 微波炉数据抓取采访范围草案",
       "",
-      "- [京东微波炉目录](https://www.jd.com/chanpin/485051.html)",
+      "- [公开微波炉市场目录](https://catalog.example.com/microwave-ovens)",
       "- [美的微波炉产品页](https://event.midea.cn/next/item_search/searchlist_w?category_id=10036)",
       "- [松下中国微波炉产品页](https://consumer.panasonic.cn/product/cooking-appliances/microwave-ovens/household-microwave-ovens.html)",
     ].join("\n");
@@ -105,6 +105,7 @@ function interviewView(): CategoryInterviewView {
   return {
     session: {
       id: "session-tv", initialRequest: "抓中国大陆当前在售家用电视，排除商用、二手和停售型号",
+      modelSelection: { modelId: "gpt-5.6-terra", reasoningEffort: "medium" },
       phase: "active", turnState: "idle", revision: 1,
       createdAt: "2026-08-20T00:00:00.000Z", updatedAt: "2026-08-20T00:00:00.000Z",
     },

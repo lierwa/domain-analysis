@@ -4,6 +4,25 @@ const idSchema = z.string().min(1).max(240);
 const isoDateSchema = z.string().datetime({ offset: true });
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
+export const sourceExecutionFailureCategorySchema = z.enum([
+  "system_configuration",
+  "transient_transport",
+  "source_restricted",
+  "plan_revision_required",
+  "content_not_accepted",
+  "contract_fault",
+  "execution_process_lost",
+]);
+
+export type SourceExecutionFailureCategory = z.infer<typeof sourceExecutionFailureCategorySchema>;
+
+export class SourceProviderFailure extends Error {
+  constructor(readonly category: SourceExecutionFailureCategory, message: string) {
+    super(message);
+    this.name = "SourceProviderFailure";
+  }
+}
+
 export const sourceAccessPolicySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("manual"), version: idSchema }).strict(),
   z.object({
@@ -93,11 +112,13 @@ export const sourceCollectionPlanSchema = z.object({
 
 export const sourceCollectionBatchSchema = z.object({
   id: idSchema,
+  commandId: idSchema.optional(),
   taskId: idSchema,
   sourceCollectionPlanId: idSchema,
   sourceCollectionPlanVersion: z.number().int().positive(),
   taskRevision: z.number().int().positive(),
   status: z.enum(["running", "completed", "partial", "failed", "stopped"]),
+  recoveryState: z.enum(["none", "pending", "running", "completed"]).default("none"),
   plannedSourceCount: z.number().int().positive(),
   startedAt: isoDateSchema,
   finishedAt: isoDateSchema.optional(),
@@ -127,6 +148,7 @@ export const sourceCollectionRunSchema = z.object({
   startedAt: isoDateSchema,
   finishedAt: isoDateSchema.optional(),
   terminationReason: z.string().min(1).max(2000).optional(),
+  failureCategory: sourceExecutionFailureCategorySchema.optional(),
 }).strict();
 
 export const sourceProviderCollectionContextSchema = z.object({
@@ -199,6 +221,24 @@ export const sourceAccessGateStateSchema = z.object({
   updatedAt: isoDateSchema,
 }).strict();
 
+export const sourceSnapshotLineageSchema = z.object({
+  workKey: idSchema,
+  discoveryKind: z.enum(["planned_entry", "sitemap_document", "sitemap_entry", "html_link"]),
+  depth: z.number().int().min(0).max(3),
+  parentUrl: z.string().url().optional(),
+}).strict().superRefine((lineage, context) => {
+  if (lineage.discoveryKind === "planned_entry" && (lineage.depth !== 0 || lineage.parentUrl)) {
+    context.addIssue({ code: "custom", path: ["depth"], message: "计划入口必须位于根层且没有父 URL" });
+  }
+  if (lineage.discoveryKind !== "planned_entry" && !lineage.parentUrl) {
+    context.addIssue({ code: "custom", path: ["parentUrl"], message: "站内发现记录必须保存父 URL" });
+  }
+  if ((lineage.discoveryKind === "sitemap_entry" || lineage.discoveryKind === "html_link")
+    && lineage.depth === 0) {
+    context.addIssue({ code: "custom", path: ["depth"], message: "站内发现页面必须位于入口下一层" });
+  }
+});
+
 export const sourceSnapshotSchema = z.object({
   id: idSchema,
   runId: idSchema,
@@ -206,6 +246,8 @@ export const sourceSnapshotSchema = z.object({
   targetKey: idSchema.optional(),
   objectId: idSchema,
   idempotencyKey: idSchema,
+  // WHY：历史快照没有发现路径；新快照保存 typed lineage，读取层不能根据 URL 猜测补写。
+  lineage: sourceSnapshotLineageSchema.optional(),
   observation: rawSourceObservationSchema,
   payload: rawSourcePayloadSchema.optional(),
   contentHash: hashSchema,
@@ -253,6 +295,7 @@ export const sourceSnapshotCommitSchema = z.object({
   runId: idSchema,
   targetKey: idSchema,
   idempotencyKey: idSchema,
+  lineage: sourceSnapshotLineageSchema.optional(),
   object: sourceObjectInputSchema,
   observation: rawSourceObservationSchema,
   payload: rawSourcePayloadSchema.optional(),
@@ -311,9 +354,126 @@ export const sourceExecutionAcceptanceSchema = z.object({
   commandId: idSchema,
 }).strict();
 
+export const sourceDatasetResourceFormatSchema = z.enum([
+  "html", "json", "xml", "csv", "text", "pdf", "word", "spreadsheet", "image", "video",
+  "binary", "legacy", "unknown",
+]);
+
+export const sourceDatasetRecordGroupKeySchema = z.enum([
+  "planned_entry:0",
+  "sitemap_document:0", "sitemap_document:1", "sitemap_document:2", "sitemap_document:3",
+  "sitemap_entry:1", "sitemap_entry:2", "sitemap_entry:3",
+  "html_link:1", "html_link:2", "html_link:3",
+  "unrecorded",
+]);
+
+const sourceDatasetOutcomeCountsSchema = z.object({
+  accepted: z.number().int().nonnegative(),
+  supporting: z.number().int().nonnegative(),
+  rejected: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+}).strict();
+
+export const sourceDatasetRecordGroupSummarySchema = z.object({
+  groupKey: sourceDatasetRecordGroupKeySchema,
+  totalCount: z.number().int().nonnegative(),
+  outcomes: sourceDatasetOutcomeCountsSchema,
+  formats: z.array(z.object({
+    format: sourceDatasetResourceFormatSchema,
+    count: z.number().int().positive(),
+  }).strict()).max(13),
+}).strict();
+
+export const sourceDatasetPlanSourceSchema = z.object({
+  planId: idSchema,
+  planVersion: z.number().int().positive(),
+  planStatus: z.enum(["draft", "confirmed", "superseded"]),
+  sourceKey: idSchema,
+  name: z.string().min(1).max(500),
+  publisher: z.string().min(1).max(500).optional(),
+  sourceKind: z.string().min(1).max(120).optional(),
+  role: z.string().min(1).max(1_000).optional(),
+  targets: z.array(z.object({
+    targetKey: idSchema,
+    name: z.string().min(1).max(500),
+    captureUnit: z.string().min(1).max(500),
+    taskTopics: z.array(z.string().min(1).max(500)),
+    recordGroups: z.array(sourceDatasetRecordGroupSummarySchema).default([]),
+  }).strict()),
+}).strict();
+
+export const sourceDatasetPlanBrandSchema = z.object({
+  planId: idSchema,
+  planVersion: z.number().int().positive(),
+  planStatus: z.enum(["draft", "confirmed", "superseded"]),
+  name: z.string().trim().min(1).max(300),
+  aliases: z.array(z.string().trim().min(1).max(300)).max(30),
+  status: z.enum(["planned", "unresolved"]),
+  officialSourceKeys: z.array(idSchema).max(20),
+}).strict().superRefine((brand, context) => {
+  if (brand.status === "planned" && brand.officialSourceKeys.length === 0) {
+    context.addIssue({ code: "custom", path: ["officialSourceKeys"], message: "已规划品牌必须关联官网来源" });
+  }
+  if (brand.status === "unresolved" && brand.officialSourceKeys.length > 0) {
+    context.addIssue({ code: "custom", path: ["officialSourceKeys"], message: "未解决品牌不能关联官网来源" });
+  }
+});
+
+export const sourceDatasetRecordSummarySchema = z.object({
+  snapshotId: idSchema,
+  runId: idSchema,
+  targetKey: idSchema.optional(),
+  sourceIdentity: z.string().min(1).max(500),
+  objectKind: z.string().min(1).max(120),
+  externalKey: z.string().min(1).max(1_000),
+  observation: rawSourceObservationSchema,
+  outcome: z.enum(["accepted", "rejected", "supporting", "failed"]),
+  lineage: sourceSnapshotLineageSchema.optional(),
+  payload: z.object({
+    kind: z.enum(["inline_text", "asset", "legacy_structured_json"]),
+    mediaType: z.string().min(1).max(240).optional(),
+    filename: z.string().min(1).max(500).optional(),
+    bytes: z.number().int().nonnegative().optional(),
+  }).strict().optional(),
+  resourceFormat: sourceDatasetResourceFormatSchema,
+  assetCount: z.number().int().nonnegative(),
+  resourceReferenceCount: z.number().int().nonnegative(),
+}).strict();
+
+export const sourceDatasetRecordPageSchema = z.object({
+  items: z.array(sourceDatasetRecordSummarySchema).max(50),
+  totalCount: z.number().int().nonnegative(),
+  nextCursor: z.string().min(1).max(2_000).optional(),
+}).strict();
+
+export const sourceCollectionExecutionSummarySchema = z.object({
+  batchId: idSchema,
+  taskId: idSchema,
+  sourceCollectionPlanId: idSchema,
+  sourceCollectionPlanVersion: z.number().int().positive(),
+  taskRevision: z.number().int().positive(),
+  status: z.enum(["running", "completed", "partial", "failed", "stopped"]),
+  plannedSourceCount: z.number().int().positive(),
+  latestRuns: z.array(sourceCollectionRunSchema),
+  counts: z.object({
+    running: z.number().int().nonnegative(),
+    completed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    stopped: z.number().int().nonnegative(),
+    missing: z.number().int().nonnegative(),
+  }).strict(),
+  failureCounts: z.record(sourceExecutionFailureCategorySchema,
+    z.number().int().nonnegative()).default({}),
+}).strict();
+
 export const sourceDatasetTaskViewSchema = z.object({
   batches: z.array(sourceCollectionBatchSchema),
   runs: z.array(sourceCollectionRunSchema),
+  // WHY：历史 Batch/Run 保持不可变；恢复后的用户状态由每个计划来源最新 Run 统一投影。
+  executions: z.array(sourceCollectionExecutionSummarySchema).default([]),
+  // WHY：任务页只读取聚合地图摘要；单条记录在负责人展开记录组后分页取得。
+  sources: z.array(sourceDatasetPlanSourceSchema).default([]),
+  brands: z.array(sourceDatasetPlanBrandSchema).default([]),
 }).strict();
 
 export const sourceDatasetRunViewSchema = z.object({
@@ -339,6 +499,7 @@ export type SourceCollectionTargetRun = z.infer<typeof sourceCollectionTargetRun
 export type SourceCaptureWorkItem = z.infer<typeof sourceCaptureWorkItemSchema>;
 export type SourceRequestAttempt = z.infer<typeof sourceRequestAttemptSchema>;
 export type SourceAccessGateState = z.infer<typeof sourceAccessGateStateSchema>;
+export type SourceSnapshotLineage = z.infer<typeof sourceSnapshotLineageSchema>;
 export type SourceRequestAdmission =
   | { status: "admitted"; attempt: SourceRequestAttempt }
   | { status: "deferred"; reason: "minimum_interval" | "rate_window"; retryAt: string }
@@ -363,8 +524,15 @@ export type SourceAsset = z.infer<typeof sourceAssetSchema>;
 export type SourceProviderResourceReference = z.infer<typeof sourceProviderResourceReferenceSchema>;
 export type SourceResourceReference = z.infer<typeof sourceResourceReferenceSchema>;
 export type SourceSnapshotRecord = z.infer<typeof sourceSnapshotRecordSchema>;
+export type SourceDatasetPlanSource = z.infer<typeof sourceDatasetPlanSourceSchema>;
+export type SourceDatasetPlanBrand = z.infer<typeof sourceDatasetPlanBrandSchema>;
+export type SourceDatasetRecordSummary = z.infer<typeof sourceDatasetRecordSummarySchema>;
+export type SourceDatasetRecordPage = z.infer<typeof sourceDatasetRecordPageSchema>;
+export type SourceDatasetRecordGroupKey = z.infer<typeof sourceDatasetRecordGroupKeySchema>;
+export type SourceDatasetResourceFormat = z.infer<typeof sourceDatasetResourceFormatSchema>;
 export type SourceDatasetRunView = z.infer<typeof sourceDatasetRunViewSchema>;
 export type SourceDatasetTaskView = z.infer<typeof sourceDatasetTaskViewSchema>;
+export type SourceCollectionExecutionSummary = z.infer<typeof sourceCollectionExecutionSummarySchema>;
 export type SourceSnapshotCommit = z.infer<typeof sourceSnapshotCommitSchema>;
 export type SourceProviderAsset = z.infer<typeof sourceProviderAssetSchema>;
 // WHY：Provider 产物先经过执行层 parse；默认空集合属于边界规范化，不应强迫所有旧 Provider 重复填充。

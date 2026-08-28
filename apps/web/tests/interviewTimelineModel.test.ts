@@ -34,7 +34,7 @@ describe("采访单回合时间线", () => {
     messages = appendAssistantActivity(
       messages,
       "pending-assistant-1",
-      activity("search-1", "web_search", "搜索网页", "冰箱 主流品牌", ["https://www.jd.com/"]),
+      activity("search-1", "web_search", "搜索网页", "冰箱 主流品牌", ["https://catalog.example.com/refrigerators"]),
     );
     messages = appendAssistantActivity(messages, "pending-assistant-1", {
       ...activity("search-1", "web_search", "搜索网页", "冰箱 主流品牌"),
@@ -49,7 +49,7 @@ describe("采访单回合时间线", () => {
       } },
       { type: "text", text: "先说明调查范围。" },
       { type: "activity", activity: {
-        ...activity("search-1", "web_search", "搜索网页", "冰箱 主流品牌", ["https://www.jd.com/"]),
+        ...activity("search-1", "web_search", "搜索网页", "冰箱 主流品牌", ["https://catalog.example.com/refrigerators"]),
         status: "completed",
       } },
       { type: "text", text: "搜索后继续说明。" },
@@ -67,20 +67,20 @@ describe("采访单回合时间线", () => {
     messages = appendAssistantActivity(
       messages,
       "pending-assistant-1",
-      activity("search-1", "web_search", "搜索网页", undefined, ["https://www.jd.com/"]),
+      activity("search-1", "web_search", "搜索网页", undefined, ["https://catalog.example.com/refrigerators"]),
     );
     const persisted: NormalizedInterviewMessage = {
-      ...assistantMessage("assistant-1", 1, "请决定京东范围。\n1. 完整范围（推荐）"),
+      ...assistantMessage("assistant-1", 1, "请决定商品范围。\n1. 当前在售（推荐）"),
       timelineParts: [
         { type: "activity", activity: {
           ...activity("turn-analysis", "analysis", "分析需求"), status: "completed",
         } },
         { type: "text", text: "正在分析。" },
         { type: "activity", activity: {
-          ...activity("search-1", "web_search", "搜索网页", undefined, ["https://www.jd.com/"]),
+          ...activity("search-1", "web_search", "搜索网页", undefined, ["https://catalog.example.com/refrigerators"]),
           status: "completed",
         } },
-        { type: "text", text: "请决定京东范围。\n1. 完整范围（推荐）" },
+        { type: "text", text: "请决定商品范围。\n1. 当前在售（推荐）" },
       ],
     };
     messages = completeAssistantMessage(messages, "pending-assistant-1", persisted);
@@ -88,7 +88,7 @@ describe("采访单回合时间线", () => {
     expect(messages[0]?.timelineParts).toEqual(persisted.timelineParts);
     expect(messages[0]?.timelineParts?.[2]).toMatchObject({
       type: "activity",
-      activity: { id: "search-1", status: "completed", urls: ["https://www.jd.com/"] },
+      activity: { id: "search-1", status: "completed", urls: ["https://catalog.example.com/refrigerators"] },
     });
 
     const reconciled = reconcilePersistedMessages([], [persisted]);
@@ -103,7 +103,7 @@ describe("采访单回合时间线", () => {
         "web_search",
         "搜索网页",
         "冰箱 主流品牌",
-        ["https://www.jd.com/", "https://www.jd.com/"],
+        ["https://catalog.example.com/refrigerators", "https://catalog.example.com/refrigerators"],
       ) },
       { type: "text", text: "继续核查参数。" },
       { type: "activity", activity: {
@@ -125,7 +125,7 @@ describe("采访单回合时间线", () => {
           "web_search",
           "搜索网页",
           "冰箱 主流品牌",
-          ["https://www.jd.com/", "https://example.com/spec"],
+          ["https://catalog.example.com/refrigerators", "https://example.com/spec"],
         ),
         status: "running",
       } },

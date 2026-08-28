@@ -161,14 +161,14 @@
 - 标准商品必须先通过 Workbench Chat Timeline 采访形成经用户确认的版本化 Markdown Capture Task Draft，再由独立的确认后转换生成结构化 Capture Task；采访回合不得提前输出完整任务 schema，确认任务不等于开始抓取。
 - 品类采访只向用户询问会实质改变抓取结果、必须由负责人决定的真实取舍；标准、品牌、型号、参数、部件、原理和来源等可调查事实由系统主动调查，不得要求用户先行枚举。
 - 专用品类采访 Skill 参考 `grill-with-docs` 的一次一问和推荐纪律：必须解释背景、给出有依据的专业推荐和主要代价，不得为了凑互斥选项制造问题。Workbench 拥有消息、Interview Decision、未决项、Capture Task Draft 和全部继续上下文，Codex 只做无状态 ephemeral 单轮执行。
-- 平台覆盖属于系统主动调查和规划的数据资源。对冰箱等家电，京东是必须覆盖的核心平台，淘宝是后续多平台来源；不得把“是否纳入京东”写成默认负责人问题。必须覆盖不等于已获准访问，真实执行仍受 Crawl Plan、许可、登录、验证码、风控和频控停止门约束。
+- 平台覆盖属于系统主动调查和规划的数据资源。跨品牌市场目录、品牌官网、标准监管和技术原理来源按各自能提供的原始内容进入计划，不得把可调查的平台选择写成默认负责人问题。来源进入执行清单必须具备公开、可审计、与现有 Provider 能力一致的入口，并继续受 Crawl Plan、许可、登录、验证码、风控和频控停止门约束。
 - Chat Timeline 与 Codex 交互运行时分别以 R-028/R-029 为技术证据；当前生产接受 `assistant-ui` ExternalStoreRuntime 与锁定版本的 App Server `stdio`，每轮只使用 `thread/start(ephemeral:true)`，拒绝持久 App Server/SDK thread、resume 和第二套产品会话事实源。commentary 使用官方 `item/agentMessage/delta`，最终 JSON 由本地 Zod 校验。MVP 不引入 Pi Agent、agent registry、多模型 Provider 或自动 fallback。
 - Provider 只负责执行已确认 Crawl Plan、识别页面/接口状态并返回源站原始内容；不负责决定抓取目标、不清洗数据，也不得把站点 DOM 规则冒充跨品类数据模型。
 - 来源计划表达 Capture Task、来源入口、Provider、捕获单元、覆盖分母、数量、频控、恢复和停止条件的组合，不能与 Provider 混为一个对象。
 - 阶段 1 按来源真实格式保存不可变原始快照和附件；新观察追加新快照，不覆盖历史，不提前标准化或套统一参数模板。
 - 阶段 2 只消费阶段 1 的不可变原始数据，必须在阶段 1 全部验收后重新访谈、调研和设计；不得恢复旧 Evidence、Knowledge Factory、知识包或 Runtime 代码链。
 - Workbench 结构化控制库与原始附件区必须分离；Cookie、Profile、认证 Header、验证码材料和未脱敏临时内容不得进入 Git、日志、Codex 输入或导出。
-- 通用 Crawl Plan、Provider 和 Source Dataset interface 不得出现冰箱、电视、京东、淘宝、SKU 或价格等来源/品类固定假设；具体品类和来源差异由已确认任务、计划和 adapter 数据表达。
+- 通用 Crawl Plan、Provider 和 Source Dataset interface 只表达来源类型、访问方式、捕获单元、数量、停止条件和原始事实；具体品类、平台和内容差异由已确认任务、计划和 adapter 数据表达。
 - 同一事实必须有单一权威来源；UI、HTTP adapter、Provider 和 Worker 只能读取、投影或适配，不得各自重新推导状态。
 - 跨模块状态和事件必须使用已校验的 typed contract；`unknown`、metadata、字符串协议只能停留在外部 seam 并立即校验收窄。
 - Pipeline 阶段、生命周期状态、人工介入和任务尝试必须分开建模，不得继续使用一个组合枚举承载所有含义。

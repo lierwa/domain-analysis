@@ -17,30 +17,42 @@ import {
   sourceProviderCollectionContextSchema,
   sourceProviderEventSchema,
   sourceRunEventSchema,
-  startCrawlPlanSchema,
+  sourceExecutionPlanRequestSchema,
 } from "@domain-analysis/shared";
 
-import type { CrawlPlanningModule } from "./crawlPlanningModule";
 import type { SourceDatasetModule } from "./sourceDatasetModule";
+import { classifySourceExecutionFailure, observationFailureCategory } from "./sourceExecutionFailure";
+import { countSourceTerminal, sourceBatchOutcome } from "./sourceExecutionOutcome";
 
 export interface SourceProvider {
   readonly key: string;
   readonly version: string;
   validate(source: CrawlPlanSource): void;
   prepare?(source: CrawlPlanSource): Promise<SourcePreparation>;
+  preflightEnvironment?(sources: CrawlPlanSource[]): Promise<void>;
   preflight(source: CrawlPlanSource): Promise<void>;
   collect(source: CrawlPlanSource, runId: string, admission: SourceRequestAdmissionPort,
     signal?: AbortSignal, context?: SourceProviderCollectionContext): AsyncIterable<SourceProviderEvent>;
   close?(): Promise<void>;
 }
 
+export interface CrawlPlanExecutionReader {
+  requireExecutablePlan(input: {
+    taskId: string;
+    planId: string;
+    expectedTaskRevision: number;
+    expectedPlanVersion: number;
+  }): Promise<CrawlPlan>;
+}
+
 export interface SourceExecutionModule {
   prepare(input: { taskId: string; planId: string; expectedTaskRevision: number;
     expectedPlanVersion: number }): Promise<SourcePreparation>;
   start(input: { taskId: string; planId: string; expectedTaskRevision: number;
-    expectedPlanVersion: number; signal?: AbortSignal }): AsyncIterable<SourceExecutionEvent>;
+    expectedPlanVersion: number; commandId?: string; signal?: AbortSignal }): AsyncIterable<SourceExecutionEvent>;
   resume(input: { taskId: string; runId: string; expectedTaskRevision: number;
     expectedPlanVersion: number; signal?: AbortSignal }): AsyncIterable<SourceRunEvent>;
+  recoverBatch(input: { batchId: string; signal?: AbortSignal }): Promise<void>;
   validateSource(source: CrawlPlanSource): void;
 }
 
@@ -55,7 +67,7 @@ export class SourceExecutionError extends Error {
 }
 
 export function createSourceExecutionModule(
-  planning: CrawlPlanningModule,
+  planning: CrawlPlanExecutionReader,
   datasets: SourceDatasetModule,
   providers: ReadonlyMap<string, SourceProvider>,
 ): SourceExecutionModule {
@@ -63,10 +75,11 @@ export function createSourceExecutionModule(
   return {
     validateSource: (source) => { resolve(source); },
     prepare: async (raw) => {
-      const request = startCrawlPlanSchema.parse({ expectedTaskRevision: raw.expectedTaskRevision,
+      const request = sourceExecutionPlanRequestSchema.parse({ expectedTaskRevision: raw.expectedTaskRevision,
         expectedPlanVersion: raw.expectedPlanVersion });
       const plan = await planning.requireExecutablePlan({ taskId: raw.taskId, planId: raw.planId, ...request });
       const sources = resolveExecutableSources(plan, resolve);
+      await preflightProviderEnvironments(sources);
       const preparedProviders = new Set<string>();
       for (const { source, provider, identity } of sources) {
         if (preparedProviders.has(identity)) continue;
@@ -78,12 +91,16 @@ export function createSourceExecutionModule(
         message: "只完成抓取条件检查，尚未创建抓取批次，也没有访问任何来源。" });
     },
     start: async function* (raw) {
-      const request = startCrawlPlanSchema.parse({ expectedTaskRevision: raw.expectedTaskRevision,
+      if (raw.commandId && await datasets.getBatchByCommandId(raw.commandId)) return;
+      const request = sourceExecutionPlanRequestSchema.parse({ expectedTaskRevision: raw.expectedTaskRevision,
         expectedPlanVersion: raw.expectedPlanVersion });
       const plan = await planning.requireExecutablePlan({ taskId: raw.taskId, planId: raw.planId, ...request });
       const sources = resolveExecutableSources(plan, resolve);
+      // WHY：环境错误属于整批共同前提；必须在任何 Batch/Run 事实创建前失败，避免同因复制为 N 个来源失败。
+      await preflightProviderEnvironments(sources);
       const batch = await datasets.startBatch({ taskId: plan.taskId, planId: plan.id,
-        planVersion: plan.version, taskRevision: plan.taskRevision, plannedSourceCount: sources.length });
+        planVersion: plan.version, taskRevision: plan.taskRevision, plannedSourceCount: sources.length,
+        ...(raw.commandId ? { commandId: raw.commandId } : {}) });
       const batchLease = await datasets.acquireBatchLease(batch.id);
       yield parseExecutionEvent({ type: "batch.started", batch });
       const terminals = { completed: 0, failed: 0, stopped: 0 };
@@ -106,11 +123,11 @@ export function createSourceExecutionModule(
             ? recordPreflightFailure(plan, source, provider, datasets, readiness.reason, batch.id)
             : executeSource(plan, source, provider, datasets, raw.signal, undefined, batch.id);
           for await (const event of events) {
-            countTerminal(event, terminals);
+            countSourceTerminal(event, terminals);
             yield parseExecutionEvent(event);
           }
         }
-        const outcome = batchOutcome(terminals, sources.length, Boolean(raw.signal?.aborted));
+        const outcome = sourceBatchOutcome(terminals, sources.length, Boolean(raw.signal?.aborted));
         const finished = await datasets.finishBatch({ batchId: batch.id, ...outcome });
         finalized = true;
         yield parseExecutionEvent({ type: `batch.${outcome.status}` as const, batch: finished });
@@ -129,7 +146,7 @@ export function createSourceExecutionModule(
       }
     },
     resume: async function* (raw) {
-      const request = startCrawlPlanSchema.parse({ expectedTaskRevision: raw.expectedTaskRevision,
+      const request = sourceExecutionPlanRequestSchema.parse({ expectedTaskRevision: raw.expectedTaskRevision,
         expectedPlanVersion: raw.expectedPlanVersion });
       const previous = await datasets.getRun(raw.runId);
       if (!previous || previous.run.taskId !== raw.taskId) {
@@ -149,10 +166,96 @@ export function createSourceExecutionModule(
         sourceProviderCollectionContextSchema.parse({ resumedFromRunId: preparedRun.id, queueRunId,
           accessPolicy: effectiveAccessPolicy(source) }), preparedRun.executionBatchId);
     },
+    recoverBatch: (input) => recoverExecutionBatch(planning, datasets, resolve, input),
   };
 }
 
 type ProviderReadiness = { status: "ready" } | { status: "failed"; reason: string };
+
+async function recoverExecutionBatch(
+  planning: CrawlPlanExecutionReader,
+  datasets: SourceDatasetModule,
+  resolve: (source: CrawlPlanSource) => SourceProvider,
+  input: { batchId: string; signal?: AbortSignal },
+) {
+  const batch = await datasets.getBatch(input.batchId);
+  if (!batch) throw new SourceExecutionError("not_found", "待恢复的来源批次不存在");
+  const plan = await planning.requireExecutablePlan({ taskId: batch.taskId,
+    planId: batch.sourceCollectionPlanId, expectedTaskRevision: batch.taskRevision,
+    expectedPlanVersion: batch.sourceCollectionPlanVersion });
+  const sources = resolveExecutableSources(plan, resolve);
+  const lease = await datasets.acquireBatchLease(batch.id);
+  await datasets.setBatchRecoveryState(batch.id, "running");
+  try {
+    await preflightProviderEnvironments(sources);
+    const latestBySource = latestRunsBySource(await datasets.listBatchRuns(batch.id));
+    for (const { source, provider } of sources) {
+      if (input.signal?.aborted) throw input.signal.reason ?? new Error("Source Worker 已停止");
+      const previous = latestBySource.get(source.key);
+      if (previous?.status === "completed" || (previous && !await isSafeAutomaticRecovery(datasets, previous))) {
+        continue;
+      }
+      await preflightSource(source, provider);
+      if (!previous) {
+        await consumeRun(executeSource(plan, source, provider, datasets, input.signal, undefined, batch.id));
+        continue;
+      }
+      const prepared = await datasets.prepareRunForResume(previous.id);
+      const queueRunId = await findResumeRootRunId(datasets, prepared);
+      const context = sourceProviderCollectionContextSchema.parse({ resumedFromRunId: prepared.id,
+        queueRunId, accessPolicy: effectiveAccessPolicy(source) });
+      await consumeRun(executeSource(plan, source, provider, datasets, input.signal, context, batch.id));
+    }
+    await datasets.setBatchRecoveryState(batch.id, "completed");
+  } catch (error) {
+    await datasets.setBatchRecoveryState(batch.id, "pending").catch(() => undefined);
+    throw error;
+  } finally {
+    await lease.release();
+  }
+}
+
+function latestRunsBySource(runs: SourceCollectionRun[]) {
+  const latest = new Map<string, SourceCollectionRun>();
+  for (const run of runs) {
+    if (run.sourceCollectionPlanSourceKey) latest.set(run.sourceCollectionPlanSourceKey, run);
+  }
+  return latest;
+}
+
+async function isSafeAutomaticRecovery(datasets: SourceDatasetModule, run: SourceCollectionRun) {
+  if (run.failureCategory !== "execution_process_lost" || run.snapshotCount > 0) return false;
+  const view = await datasets.getRun(run.id);
+  if (!view) return false;
+  return !view.requestAttempts.some((attempt) => attempt.state === "started"
+    || (attempt.state === "cancelled" && attempt.restrictionReason === "request_outcome_unknown"));
+}
+
+async function consumeRun(events: AsyncIterable<SourceRunEvent>) {
+  for await (const _event of events) {
+    // 恢复进度只由 Source Dataset 最新 Run 投影，避免第二套内存状态。
+  }
+}
+
+async function preflightProviderEnvironments(
+  sources: Array<{ source: CrawlPlanSource; provider: SourceProvider; identity: string }>,
+) {
+  const providerGroups = new Map<string, { provider: SourceProvider; sources: CrawlPlanSource[] }>();
+  for (const { source, provider, identity } of sources) {
+    const group = providerGroups.get(identity) ?? { provider, sources: [] };
+    group.sources.push(source);
+    providerGroups.set(identity, group);
+  }
+  for (const [identity, group] of providerGroups) {
+    if (!group.provider.preflightEnvironment) continue;
+    try {
+      await group.provider.preflightEnvironment(group.sources);
+    } catch (error) {
+      throw new SourceExecutionError("preflight_failed",
+        `${identity} 运行环境：${boundedMessage(error)}`);
+    }
+  }
+}
 
 function resolveExecutableSources(plan: CrawlPlan, resolve: (source: CrawlPlanSource) => SourceProvider) {
   return plan.content.sources.map((source) => {
@@ -179,7 +282,8 @@ async function* recordPreflightFailure(
   const states = new Map(source.targets.map((target) => [target.key,
     { status: "pending" as TargetState, accessibleCount: 0 }]));
   await closeOpenTargets(datasets, run.id, states, reason, false);
-  const failed = await datasets.finishRun({ runId: run.id, status: "failed", terminationReason: reason });
+  const failed = await datasets.finishRun({ runId: run.id, status: "failed", terminationReason: reason,
+    failureCategory: classifySourceExecutionFailure(reason) });
   yield parseRunEvent({ type: "run.failed", run: failed });
 }
 
@@ -229,7 +333,8 @@ async function* executeSource(
             terminationReason: event.snapshot.observation.state });
           await closeOpenTargets(datasets, run.id, states, event.snapshot.observation.state, false);
           const failed = await datasets.finishRun({ runId: run.id, status: "failed",
-            terminationReason: event.snapshot.observation.state });
+            terminationReason: event.snapshot.observation.state,
+            failureCategory: observationFailureCategory(event.snapshot.observation.state) });
           yield parseRunEvent({ type: "run.failed", run: failed });
           return;
         }
@@ -261,7 +366,8 @@ async function* executeSource(
       const reason = stopped ? "operator_cancelled" : boundedMessage(error);
       await closeOpenTargets(datasets, run.id, states, reason, stopped);
       const failed = await datasets.finishRun({ runId: run.id, status: stopped ? "stopped" : "failed",
-        terminationReason: reason });
+        terminationReason: reason,
+        ...(!stopped ? { failureCategory: classifySourceExecutionFailure(error) } : {}) });
       yield parseRunEvent({ type: stopped ? "run.stopped" : "run.failed", run: failed });
     }
   } finally { await lease.release(); }
@@ -389,22 +495,6 @@ function parseRunEvent(event: SourceRunEvent) {
 
 function parseExecutionEvent(event: SourceExecutionEvent) {
   return sourceExecutionEventSchema.parse(event);
-}
-
-function countTerminal(event: SourceRunEvent, counts: { completed: number; failed: number; stopped: number }) {
-  if (event.type === "run.completed") counts.completed += 1;
-  else if (event.type === "run.failed") counts.failed += 1;
-  else if (event.type === "run.stopped") counts.stopped += 1;
-}
-
-function batchOutcome(counts: { completed: number; failed: number; stopped: number }, total: number, aborted: boolean) {
-  if (aborted || counts.stopped > 0) return { status: "stopped" as const,
-    terminationReason: `${counts.completed}/${total} 个来源完成，批次已停止` };
-  if (counts.completed === total) return { status: "completed" as const,
-    terminationReason: `${total}/${total} 个来源完成` };
-  if (counts.completed > 0) return { status: "partial" as const,
-    terminationReason: `${counts.completed}/${total} 个来源完成，${counts.failed} 个来源失败` };
-  return { status: "failed" as const, terminationReason: `0/${total} 个来源完成，${counts.failed} 个来源失败` };
 }
 
 function boundedProviderError(source: CrawlPlanSource, error: unknown) {

@@ -1,6 +1,7 @@
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { CategoryInterviewView } from "@domain-analysis/shared";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,6 +15,7 @@ import { createCodexCategoryInterviewRuntime } from "../src/codexCategoryIntervi
 
 const temporaryRoots: string[] = [];
 const runtimeClosers: Array<() => Promise<void>> = [];
+const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
 afterEach(async () => {
   await Promise.all(runtimeClosers.splice(0).map((close) => close()));
@@ -50,7 +52,7 @@ describe("Codex 采访运行时事件边界", () => {
       itemStatus: "completed",
       detail: "冰箱 中国市场 主流品牌 官方网站",
       urls: [
-        "https://www.jd.com/",
+        "https://catalog.example.com/refrigerators",
         "https://www.haier.com/refrigerators/",
         "https://example.com/private",
         "https://openstd.samr.gov.cn/",
@@ -84,7 +86,7 @@ describe("Codex 采访运行时事件边界", () => {
 describe("Codex 采访结果投影与连接复用", () => {
   it("把完整范围请求的真实 commentary 和网页搜索映射给 Workbench，但不暴露内部本地命令", async () => {
     const runtime = createCodexCategoryInterviewRuntime({
-      repositoryRoot: process.cwd(),
+      repositoryRoot,
       model: "gpt-5.6-terra",
       reasoningEffort: "medium",
       executable: await fakeCodexExecutable(successSource()),
@@ -118,7 +120,7 @@ describe("Codex 采访结果投影与连接复用", () => {
         id: "search-1", kind: "web_search", label: "搜索网页",
         detail: "冰箱 中国市场 主流品牌 官方网站",
         urls: [
-          "https://www.jd.com/",
+          "https://catalog.example.com/refrigerators",
           "https://www.haier.com/refrigerators/",
           "https://example.com/private",
           "https://openstd.samr.gov.cn/",
@@ -152,7 +154,7 @@ describe("Codex 采访结果投影与连接复用", () => {
 
   it("确认 Markdown 后使用独立结构化调用生成正式 Capture Task", async () => {
     const runtime = createCodexCategoryInterviewRuntime({
-      repositoryRoot: process.cwd(),
+      repositoryRoot,
       model: "gpt-5.6-terra",
       reasoningEffort: "medium",
       executable: await fakeCodexExecutable(materializationSource()),
@@ -166,7 +168,7 @@ describe("Codex 采访结果投影与连接复用", () => {
 
     expect(output).toMatchObject({
       category: { code: "refrigerator", label: "冰箱" },
-      sourceCandidates: [{ entryUrl: "https://www.jd.com/" }],
+      sourceCandidates: [{ entryUrl: "https://catalog.example.com/refrigerators" }],
     });
     expect(output.sourceCandidates[0]).not.toHaveProperty("observedAt");
   });
@@ -299,7 +301,7 @@ async function handle(message) {
   if (isProductInterview) {
     const prompt = message.params.input.find((item) => item.type === "text")?.text ?? "";
     if (!prompt.includes("不要通过本地命令查找或读取 Skill、AGENTS.md、开发文档或 Git 状态")) process.exit(9);
-    if (!prompt.includes("当前正式规划排除京东")) process.exit(10);
+    if (!prompt.includes("来源只有在公开、可审计并能由当前 Provider 执行时才进入计划")) process.exit(10);
     if (!prompt.includes("draftCoverage.scopeEvidenceUrls")) process.exit(11);
     if (!prompt.includes("逐项检查会改变纳入商品集合、市场范围或观察时间范围的边界依据")) process.exit(12);
     if (!prompt.includes("品牌官网、参数说明书、标准监管和技术原理由 Planning Agent")) process.exit(13);
@@ -339,9 +341,9 @@ async function handle(message) {
   emit({ method: "item/completed", params: { item: {
     id: "search-1", type: "webSearch", query: "冰箱 中国市场 主流品牌 官方网站",
     status: "${failedSearch ? "failed" : "completed"}",
-    action: { type: "openPage", url: "https://www.jd.com/", query: null, queries: null },
+    action: { type: "openPage", url: "https://catalog.example.com/refrigerators", query: null, queries: null },
     results: [
-      { title: "京东", url: "https://www.jd.com/" },
+      { title: "公开市场目录", url: "https://catalog.example.com/refrigerators" },
       { title: "海尔冰箱", metadata: { href: "https://www.haier.com/refrigerators/" } },
       { title: "带凭据 URL", url: "https://user:secret@example.com/private" },
       { title: "国家标准", url: "https://openstd.samr.gov.cn/" },
@@ -369,10 +371,9 @@ function materializationSource() {
     marketScope: "中国大陆当前在售家用冰箱",
     generalTopics: ["品牌、型号、商品详情和原始参数"],
     categoryTopics: ["能效、容量、制冷方式和核心部件"],
-    jd: { applicable: true, disposition: "pending", scope: [], rationale: "草案明确适用京东。" },
     sourceCandidates: [{
-      id: "source-jd-refrigerator", name: "京东冰箱频道", publisher: "京东",
-      entryUrl: "https://www.jd.com/", sourceKind: "retailer",
+      id: "source-market-refrigerator", name: "公开冰箱市场目录", publisher: "市场目录出版方",
+      entryUrl: "https://catalog.example.com/refrigerators", sourceKind: "retailer",
       expectedContents: ["冰箱类目、商品参数和评价指标"], observedFormats: ["HTML"],
       accessState: "public",
     }],
@@ -498,6 +499,7 @@ function emptyInterviewView(): CategoryInterviewView {
     session: {
       id: "session-1",
       initialRequest: "抓冰箱",
+      modelSelection: { modelId: "gpt-5.6-terra", reasoningEffort: "medium" },
       phase: "active",
       turnState: "running",
       revision: 2,

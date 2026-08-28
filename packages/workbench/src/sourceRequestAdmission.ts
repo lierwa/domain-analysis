@@ -76,7 +76,8 @@ export async function prepareSourceRunForResume(db: WorkbenchDb, runId: string) 
         terminationReason: "execution_process_lost" }).where(and(eq(sourceCollectionTargetRuns.runId, runId),
         or(eq(sourceCollectionTargetRuns.status, "pending"), eq(sourceCollectionTargetRuns.status, "running"))));
       const changed = await transaction.update(sourceCollectionRuns).set({ status: "stopped", finishedAt: at,
-        terminationReason: "execution_process_lost" }).where(and(eq(sourceCollectionRuns.id, runId),
+        terminationReason: "execution_process_lost", failureCategory: "execution_process_lost" })
+        .where(and(eq(sourceCollectionRuns.id, runId),
         eq(sourceCollectionRuns.status, "running"))).returning();
       if (changed.length !== 1) throw new SourceDatasetError("invalid_state", "Source Run 恢复准备失败");
       return normalizeCollectionRun(changed[0]!);
@@ -425,7 +426,8 @@ function normalizeCollectionRun(row: typeof sourceCollectionRuns.$inferSelect) {
     requestBudget: row.requestBudget ?? undefined,
     startedAt: normalizeTimestamp(row.startedAt),
     finishedAt: row.finishedAt ? normalizeTimestamp(row.finishedAt) : undefined,
-    terminationReason: row.terminationReason ?? undefined });
+    terminationReason: row.terminationReason ?? undefined,
+    failureCategory: row.failureCategory ?? undefined });
 }
 
 function normalizeTimestamp(value: string | Date) {

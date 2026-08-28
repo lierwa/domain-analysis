@@ -5,17 +5,22 @@ import type {
   InterviewSession,
   InterviewTimelineEvent,
   InterviewTurnRequest,
+  TaskModelSelection,
 } from "@domain-analysis/shared";
+import { DEFAULT_TASK_MODEL_SELECTION } from "@domain-analysis/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocalStorage } from "usehooks-ts";
 
 import {
   confirmCaptureTaskDraft,
   fetchCategoryInterview,
   startCategoryInterview,
   streamCategoryInterviewTurn,
+  updateInterviewModelSelection,
 } from "../lib/api";
 import { CaptureTaskDraftCard } from "./CategoryInterviewTurnPanels";
 import { InterviewThread } from "./InterviewThread";
+import { TaskModelControl } from "./TaskModelControl";
 import {
   appendAssistantActivity,
   appendAssistantText,
@@ -40,6 +45,7 @@ type InterviewRunControls = {
 };
 
 export const ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY = "domain-analysis.active-category-interview";
+const TASK_MODEL_SELECTION_STORAGE_KEY = "domain-analysis.task-model-selection";
 
 export function CategoryInterviewTimeline({
   onTaskCreated,
@@ -51,7 +57,8 @@ export function CategoryInterviewTimeline({
   initialSessionId?: string;
 }) {
   const store = useInterviewStore(initialSessionId);
-  const turns = useInterviewTurnRunner(store);
+  const modelSettings = useTaskModelSettings(store);
+  const turns = useInterviewTurnRunner(store, modelSettings.selection);
   const { view, messages, isRestoring, setView, setMessages } = store;
   const confirmations = useInterviewConfirmations({
     view,
@@ -90,9 +97,19 @@ export function CategoryInterviewTimeline({
         messages={messages}
         isRunning={turns.isRunning}
         isRestoring={isRestoring}
+        isComposerDisabled={modelSettings.isSaving}
         awaitingDecision={Boolean(proposed)}
         onNew={handleNew}
         onCancel={turns.onCancel}
+        composerControls={(
+          <TaskModelControl
+            value={modelSettings.selection}
+            disabled={isRestoring || turns.isRunning}
+            saving={modelSettings.isSaving}
+            error={modelSettings.error}
+            onChange={(selection) => void modelSettings.change(selection)}
+          />
+        )}
       >
         {turns.actionError && (!actionErrorAlreadyVisible || turns.retryTurn) && (
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger" role="alert">
@@ -115,6 +132,41 @@ export function CategoryInterviewTimeline({
       </InterviewThread>
     </section>
   );
+}
+
+function useTaskModelSettings(store: ReturnType<typeof useInterviewStore>) {
+  const { view, setView } = store;
+  const [preferredSelection, setPreferredSelection] = useLocalStorage<TaskModelSelection>(
+    TASK_MODEL_SELECTION_STORAGE_KEY,
+    DEFAULT_TASK_MODEL_SELECTION,
+  );
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  // WHY：会话内选择属于当前任务事实；本地偏好只负责下一份任务的默认值。
+  const selection = view?.session.modelSelection ?? preferredSelection;
+
+  const change = useCallback(async (next: TaskModelSelection) => {
+    setError(undefined);
+    if (!view) {
+      setPreferredSelection(next);
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const updated = await updateInterviewModelSelection(
+        view.session.id,
+        view.session.revision,
+        next,
+      );
+      setView(updated);
+      setPreferredSelection(updated.session.modelSelection);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "模型设置保存失败");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [setPreferredSelection, setView, view]);
+  return { selection, isSaving, error, change };
 }
 
 function useInterviewConfirmations({
@@ -190,7 +242,10 @@ function useInterviewStore(initialSessionId?: string) {
   return { view, messages, isRestoring, setView, setMessages, viewRef, refresh };
 }
 
-function useInterviewTurnRunner(store: ReturnType<typeof useInterviewStore>) {
+function useInterviewTurnRunner(
+  store: ReturnType<typeof useInterviewStore>,
+  modelSelection: TaskModelSelection,
+) {
   const { isRestoring, setView, setMessages, viewRef, refresh } = store;
   const [isRunning, setIsRunning] = useState(false);
   const [actionError, setActionError] = useState<string>();
@@ -199,7 +254,7 @@ function useInterviewTurnRunner(store: ReturnType<typeof useInterviewStore>) {
   const activeTurnRef = useRef<InterviewTurnIntent>();
   const activeAssistantRef = useRef<string>();
   const turnInFlightRef = useRef(false);
-  const run = useInterviewRun(store, {
+  const run = useInterviewRun(store, modelSelection, {
     isRestoring, setIsRunning, setActionError, setRetryTurn,
     abortRef, activeTurnRef, activeAssistantRef, turnInFlightRef,
   });
@@ -226,7 +281,11 @@ function useInterviewTurnRunner(store: ReturnType<typeof useInterviewStore>) {
   return { isRunning, actionError, retryTurn, setActionError, run, onNew, onCancel };
 }
 
-function useInterviewRun(store: ReturnType<typeof useInterviewStore>, controls: InterviewRunControls) {
+function useInterviewRun(
+  store: ReturnType<typeof useInterviewStore>,
+  modelSelection: TaskModelSelection,
+  controls: InterviewRunControls,
+) {
   const { setView, setMessages, viewRef, refresh } = store;
   const { isRestoring, setIsRunning, setActionError, setRetryTurn,
     abortRef, activeTurnRef, activeAssistantRef, turnInFlightRef } = controls;
@@ -245,7 +304,7 @@ function useInterviewRun(store: ReturnType<typeof useInterviewStore>, controls: 
     let turnError: string | undefined;
     try {
       if (!current) {
-        current = await startCategoryInterview(intent.text);
+        current = await startCategoryInterview(intent.text, modelSelection);
         window.localStorage.setItem(ACTIVE_CATEGORY_INTERVIEW_STORAGE_KEY, current.session.id);
         setView(current);
       }
@@ -305,6 +364,7 @@ function useInterviewRun(store: ReturnType<typeof useInterviewStore>, controls: 
       }
     }
   }, [isRestoring, refresh, setMessages, setView, viewRef,
+    modelSelection,
     abortRef, activeTurnRef, activeAssistantRef, turnInFlightRef,
     setActionError, setIsRunning, setRetryTurn]);
 }

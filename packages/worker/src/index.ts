@@ -5,3 +5,4 @@ export * from "./ephemeralCrawleeConfiguration";
 export * from "./publicNetworkPolicy";
 export * from "./publicResourceTransport";
 export * from "./publicWebResourceProvider";
+export * from "./zolCategoryProvider";

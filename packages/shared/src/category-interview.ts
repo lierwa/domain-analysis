@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   captureTaskDraftVersionSchema,
 } from "./capture-task";
+import { taskModelSelectionSchema } from "./task-model-selection";
 
 const idSchema = z.string().min(1).max(240);
 const isoDateSchema = z.string().datetime({ offset: true });
@@ -14,6 +15,7 @@ export const interviewTurnStates = ["idle", "running", "interrupted", "failed"] 
 export const interviewSessionSchema = z.object({
   id: idSchema,
   initialRequest: z.string().max(20_000),
+  modelSelection: taskModelSelectionSchema,
   phase: z.enum(interviewPhases),
   turnState: z.enum(interviewTurnStates),
   revision: revisionSchema,
@@ -220,8 +222,7 @@ function isSourceOwnerChoice(key: string, visibleChoice: string) {
 }
 
 function mentionsSourcePlatform(value: string) {
-  return /京东|淘宝|天猫|拼多多|苏宁|唯品会|亚马逊|小红书|抖音|快手|jingdong|taobao|tmall|pinduoduo|amazon|xiaohongshu/i.test(value)
-    || /(^|[^a-z0-9])jd([^a-z0-9]|$)/i.test(value);
+  return /淘宝|天猫|拼多多|苏宁|唯品会|亚马逊|小红书|抖音|快手|taobao|tmall|pinduoduo|amazon|xiaohongshu/i.test(value);
 }
 
 const eventBase = { sessionId: idSchema, turnId: idSchema };

@@ -1,6 +1,7 @@
 import {
   interviewTimelineEventSchema,
   interviewTurnRequestSchema,
+  taskModelSelectionSchema,
 } from "@domain-analysis/shared";
 import {
   type CategoryInterviewModule,
@@ -13,7 +14,14 @@ const sessionParamsSchema = z.object({ sessionId: z.string().min(1) }).strict();
 const draftParamsSchema = sessionParamsSchema.extend({ draftId: z.string().min(1) }).strict();
 const taskParamsSchema = z.object({ taskId: z.string().min(1) }).strict();
 const revisionSchema = z.object({ expectedRevision: z.number().int().positive() }).strict();
-const startSchema = z.object({ initialRequest: z.string().min(1).max(20_000) }).strict();
+const startSchema = z.object({
+  initialRequest: z.string().min(1).max(20_000),
+  modelSelection: taskModelSelectionSchema.optional(),
+}).strict();
+const modelSelectionUpdateSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+  modelSelection: taskModelSelectionSchema,
+}).strict();
 
 export async function registerCategoryInterviewRoutes(
   app: FastifyInstance,
@@ -31,6 +39,12 @@ export async function registerCategoryInterviewRoutes(
     const item = await interviews.get(sessionId);
     if (!item) throw new CategoryInterviewError("not_found", `采访会话不存在：${sessionId}`);
     return { item };
+  });
+
+  app.patch("/api/category-interviews/:sessionId/model-selection", async (request) => {
+    const { sessionId } = sessionParamsSchema.parse(request.params);
+    const input = modelSelectionUpdateSchema.parse(request.body);
+    return { item: await interviews.updateModelSelection({ sessionId, ...input }) };
   });
 
   app.delete("/api/category-interviews/:sessionId", async (request, reply) => {

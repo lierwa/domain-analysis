@@ -25,7 +25,7 @@ describe("持久 RequestQueue 强杀恢复", () => {
 
   it("强杀后已完成项不重复，锁过期前不派发，显式继续只取得未完成项", async () => {
     temporaryDirectory = await mkdtemp(path.join(tmpdir(), "domain-analysis-crawlee-kill-"));
-    child = spawn(process.execPath, ["--import=tsx", childScript(), temporaryDirectory, "jd-kill-run"], {
+    child = spawn(process.execPath, ["--import=tsx", childScript(), temporaryDirectory, "catalog-kill-run"], {
       cwd: path.resolve("."), stdio: ["ignore", "pipe", "pipe"],
     });
     await waitForLine(child, "LOCKED:detail:1");
@@ -33,7 +33,7 @@ describe("持久 RequestQueue 强杀恢复", () => {
     await waitForExit(child);
 
     const restarted = createPersistentCrawleeConfiguration(temporaryDirectory);
-    const queue = await openPersistentRequestQueue("jd-kill-run", restarted, 1);
+    const queue = await openPersistentRequestQueue("catalog-kill-run", restarted, 1);
     const duplicate = await queue.addRequest({
       url: "https://fixture.invalid/catalog", uniqueKey: "catalog:1",
     });
@@ -43,7 +43,7 @@ describe("持久 RequestQueue 强杀恢复", () => {
     // Crawlee 3.18.1 的队头锁在水合时会再延长一个周期；只等一个周期正是旧实现漏抓的边界。
     await new Promise((resolve) => setTimeout(resolve, requestLockRecoveryWaitMs(2)));
     const continued = createPersistentCrawleeConfiguration(temporaryDirectory);
-    const continuedQueue = await openPersistentRequestQueue("jd-kill-run", continued, 1);
+    const continuedQueue = await openPersistentRequestQueue("catalog-kill-run", continued, 1);
     const remaining = await fetchNextEventually(continuedQueue);
     expect(remaining?.uniqueKey, JSON.stringify(await continuedQueue.getInfo())).toBe("detail:1");
     if (remaining) await continuedQueue.markRequestHandled(remaining);

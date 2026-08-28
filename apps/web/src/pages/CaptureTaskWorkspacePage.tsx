@@ -17,11 +17,10 @@ import {
   CategoryInterviewTimeline,
 } from "./CategoryInterviewTimeline";
 import { CaptureTaskContentView } from "./CaptureTaskContentView";
-import { CrawlPlanningPanel } from "./CrawlPlanningPanel";
 import { SourceDatasetPanel } from "./SourceDatasetPanel";
 
 type WorkspaceMode = "tasks" | "new";
-type TaskSection = "scope" | "plan" | "data";
+type TaskSection = "scope" | "data";
 
 export function CaptureTaskWorkspacePage() {
   const queryClient = useQueryClient();
@@ -161,7 +160,7 @@ export function CaptureTaskWorkspacePage() {
         onDeleteInterview={(session) => void removeInterview(session)}
       />
 
-      <main className={`flex min-h-0 min-w-0 flex-col ${mode === "new" ? "lg:overflow-hidden" : "lg:overflow-y-auto"}`}>
+      <main className={`flex min-h-0 min-w-0 flex-col ${mode === "new" || section === "data" ? "lg:overflow-hidden" : "lg:overflow-y-auto"}`}>
         {mode === "new" ? (
           <InterviewWorkspace
             instanceKey={`${newTaskKey}`}
@@ -377,28 +376,28 @@ function TaskWorkspace({
   isRevising: boolean;
   revisionError?: string;
 }) {
+  const isDataSection = section === "data";
   return (
-    <div>
-      <header className="rounded-xl border border-line bg-surface px-5 pb-0 pt-5 sm:px-7 sm:pt-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div><h2 className="text-2xl font-semibold tracking-tight">{task.name}</h2>
-            <p className="mt-2 text-sm leading-6 text-muted">{task.content.originalRequest}</p></div>
+    <div className={isDataSection ? "flex min-h-0 flex-1 flex-col" : undefined}>
+      <header className={`shrink-0 rounded-xl border border-line bg-surface ${isDataSection ? "px-4 pb-0 pt-3 sm:px-5" : "px-5 pb-0 pt-5 sm:px-7 sm:pt-6"}`}>
+        <div className={`flex flex-wrap justify-between gap-4 ${isDataSection ? "items-center" : "items-start"}`}>
+          <div className="min-w-0"><h2 className={`${isDataSection ? "truncate text-lg" : "text-2xl"} font-semibold tracking-tight`}>{task.name}</h2>
+            {!isDataSection && <p className="mt-2 text-sm leading-6 text-muted">{task.content.originalRequest}</p>}</div>
           <span className="status-badge">{task.status === "ready" ? "已确认" : "需重新确认"}</span>
         </div>
-        <nav className="mt-6 flex gap-5" aria-label="抓取任务内容">
+        <nav className={`${isDataSection ? "mt-2" : "mt-6"} flex gap-5`} aria-label="抓取任务阶段">
           <Tab active={section === "scope"} onClick={() => onSectionChange("scope")} label="抓取范围" />
-          <Tab active={section === "plan"} onClick={() => onSectionChange("plan")} label="抓取计划" />
           <Tab active={section === "data"} onClick={() => onSectionChange("data")} label="原始数据" />
         </nav>
       </header>
-      <div className="pt-5">{section === "scope" ? (
+      <div className={isDataSection ? "min-h-0 flex-1 pt-3" : "pt-5"}>{section === "scope" ? (
         <TaskScope
           task={task}
           onRevise={onRevise}
           isRevising={isRevising}
           revisionError={revisionError}
         />
-      ) : section === "plan" ? <CrawlPlanningPanel task={task} /> : <SourceDatasetPanel task={task} />}</div>
+      ) : <SourceDatasetPanel task={task} />}</div>
     </div>
   );
 }
@@ -432,7 +431,7 @@ function TaskScope({
 }
 
 function Tab({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
-  return <button type="button" onClick={onClick} className={`min-h-11 border-b-2 px-1 text-sm font-medium ${active ? "border-ink text-ink" : "border-transparent text-muted"}`}>{label}</button>;
+  return <button type="button" onClick={onClick} className={`min-h-11 border-b-2 px-1 text-sm font-medium focus:outline-none focus-visible:bg-panel ${active ? "border-ink text-ink" : "border-transparent text-muted"}`}>{label}</button>;
 }
 function ErrorPanel({ label, onRetry }: { label: string; onRetry: () => void }) { return <div className="rounded-lg border border-danger/30 p-4 text-sm text-danger"><p>{label}</p><button type="button" className="button-secondary mt-3" onClick={onRetry}><RefreshCw className="h-4 w-4" />重试</button></div>; }
 function Welcome({ onStart }: { onStart: () => void }) { return <div className="flex min-h-[420px] flex-col items-center justify-center rounded-xl border border-dashed border-line bg-surface p-8 text-center"><Database className="h-8 w-8 text-muted" /><h2 className="mt-4 font-semibold">还没有抓取任务</h2><p className="mt-2 text-sm text-muted">先通过对话生成并确认一份抓取任务。</p><button type="button" className="button-primary mt-5" onClick={onStart}><MessageSquareText className="h-4 w-4" />新建抓取任务</button></div>; }

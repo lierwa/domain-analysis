@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { captureTaskSchema, type CaptureTask, type CaptureTaskContent } from "@domain-analysis/shared";
+import {
+  captureTaskContentSchema,
+  captureTaskSchema,
+  type CaptureTask,
+  type CaptureTaskContent,
+} from "@domain-analysis/shared";
 import type { WorkbenchDb } from "@domain-analysis/db";
 import { captureTasks } from "@domain-analysis/db";
 import { and, desc, eq, ne } from "drizzle-orm";
@@ -61,7 +66,8 @@ export function buildConfirmedCaptureTask(
 }
 
 function normalizeTask(row: typeof captureTasks.$inferSelect): CaptureTask {
-  const content = row.content ?? legacyTaskContent(row);
+  // WHY：数据库原文是不可变审计事实；当前读模型只投影现行通用契约，旧扩展字段不再进入业务规则。
+  const content = row.content ? captureTaskContentSchema.strip().parse(row.content) : legacyTaskContent(row);
   // WHY：旧记录没有确认时间，不能仅凭历史 ready 字符串伪装成已验收的新抓取任务。
   const status = row.status === "ready" && !row.confirmedAt ? "draft" : row.status;
   return captureTaskSchema.parse({
@@ -83,7 +89,6 @@ function legacyTaskContent(row: typeof captureTasks.$inferSelect): CaptureTaskCo
     marketScope: row.marketScope,
     generalTopics: ["保留历史抓取数据；重新确认前不启动新抓取"],
     categoryTopics: [],
-    jd: { applicable: false, disposition: "pending", scope: [], rationale: "历史记录尚未完成新抓取任务验收" },
     sourceCandidates: [],
     excludedContent: [],
     unresolvedItems: [{ key: "legacy.scope", description: "需要重新通过对话确认抓取范围", owner: "user" }],

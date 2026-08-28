@@ -3,12 +3,12 @@ import { describe, expect, it } from "vitest";
 import { categoryInterviewRuntimeOutputSchema, interviewTimelineEventSchema } from "../src";
 
 describe("抓取任务对话契约", () => {
-  it("即使换成 jd.intent 也拒绝把京东默认覆盖伪装成负责人问题", () => {
+  it("即使换 key 也拒绝把来源平台选择伪装成负责人问题", () => {
     const result = categoryInterviewRuntimeOutputSchema.safeParse({
-      assistantText: "需要确认京东意向。",
+      assistantText: "需要确认来源平台。",
       proposedDecision: {
-        key: "jd.intent",
-        question: "是否纳入京东？",
+        key: "platform.intent",
+        question: "是否指定某商城作为来源？",
         options: [
           { label: "纳入", description: "抓取可访问内容", recommended: true },
           { label: "不纳入", description: "只看官网", recommended: false },
@@ -22,17 +22,17 @@ describe("抓取任务对话契约", () => {
     expect(result.success).toBe(false);
   });
 
-  it("允许非京东取舍在代价说明中提及京东来源", () => {
+  it("允许生命周期取舍在代价说明中提及公开市场目录", () => {
     const result = categoryInterviewRuntimeOutputSchema.safeParse({
       assistantText: "需要确认型号生命周期范围。",
       proposedDecision: {
         key: "catalog.lifecycle-scope",
         question: "首期是否纳入近两年停售型号？",
         options: [
-          { label: "仅当前在售", description: "边界清晰，京东当前页更容易核验。", recommended: true },
-          { label: "加近两年停售", description: "覆盖更广，但会增加京东历史页核验量。", recommended: false },
+          { label: "仅当前在售", description: "边界清晰，公开市场目录更容易核验。", recommended: true },
+          { label: "加近两年停售", description: "覆盖更广，但会增加历史页面核验量。", recommended: false },
         ],
-        rationale: "该取舍决定型号生命周期，不是在询问是否纳入京东。",
+        rationale: "该取舍决定型号生命周期，不是在询问使用哪个来源。",
       },
       unresolvedItems: [],
       resolvedUnresolvedKeys: [],
@@ -41,12 +41,12 @@ describe("抓取任务对话契约", () => {
     expect(result.success).toBe(true);
   });
 
-  it("拒绝 generic key 下用口语再次询问京东是否必需", () => {
+  it("拒绝 generic key 下用口语询问是否指定某个来源", () => {
     const result = categoryInterviewRuntimeOutputSchema.safeParse({
       assistantText: "还需要确认一个来源问题。",
       proposedDecision: {
         key: "source.primary-platform",
-        question: "要京东数据吗？",
+        question: "要指定商城数据吗？",
         options: [
           { label: "要", description: "加入平台数据。", recommended: true },
           { label: "不要", description: "只使用官网。", recommended: false },

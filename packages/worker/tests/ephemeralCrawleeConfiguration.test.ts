@@ -35,7 +35,7 @@ describe("ephemeral Crawlee configuration", () => {
   it("命名队列跨 storage 实例保留成功 uniqueKey 与未完成工作", async () => {
     temporaryDirectory = await mkdtemp(path.join(tmpdir(), "domain-analysis-crawlee-"));
     const first = createPersistentCrawleeConfiguration(temporaryDirectory);
-    const firstQueue = await openPersistentRequestQueue("jd-run-1", first, 1);
+    const firstQueue = await openPersistentRequestQueue("catalog-run-1", first, 1);
     await firstQueue.addRequest({ url: "https://fixture.invalid/catalog", uniqueKey: "catalog:1" });
     await firstQueue.addRequest({ url: "https://fixture.invalid/detail/1", uniqueKey: "detail:1" });
     const completed = await firstQueue.fetchNextRequest();
@@ -44,7 +44,7 @@ describe("ephemeral Crawlee configuration", () => {
     await first.getStorageClient().teardown?.();
 
     const restarted = createPersistentCrawleeConfiguration(temporaryDirectory);
-    const restartedQueue = await openPersistentRequestQueue("jd-run-1", restarted, 1);
+    const restartedQueue = await openPersistentRequestQueue("catalog-run-1", restarted, 1);
     const duplicate = await restartedQueue.addRequest({
       url: "https://fixture.invalid/catalog", uniqueKey: "catalog:1",
     });

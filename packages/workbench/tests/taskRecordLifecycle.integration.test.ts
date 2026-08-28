@@ -140,7 +140,6 @@ function taskContent(): CaptureTaskContent {
     marketScope: "中国大陆家用冰箱",
     generalTopics: ["品牌与型号"],
     categoryTopics: ["能效与容量"],
-    jd: { applicable: true, disposition: "pending", scope: [], rationale: "尚待确认" },
     sourceCandidates: [],
     excludedContent: [],
     unresolvedItems: [],

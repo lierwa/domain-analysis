@@ -12,11 +12,70 @@ import {
   assertPublicAddress,
   assertPublicHttpsUrl,
   createPublicWebResourceProvider,
+  preflightPublicResourceEnvironment,
   readBoundedBody,
   resolvePublicTarget,
 } from "../src";
 
 describe("公共原始资源 Provider", () => {
+  it("瞬时传输失败只在持久准入与冻结预算内自动重试一次", async () => {
+    vi.useFakeTimers();
+    try {
+      const admission = fakeAdmission();
+      let pageRequests = 0;
+      const provider = createPublicWebResourceProvider({
+        request: async (url) => {
+          if (url.pathname === "/robots.txt") return response(200, "User-agent: *\nAllow: /");
+          pageRequests += 1;
+          if (pageRequests === 1) {
+            throw Object.assign(new Error("socket disconnected before secure TLS connection"), {
+              code: "ECONNRESET",
+            });
+          }
+          return response(200,
+            `<html><body>${"official manual content ".repeat(20)}</body></html>`,
+            "text/html; charset=utf-8");
+        },
+      });
+
+      const collected = expect(collect(provider.collect(singleManualSource(), "run-1", admission)))
+        .resolves.toEqual(expect.arrayContaining([
+          expect.objectContaining({ type: "target.completed", targetKey: "official.manual" }),
+        ]));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await collected;
+
+      expect(pageRequests).toBe(2);
+      expect(admission.reserveRequest).toHaveBeenCalledTimes(3);
+      expect(admission.finishRequest).toHaveBeenCalledWith(expect.objectContaining({
+        attemptId: "attempt-2", state: "failed",
+      }));
+      expect(admission.finishRequest).toHaveBeenCalledWith(expect.objectContaining({
+        attemptId: "attempt-3", state: "completed",
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("批次环境预检在 Fake-IP 且缺少 HTTPS 代理时于来源访问前失败", async () => {
+    const lookup = async () => [{ address: "198.18.0.9", family: 4 as const }];
+    const resolveViaDoh = vi.fn(async () => [{ address: "23.199.232.87", family: 4 as const }]);
+
+    await expect(preflightPublicResourceEnvironment({ lookup, resolveViaDoh, proxyEnv: {} }))
+      .rejects.toThrow("没有配置受信任 HTTPS 代理");
+    expect(resolveViaDoh).not.toHaveBeenCalled();
+  });
+
+  it("批次环境预检通过受信任 HTTPS 代理验证 Fake-IP 后的公网解析", async () => {
+    const lookup = async () => [{ address: "198.18.0.9", family: 4 as const }];
+    const resolveViaDoh = vi.fn(async () => [{ address: "23.199.232.87", family: 4 as const }]);
+
+    await expect(preflightPublicResourceEnvironment({ lookup, resolveViaDoh,
+      proxyEnv: { HTTPS_PROXY: "http://127.0.0.1:7890" } })).resolves.toBeUndefined();
+    expect(resolveViaDoh).toHaveBeenCalledOnce();
+  });
+
   it("逐 target 读取冻结 URL，并返回可对账的 capture/completed 事件", async () => {
     const requested: string[] = [];
     const provider = createPublicWebResourceProvider({
@@ -40,6 +99,11 @@ describe("公共原始资源 Provider", () => {
       ["capture", "official.manual"], ["target.completed", "official.manual"],
       ["capture", "technical.principles"], ["target.completed", "technical.principles"],
     ]);
+    expect(events.filter((event) => event.type === "capture").map((event) => event.snapshot.lineage))
+      .toEqual([
+        { workKey: "target:official.manual", discoveryKind: "planned_entry", depth: 0 },
+        { workKey: "target:technical.principles", discoveryKind: "planned_entry", depth: 0 },
+      ]);
   });
 
   it("按 HTML 标准识别非 UTF-8 正文，并让内联文本的字节数与哈希对账", async () => {
@@ -179,7 +243,138 @@ describe("公共原始资源 Provider", () => {
         && event.snapshot.observation.contentAssessment?.status === "accepted")).toHaveLength(2);
       expect(events.filter((event) => event.type === "capture"
         && event.snapshot.observation.contentAssessment?.status === "rejected")).toHaveLength(1);
+      expect(events.filter((event) => event.type === "capture").map((event) => event.snapshot.lineage))
+        .toEqual(expect.arrayContaining([
+          { workKey: expect.stringMatching(/^sitemap:/), discoveryKind: "sitemap_document", depth: 0,
+            parentUrl: "https://example.com/robots.txt" },
+          { workKey: expect.stringMatching(/^page:/), discoveryKind: "planned_entry", depth: 0 },
+          { workKey: expect.stringMatching(/^page:/), discoveryKind: "sitemap_entry", depth: 1,
+            parentUrl: "https://example.com/sitemap.xml" },
+          { workKey: expect.stringMatching(/^page:/), discoveryKind: "html_link", depth: 1,
+            parentUrl: "https://example.com/tvs" },
+        ]));
       expect(events.at(-1)).toEqual({ type: "target.completed", targetKey: "official.catalog" });
+    } finally {
+      await rm(queueStorageDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("site route 的 sitemap 使用来源声明的响应字节上限", async () => {
+    const queueStorageDirectory = await mkdtemp(path.join(tmpdir(), "public-site-sitemap-limit-"));
+    const requestedLimits: Array<[string, number]> = [];
+    const provider = createPublicWebResourceProvider({
+      queueStorageDirectory,
+      request: async (url, maximumBytes) => {
+        requestedLimits.push([url.pathname, maximumBytes]);
+        if (url.pathname === "/robots.txt") return response(200,
+          "User-agent: *\nAllow: /\nSitemap: https://example.com/sitemap.xml");
+        if (url.pathname === "/sitemap.xml") return response(200,
+          '<?xml version="1.0"?><urlset><url><loc>https://example.com/tvs/second</loc></url></urlset>',
+          "application/xml");
+        return response(200,
+          `<html><body>TCL 电视 65Q8E 55Q7E ${"产品型号与规格 ".repeat(80)}</body></html>`,
+          "text/html; charset=utf-8");
+      },
+    });
+    const value = siteSource();
+    value.provider.configuration = [
+      { key: "mode", value: "planned_routes" }, { key: "maximum_bytes", value: 1_000_000 },
+      { key: "maximum_pages_per_target", value: 4 },
+    ];
+    try {
+      const events = await collect(provider.collect(value, "run-1", fakeAdmission(), undefined, {
+        queueRunId: "run-sitemap-limit", accessPolicy: { kind: "paced_http", version: "public-v2",
+          maxRequestsPerMinute: 10, minimumIntervalMs: 1, jitterMs: { min: 0, max: 0 },
+          batchSize: 10, batchCooldownMs: 60_000, maximumRunMs: 10_000 },
+      }));
+
+      expect(requestedLimits).toContainEqual(["/robots.txt", 256_000]);
+      expect(requestedLimits).toContainEqual(["/sitemap.xml", 1_000_000]);
+      expect(events.at(-1)).toEqual({ type: "target.completed", targetKey: "official.catalog" });
+    } finally {
+      await rm(queueStorageDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("site route 保留格式错误的 sitemap 原文并继续计划入口", async () => {
+    const queueStorageDirectory = await mkdtemp(path.join(tmpdir(), "public-site-malformed-sitemap-"));
+    const provider = createPublicWebResourceProvider({
+      queueStorageDirectory,
+      request: async (url) => {
+        if (url.pathname === "/robots.txt") return response(200,
+          "User-agent: *\nAllow: /\nSitemap: https://example.com/sitemap.xml");
+        if (url.pathname === "/sitemap.xml") return response(200,
+          "<urlset><url><loc>https://example.com/tvs/second</loc></urlset>", "application/xml");
+        return response(200,
+          `<html><body>TCL 电视 65Q8E 55Q7E ${"产品型号与规格 ".repeat(80)}</body></html>`,
+          "text/html; charset=utf-8");
+      },
+    });
+    const value = siteSource();
+    value.targets[0]!.providerConfiguration = value.targets[0]!.providerConfiguration
+      .map((item) => item.key === "minimum_accepted_pages" ? { ...item, value: 1 } : item);
+    try {
+      const events = await collect(provider.collect(value, "run-1", fakeAdmission(), undefined, {
+        queueRunId: "run-malformed-sitemap", accessPolicy: { kind: "paced_http", version: "public-v2",
+          maxRequestsPerMinute: 10, minimumIntervalMs: 1, jitterMs: { min: 0, max: 0 },
+          batchSize: 10, batchCooldownMs: 60_000, maximumRunMs: 10_000 },
+      }));
+
+      expect(events).toContainEqual(expect.objectContaining({ type: "capture", snapshot: expect.objectContaining({
+        observation: expect.objectContaining({ contentAssessment: expect.objectContaining({
+          status: "supporting", reason: expect.stringContaining("解析失败"),
+        }) }),
+      }) }));
+      expect(events.at(-1)).toEqual({ type: "target.completed", targetKey: "official.catalog" });
+    } finally {
+      await rm(queueStorageDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("同一来源的多个 site target 不会共享 sitemap 捕获工作键", async () => {
+    const queueStorageDirectory = await mkdtemp(path.join(tmpdir(), "public-site-work-key-"));
+    const provider = createPublicWebResourceProvider({
+      queueStorageDirectory,
+      request: async (url) => {
+        if (url.pathname === "/robots.txt") return response(200,
+          "User-agent: *\nAllow: /\nSitemap: https://example.com/sitemap.xml");
+        if (url.pathname === "/sitemap.xml") return response(200,
+          '<?xml version="1.0"?><urlset><url><loc>https://example.com/tvs/second</loc></url>'
+            + '<url><loc>https://example.com/products/second</loc></url></urlset>', "application/xml");
+        return response(200,
+          `<html><body>TCL 电视 65Q8E 55Q7E ${"产品型号与规格 ".repeat(80)}</body></html>`,
+          "text/html; charset=utf-8");
+      },
+    });
+    const value = siteSource();
+    const second = structuredClone(value.targets[0]!);
+    second.key = `t${"a".repeat(239)}`;
+    second.name = "产品目录";
+    second.providerConfiguration = second.providerConfiguration.map((item) => item.key === "url"
+      ? { ...item, value: "https://example.com/products" } : item);
+    value.entryUrls.push("https://example.com/products");
+    value.targets.push(second);
+    value.stopPolicy.requestBudget = 40;
+    const admission = fakeAdmission();
+    const definitions = new Map<string, { targetKey: string; captureUnit: string }>();
+    admission.ensureCaptureWorkItem.mockImplementation(async (input) => {
+      const previous = definitions.get(input.workKey);
+      if (previous && (previous.targetKey !== input.targetKey || previous.captureUnit !== input.captureUnit)) {
+        throw new Error(`捕获工作项定义冲突：${input.workKey}`);
+      }
+      definitions.set(input.workKey, { targetKey: input.targetKey, captureUnit: input.captureUnit });
+      return input as never;
+    });
+    try {
+      const events = await collect(provider.collect(value, "run-1", admission, undefined, {
+        queueRunId: "run-work-key", accessPolicy: { kind: "paced_http", version: "public-v2",
+          maxRequestsPerMinute: 10, minimumIntervalMs: 1, jitterMs: { min: 0, max: 0 },
+          batchSize: 10, batchCooldownMs: 60_000, maximumRunMs: 10_000 },
+      }));
+
+      expect(events.filter((event) => event.type === "target.completed")).toHaveLength(2);
+      expect([...definitions.keys()].filter((key) => key.startsWith("sitemap:"))).toHaveLength(2);
+      expect([...definitions.keys()].every((key) => key.length <= 240)).toBe(true);
     } finally {
       await rm(queueStorageDirectory, { recursive: true, force: true });
     }

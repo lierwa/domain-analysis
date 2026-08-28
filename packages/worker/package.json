@@ -19,6 +19,7 @@
     "cockatiel": "^4.0.0",
     "encoding-sniffer": "^1.0.2",
     "p-queue": "^9.3.3",
+    "p-retry": "8.0.0",
     "playwright-core": "1.62.1",
     "robots-parser": "3.0.1"
   }

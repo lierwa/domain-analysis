@@ -73,9 +73,7 @@ describeWithPostgres("采访草案与正式抓取任务的阶段边界", () => {
 
     expect(harness.runtime.materializationInputs[0]?.draftMarkdown).toBe(draft.markdown);
     expect(await taskCount(db!, sessionId)).toBe(1);
-    expect(confirmed.task).toMatchObject({
-      revision: 1, content: { jd: { applicable: true, disposition: "excluded", scope: [] } },
-    });
+    expect(confirmed.task).toMatchObject({ revision: 1 });
     expect(confirmed.task.content.sourceCandidates[0]?.observedAt).toBe("2026-08-19T14:00:00.000Z");
   });
 
@@ -86,7 +84,6 @@ describeWithPostgres("采访草案与正式抓取任务的阶段边界", () => {
     const view = await createDraft(harness, "# 电视采访范围\n\n只列出两个品牌官网。", "电视");
     const draft = view.taskDrafts.find((item) => item.status === "draft")!;
     const incomplete = taskMaterialization("television", "电视");
-    incomplete.jd = { applicable: false, disposition: "excluded", scope: [], rationale: "旧草案仅写适用时" };
     incomplete.sourceCandidates = incomplete.sourceCandidates.filter((item) => item.sourceKind === "brand_official");
     harness.runtime.pushMaterialization(incomplete);
 
@@ -94,7 +91,6 @@ describeWithPostgres("采访草案与正式抓取任务的阶段边界", () => {
       sessionId, draftId: draft.id, expectedRevision: view.session.revision,
     });
     expect(confirmed.task.content).toMatchObject({
-      jd: { disposition: "excluded", scope: [] },
       sourceCandidates: [{ sourceKind: "brand_official" }, { sourceKind: "brand_official" }],
     });
     expect(await taskCount(db!, sessionId)).toBe(1);
@@ -111,7 +107,7 @@ describeWithPostgres("Markdown 草案版本历史", () => {
       .where(eq(categoryInterviewSessions.id, sessionId));
     await db!.insert(captureTaskDraftVersions).values({
       id: draftId, sessionId, version: 1, status: "draft", contentHash: "0".repeat(64),
-      briefMarkdown: "# 微波炉采访范围\n\n只有京东和两个品牌官网。",
+      briefMarkdown: "# 微波炉采访范围\n\n只有公开市场目录和两个品牌官网。",
       createdAt: "2026-08-19T14:00:00.000Z",
     });
 
@@ -119,7 +115,7 @@ describeWithPostgres("Markdown 草案版本历史", () => {
 
     expect(view.session.phase).toBe("active");
     expect(view.taskDrafts).toContainEqual(expect.objectContaining({
-      id: draftId, status: "superseded", markdown: expect.stringContaining("只有京东和两个品牌官网"),
+      id: draftId, status: "superseded", markdown: expect.stringContaining("只有公开市场目录和两个品牌官网"),
     }));
     await expect(harness.interviews.confirmTaskDraft({
       sessionId, draftId, expectedRevision: view.session.revision,
@@ -261,10 +257,9 @@ function taskMaterialization(code: string, label: string): CaptureTaskMaterializ
     marketScope: "中国大陆当前在售新机",
     generalTopics: ["品牌、型号、商品详情和参数"],
     categoryTopics: ["品类关键参数"],
-    jd: { applicable: true, disposition: "pending", scope: [], rationale: "按已确认草案适用京东。" },
     sourceCandidates: [{
-      id: `jd-${code}`, name: `京东${label}频道`, publisher: "京东",
-      entryUrl: "https://www.jd.com/", sourceKind: "retailer",
+      id: `market-${code}`, name: `${label}公开市场目录`, publisher: "市场目录出版方",
+      entryUrl: "https://catalog.example.com/", sourceKind: "retailer",
       expectedContents: ["在售商品与参数"], observedFormats: ["网页"], accessState: "public",
     }, {
       id: `brand-${code}`, name: `${label}品牌官网`, publisher: "品牌方",

@@ -37,17 +37,21 @@ export function InterviewThread({
   messages,
   isRunning,
   isRestoring,
+  isComposerDisabled,
   awaitingDecision,
   onNew,
   onCancel,
+  composerControls,
   children,
 }: {
   messages: InterviewUiMessage[];
   isRunning: boolean;
   isRestoring: boolean;
+  isComposerDisabled?: boolean;
   awaitingDecision: boolean;
   onNew: (message: AppendMessage) => Promise<void>;
   onCancel: () => Promise<void>;
+  composerControls?: ReactNode;
   children: ReactNode;
 }) {
   const runtime = useExternalStoreRuntime({
@@ -78,29 +82,35 @@ export function InterviewThread({
             >
               <ArrowDown className="h-4 w-4" aria-hidden="true" />
             </ThreadPrimitive.ScrollToBottom>
-            <ComposerPrimitive.Root className="flex items-end gap-2 rounded-xl border border-line bg-panel p-2 shadow-sm focus-within:border-ink">
-              <label htmlFor="category-interview-input" className="sr-only">输入抓取需求或回答</label>
-              <ComposerPrimitive.Input
-                id="category-interview-input"
-                className="max-h-36 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-2 py-3 text-base outline-none disabled:cursor-wait disabled:opacity-60 sm:text-sm"
-                placeholder={isRestoring
-                  ? "正在恢复采访…"
-                  : awaitingDecision ? "可以回答、补充、纠正或追问" : "例如：抓冰箱"}
-                aria-label="输入抓取需求或回答"
-                disabled={isRestoring}
-              />
-              {isRunning ? (
-                <ComposerPrimitive.Cancel className="icon-button shrink-0 bg-ink text-surface hover:bg-ink/85" aria-label="停止生成">
-                  <Square className="h-4 w-4 fill-current" aria-hidden="true" />
-                </ComposerPrimitive.Cancel>
-              ) : (
-                <ComposerPrimitive.Send
-                  className="icon-button shrink-0 bg-ink text-surface hover:bg-ink/85 disabled:cursor-wait disabled:opacity-60"
-                  aria-label="发送消息"
-                  disabled={isRestoring}
-                >
-                  <ArrowUp className="h-5 w-5" aria-hidden="true" />
-                </ComposerPrimitive.Send>
+            <ComposerPrimitive.Root className="flex flex-col overflow-hidden rounded-2xl border border-line/90 bg-surface shadow-[0_1px_2px_rgb(var(--color-ink)/0.04),0_14px_36px_-24px_rgb(var(--color-ink)/0.34)] transition-[border-color,box-shadow] duration-200 focus-within:border-ink/35 focus-within:shadow-[0_1px_2px_rgb(var(--color-ink)/0.05),0_16px_40px_-22px_rgb(var(--color-ink)/0.42)] focus-within:ring-4 focus-within:ring-ink/[0.04]">
+              <div className="flex min-h-[4.75rem] items-end gap-3 px-3 py-3">
+                <label htmlFor="category-interview-input" className="sr-only">输入抓取需求或回答</label>
+                <ComposerPrimitive.Input
+                  id="category-interview-input"
+                  className="max-h-36 min-h-[3.25rem] min-w-0 flex-1 resize-none bg-transparent px-1.5 py-2 text-base leading-6 text-ink outline-none placeholder:text-muted/65 disabled:cursor-wait disabled:opacity-60 sm:text-sm"
+                  placeholder={isRestoring
+                    ? "正在恢复采访…"
+                    : isComposerDisabled ? "正在读取任务模型…"
+                    : awaitingDecision ? "可以回答、补充、纠正或追问" : "例如：抓冰箱"}
+                  aria-label="输入抓取需求或回答"
+                  disabled={isRestoring || isComposerDisabled}
+                />
+                {isRunning ? (
+                  <ComposerPrimitive.Cancel className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-ink text-surface shadow-sm transition-[transform,opacity] hover:opacity-85 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2" aria-label="停止生成">
+                    <Square className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+                  </ComposerPrimitive.Cancel>
+                ) : (
+                  <ComposerPrimitive.Send
+                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-ink text-surface shadow-sm transition-[transform,opacity] hover:opacity-85 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-35"
+                    aria-label="发送消息"
+                    disabled={isRestoring || isComposerDisabled}
+                  >
+                    <ArrowUp className="h-5 w-5" aria-hidden="true" />
+                  </ComposerPrimitive.Send>
+                )}
+              </div>
+              {composerControls && (
+                <div className="flex min-h-10 min-w-0 items-center border-t border-line/70 bg-panel/45 px-2 py-1">{composerControls}</div>
               )}
             </ComposerPrimitive.Root>
           </ThreadPrimitive.ViewportFooter>

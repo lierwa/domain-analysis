@@ -4,10 +4,8 @@ import {
   appendInterviewTimelineActivity,
   appendInterviewTimelineText,
   categoryInterviewRuntimeOutputSchema,
-  categoryInterviewViewSchema,
   completeInterviewTimeline,
   failInterviewTimeline,
-  interviewSessionSchema,
   interviewTimelineEventSchema,
   normalizedInterviewMessageSchema,
   type CaptureTask,
@@ -21,6 +19,7 @@ import {
   type InterviewTimelineEvent,
   type InterviewTurnActivity,
   type InterviewTurnRequest,
+  type TaskModelSelection,
 } from "@domain-analysis/shared";
 import type { WorkbenchDb } from "@domain-analysis/db";
 import {
@@ -39,6 +38,10 @@ import {
   listStandaloneInterviewSessions,
   removeStandaloneInterviewSession,
 } from "./categoryInterviewRecords";
+import {
+  startCategoryInterviewSession,
+  updateCategoryInterviewModelSelection,
+} from "./categoryInterviewModelSettings";
 import {
   loadCategoryInterviewView,
   loadCategoryInterviewViewByTaskId,
@@ -74,9 +77,14 @@ export interface CategoryInterviewMaterializationInput {
 
 export interface CategoryInterviewModule {
   list(): Promise<InterviewSession[]>;
-  start(input: { initialRequest: string }): Promise<CategoryInterviewView>;
+  start(input: { initialRequest: string; modelSelection?: TaskModelSelection }): Promise<CategoryInterviewView>;
   get(sessionId: string): Promise<CategoryInterviewView | null>;
   getByTaskId(taskId: string): Promise<CategoryInterviewView | null>;
+  updateModelSelection(input: {
+    sessionId: string;
+    expectedRevision: number;
+    modelSelection: TaskModelSelection;
+  }): Promise<CategoryInterviewView>;
   remove(sessionId: string): Promise<void>;
   runTurn(input: InterviewTurnRequest & { sessionId: string; signal?: AbortSignal }): AsyncIterable<InterviewTimelineEvent>;
   confirmTaskDraft(input: { sessionId: string; draftId: string; expectedRevision: number }): Promise<{
@@ -99,30 +107,14 @@ export function createCategoryInterviewModule(
       const views = await Promise.all(sessions.map((session) => loadCategoryInterviewView(db, session.id)));
       return views.flatMap((view) => view ? [view.session] : []);
     },
-    start: (input) => start(db, input.initialRequest, now, createId),
+    start: (input) => startCategoryInterviewSession(db, input, now, createId),
     get: (sessionId) => loadCategoryInterviewView(db, sessionId),
     getByTaskId: (taskId) => loadCategoryInterviewViewByTaskId(db, taskId),
+    updateModelSelection: (input) => updateCategoryInterviewModelSelection(db, input, now),
     remove: (sessionId) => removeStandaloneInterviewSession(db, sessionId),
     runTurn: (input) => runTurn(db, runtime, input, now, createId),
     confirmTaskDraft: (input) => confirmTaskDraft(db, runtime, input, now, createId),
   };
-}
-
-async function start(
-  db: WorkbenchDb,
-  initialRequest: string,
-  now: () => Date,
-  createId: (kind: string) => string,
-) {
-  const timestamp = now().toISOString();
-  const session = interviewSessionSchema.parse({
-    id: createId("interview-session"), initialRequest, phase: "active", turnState: "idle",
-    revision: 1, createdAt: timestamp, updatedAt: timestamp,
-  });
-  await db.insert(categoryInterviewSessions).values(session);
-  return categoryInterviewViewSchema.parse({
-    session, messages: [], decisions: [], unresolvedItems: [], taskDrafts: [],
-  });
 }
 
 async function* runTurn(

@@ -24,7 +24,6 @@ function completeContent(): CaptureTaskContent {
     marketScope: "中国大陆主流消费品牌当前在售型号",
     generalTopics: ["在售商品"],
     categoryTopics: ["画质配置"],
-    jd: { applicable: true, disposition: "pending", scope: [], rationale: "历史适用性待统一排除" },
     sourceCandidates: [],
     excludedContent: [], unresolvedItems: [], decisionIds: [],
   };

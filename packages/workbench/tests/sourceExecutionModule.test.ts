@@ -8,12 +8,63 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createSourceExecutionModule,
-  type CrawlPlanningModule,
+  type CrawlPlanExecutionReader,
   type SourceDatasetModule,
   type SourceProvider,
 } from "../src";
 
 describe("来源执行准备", () => {
+  it("Graphile 重放同一 Start command 时不创建第二个批次或重复来源访问", async () => {
+    const planning = { requireExecutablePlan: vi.fn() } as unknown as CrawlPlanExecutionReader;
+    const datasets = { getBatchByCommandId: vi.fn(async () => ({ id: "batch-existing" }))
+      } as unknown as SourceDatasetModule;
+    const collect = vi.fn();
+    const existingProvider = provider("public.web-resource", async () => undefined, collect);
+    const execution = createSourceExecutionModule(planning, datasets,
+      new Map([[existingProvider.key, existingProvider]]));
+
+    const events = [];
+    for await (const event of execution.start({ taskId: "task-1", planId: "plan-1",
+      expectedTaskRevision: 1, expectedPlanVersion: 1, commandId: "source-command-1" })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([]);
+    expect(planning.requireExecutablePlan).not.toHaveBeenCalled();
+    expect(collect).not.toHaveBeenCalled();
+  });
+
+  it("批次环境预检失败时 Start 前返回错误且不创建 Batch 或 Run", async () => {
+    const source = executableSource("brand", "public.web-resource");
+    const plan = { id: "plan-1", taskId: "task-1", taskRevision: 2, version: 3,
+      status: "confirmed", content: { executionChecklistVersion: 3, sources: [source] } } as unknown as CrawlPlan;
+    const planning = { requireExecutablePlan: vi.fn(async () => plan) } as unknown as CrawlPlanExecutionReader;
+    const startBatch = vi.fn(async () => { throw new Error("不应创建批次"); });
+    const startRun = vi.fn();
+    const datasets = { startBatch, startRun } as unknown as SourceDatasetModule;
+    const environmentPreflight = vi.fn(async () => {
+      throw new Error("检测到 Fake-IP DNS，但没有配置受信任 HTTPS 代理");
+    });
+    const publicProvider = {
+      ...provider("public.web-resource", async () => undefined, vi.fn()),
+      preflightEnvironment: environmentPreflight,
+    } as unknown as SourceProvider;
+    const execution = createSourceExecutionModule(planning, datasets,
+      new Map([[publicProvider.key, publicProvider]]));
+    const input = { taskId: "task-1", planId: "plan-1",
+      expectedTaskRevision: 2, expectedPlanVersion: 3 };
+
+    await expect(execution.prepare(input)).rejects.toThrow("没有配置受信任 HTTPS 代理");
+    const consumeStart = async () => {
+      for await (const _event of execution.start(input)) { /* consume */ }
+    };
+    await expect(consumeStart()).rejects.toThrow("没有配置受信任 HTTPS 代理");
+
+    expect(environmentPreflight).toHaveBeenCalledTimes(2);
+    expect(startBatch).not.toHaveBeenCalled();
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
   it("只检查已确认计划的运行环境，不创建 Source Run", async () => {
     const source = {
       key: "brand.official",
@@ -28,7 +79,7 @@ describe("来源执行准备", () => {
     const planning = {
       get: vi.fn(async () => ({ taskId: "task-1", taskRevision: 2, runs: [], plans: [plan] })),
       requireExecutablePlan: vi.fn(async () => plan),
-    } as unknown as CrawlPlanningModule;
+    } as unknown as CrawlPlanExecutionReader;
     const startRun = vi.fn();
     const datasets = { startRun } as unknown as SourceDatasetModule;
     const expected: SourcePreparation = { status: "action_required", action: "login_required",
@@ -57,7 +108,7 @@ describe("来源执行准备", () => {
     const planning = {
       get: vi.fn(async () => ({ taskId: "task-1", taskRevision: 2, runs: [], plans: [plan] })),
       requireExecutablePlan: vi.fn(async () => plan),
-    } as unknown as CrawlPlanningModule;
+    } as unknown as CrawlPlanExecutionReader;
     const runs = new Map<string, SourceCollectionRun>();
     const startRun = vi.fn(async (input: Parameters<SourceDatasetModule["startRun"]>[0]) => {
       const run = {
@@ -73,6 +124,7 @@ describe("来源执行准备", () => {
     const finishRun = vi.fn(async (input: Parameters<SourceDatasetModule["finishRun"]>[0]) => {
       const run = runs.get(input.runId)!;
       const finished = { ...run, status: input.status, terminationReason: input.terminationReason,
+        failureCategory: input.failureCategory,
         finishedAt: "2026-08-21T00:00:01.000Z" } satisfies SourceCollectionRun;
       runs.set(run.id, finished);
       return finished;
@@ -129,7 +181,11 @@ describe("来源执行准备", () => {
     ]);
     expect(events).toContainEqual(expect.objectContaining({ type: "run.failed",
       run: expect.objectContaining({ sourceCollectionPlanSourceKey: "restricted",
-        terminationReason: expect.stringContaining("access_denied") }) }));
+        terminationReason: expect.stringContaining("access_denied"),
+        failureCategory: "source_restricted" }) }));
+    expect(finishRun).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "run-restricted", status: "failed", failureCategory: "source_restricted",
+    }));
     expect(restrictedCollect).not.toHaveBeenCalled();
     expect(publicCollect).toHaveBeenCalledOnce();
   });
@@ -141,7 +197,7 @@ describe("来源执行准备", () => {
     const planning = {
       get: vi.fn(async () => ({ taskId: "task-1", taskRevision: 2, runs: [], plans: [oldPlan] })),
       requireExecutablePlan: vi.fn(async () => { throw new Error("历史计划缺少 version 3 Research Audit"); }),
-    } as unknown as CrawlPlanningModule;
+    } as unknown as CrawlPlanExecutionReader;
     const datasets = { startBatch: vi.fn(), startRun: vi.fn() } as unknown as SourceDatasetModule;
     const provider = { key: "public.web-resource", version: "1.0.0", validate: vi.fn(),
       preflight: vi.fn(), collect: vi.fn() } as unknown as SourceProvider;
@@ -162,7 +218,7 @@ describe("来源执行准备", () => {
     const plan = { id: "plan-1", taskId: "task-1", taskRevision: 2, version: 3,
       status: "confirmed", content: { executionChecklistVersion: 3, sources: [source] } } as unknown as CrawlPlan;
     const planning = { get: vi.fn(async () => ({ taskId: "task-1", taskRevision: 2,
-      runs: [], plans: [plan] })), requireExecutablePlan: vi.fn(async () => plan) } as unknown as CrawlPlanningModule;
+      runs: [], plans: [plan] })), requireExecutablePlan: vi.fn(async () => plan) } as unknown as CrawlPlanExecutionReader;
     const previous = { id: "run-old", taskId: "task-1", executionBatchId: "batch-1",
       sourceCollectionPlanId: "plan-1",
       sourceCollectionPlanSourceKey: "brand", sourceCollectionPlanVersion: 3,

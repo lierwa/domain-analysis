@@ -1,29 +1,22 @@
 import {
   captureTaskSchema,
   categoryInterviewViewSchema,
-  confirmCrawlPlanSchema,
-  crawlPlanningEventSchema,
-  crawlPlanningRunRequestSchema,
-  crawlPlanningViewSchema,
   interviewTimelineEventSchema,
   interviewTurnRequestSchema,
   sourceDatasetTaskViewSchema,
-  sourceExecutionAcceptanceSchema,
+  sourceDatasetRecordPageSchema,
   sourceDatasetRunViewSchema,
-  sourcePreparationSchema,
-  startCrawlPlanSchema,
+  taskModelSelectionSchema,
   type CaptureTask,
   type CategoryInterviewView,
-  type CrawlPlanningEvent,
-  type CrawlPlanningRunRequest,
-  type CrawlPlanningView,
   type InterviewSession,
   type InterviewTimelineEvent,
   type InterviewTurnRequest,
   type SourceDatasetTaskView,
+  type SourceDatasetRecordGroupKey,
+  type SourceDatasetRecordPage,
   type SourceDatasetRunView,
-  type SourcePreparation,
-  type SourceExecutionAcceptance,
+  type TaskModelSelection,
 } from "@domain-analysis/shared";
 import { createParser } from "eventsource-parser";
 
@@ -31,11 +24,32 @@ import { apiErrorFromResponse, request } from "./apiClient";
 
 export { ApiError } from "./apiClient";
 
-export async function startCategoryInterview(initialRequest: string): Promise<CategoryInterviewView> {
+export async function startCategoryInterview(
+  initialRequest: string,
+  modelSelection?: TaskModelSelection,
+): Promise<CategoryInterviewView> {
   const data = await request<{ item: unknown }>("/api/category-interviews", {
     method: "POST",
-    body: JSON.stringify({ initialRequest }),
+    body: JSON.stringify({ initialRequest, modelSelection }),
   });
+  return categoryInterviewViewSchema.parse(data.item);
+}
+
+export async function updateInterviewModelSelection(
+  sessionId: string,
+  expectedRevision: number,
+  modelSelection: TaskModelSelection,
+): Promise<CategoryInterviewView> {
+  const data = await request<{ item: unknown }>(
+    `/api/category-interviews/${encodeURIComponent(sessionId)}/model-selection`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        expectedRevision,
+        modelSelection: taskModelSelectionSchema.parse(modelSelection),
+      }),
+    },
+  );
   return categoryInterviewViewSchema.parse(data.item);
 }
 
@@ -115,87 +129,27 @@ export async function deleteCaptureTask(taskId: string) {
   await request<void>(`/api/capture-tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
 }
 
-export async function fetchCrawlPlanning(taskId: string): Promise<CrawlPlanningView> {
-  const data = await request<{ item: unknown }>(
-    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-planning`,
-  );
-  return crawlPlanningViewSchema.parse(data.item);
-}
-
-export async function streamCrawlPlanningRun(
-  taskId: string,
-  input: CrawlPlanningRunRequest,
-  onEvent: (event: CrawlPlanningEvent) => void,
-  signal?: AbortSignal,
-) {
-  const response = await fetch(`/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-planning/runs`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify(crawlPlanningRunRequestSchema.parse(input)),
-    signal,
-  });
-  if (!response.ok || !response.body) throw await apiErrorFromResponse(response);
-  const parser = createParser({
-    onEvent: (event) => onEvent(crawlPlanningEventSchema.parse(JSON.parse(event.data))),
-  });
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    parser.feed(decoder.decode(value, { stream: true }));
-  }
-  parser.feed(decoder.decode());
-}
-
-export async function confirmCrawlPlan(
-  taskId: string,
-  planId: string,
-  expectedTaskRevision: number,
-) {
-  const body = confirmCrawlPlanSchema.parse({ expectedTaskRevision });
-  const data = await request<{ item: unknown }>(
-    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-plans/${encodeURIComponent(planId)}/confirm`,
-    { method: "POST", body: JSON.stringify(body) },
-  );
-  return crawlPlanningViewSchema.parse(data.item);
-}
-
-export async function prepareCrawlPlan(
-  taskId: string,
-  planId: string,
-  input: { expectedTaskRevision: number; expectedPlanVersion: number },
-): Promise<SourcePreparation> {
-  const data = await request<{ item: unknown }>(
-    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-plans/${encodeURIComponent(planId)}/prepare`,
-    { method: "POST", body: JSON.stringify(startCrawlPlanSchema.parse(input)) },
-  );
-  return sourcePreparationSchema.parse(data.item);
-}
-
-export async function startSourceBatch(taskId: string, planId: string,
-  input: { expectedTaskRevision: number; expectedPlanVersion: number }): Promise<SourceExecutionAcceptance> {
-  const data = await request<{ item: unknown }>(
-    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-plans/${encodeURIComponent(planId)}/start`,
-    { method: "POST", body: JSON.stringify(startCrawlPlanSchema.parse(input)) },
-  );
-  return sourceExecutionAcceptanceSchema.parse(data.item);
-}
-
-export async function resumeSourceRun(taskId: string, runId: string,
-  input: { expectedTaskRevision: number; expectedPlanVersion: number }): Promise<SourceExecutionAcceptance> {
-  const data = await request<{ item: unknown }>(
-    `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs/${encodeURIComponent(runId)}/resume`,
-    { method: "POST", body: JSON.stringify(startCrawlPlanSchema.parse(input)) },
-  );
-  return sourceExecutionAcceptanceSchema.parse(data.item);
-}
-
 export async function fetchSourceCollectionRuns(taskId: string): Promise<SourceDatasetTaskView> {
   const data = await request<{ item: unknown }>(
     `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs`,
   );
   return sourceDatasetTaskViewSchema.parse(data.item);
+}
+
+export async function fetchSourceDatasetRecords(taskId: string, input: {
+  sourceKey: string;
+  targetKey: string;
+  groupKey: SourceDatasetRecordGroupKey;
+  cursor?: string;
+  limit?: number;
+}): Promise<SourceDatasetRecordPage> {
+  const query = new URLSearchParams({ sourceKey: input.sourceKey, targetKey: input.targetKey,
+    groupKey: input.groupKey, limit: String(input.limit ?? 30) });
+  if (input.cursor) query.set("cursor", input.cursor);
+  const data = await request<{ item: unknown }>(
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/source-map/records?${query.toString()}`,
+  );
+  return sourceDatasetRecordPageSchema.parse(data.item);
 }
 
 export async function fetchSourceCollectionRun(taskId: string, runId: string): Promise<SourceDatasetRunView> {

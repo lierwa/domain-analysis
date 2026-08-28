@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { CrawlPlanSource, SourceProviderEvent } from "@domain-analysis/shared";
+import type { CrawlPlanSource, SourceProviderEvent, SourceSnapshotLineage } from "@domain-analysis/shared";
 import * as cheerio from "cheerio";
 import { decodeBuffer, getEncoding } from "encoding-sniffer";
 
@@ -17,11 +17,12 @@ export function captureEvent(
   response: RawPublicResponse,
   observedAt: Date,
   contentAssessment?: ContentAssessment,
+  lineage?: SourceSnapshotLineage,
 ): Extract<SourceProviderEvent, { type: "capture" }> {
   const finalUrl = new URL(response.finalUrl ?? url.href);
   const state = classifyStatus(response.statusCode);
   if (state !== "accessible") {
-    return inaccessible(targetKey, url, observedAt, state, `HTTP ${response.statusCode}`, finalUrl);
+    return inaccessible(targetKey, url, observedAt, state, `HTTP ${response.statusCode}`, finalUrl, lineage);
   }
   const mediaType = response.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase()
     || "application/octet-stream";
@@ -36,14 +37,14 @@ export function captureEvent(
     const { text, charset } = decodeInlineText(response, mediaType);
     const hash = createHash("sha256").update(text).digest("hex");
     const common = snapshotCommon(source, targetKey, url, finalUrl,
-      response, mediaType, observedAt, hash, contentAssessment);
+      response, mediaType, observedAt, contentAssessment, lineage);
     return { type: "capture", targetKey, assets: [], snapshot: { ...common,
       payload: { kind: "inline_text", mediaType, charset, text,
         bytes: Buffer.byteLength(text), contentHash: hash } } };
   }
   const hash = createHash("sha256").update(response.body).digest("hex");
   const common = snapshotCommon(source, targetKey, url, finalUrl,
-    response, mediaType, observedAt, hash, contentAssessment);
+    response, mediaType, observedAt, contentAssessment, lineage);
   const filename = resourceFilename(finalUrl, response.headers["content-disposition"], mediaType);
   const assetKey = `${targetKey}-raw`;
   return { type: "capture", targetKey, snapshot: { ...common,
@@ -55,9 +56,10 @@ export function captureEvent(
 
 export function inaccessible(targetKey: string, url: URL, observedAt: Date,
   state: "login_required" | "access_denied" | "not_found" | "source_error", error: string,
-  finalUrl?: URL) {
+  finalUrl?: URL, lineage?: SourceSnapshotLineage) {
   return { type: "capture" as const, targetKey, assets: [], snapshot: {
-    idempotencyKey: `${targetKey}-${state}`,
+    idempotencyKey: snapshotIdempotencyKey(targetKey, url, lineage),
+    ...(lineage ? { lineage } : {}),
     object: { sourceIdentity: url.origin, kind: "web_resource", externalKey: url.href },
     observation: { requestedUrl: url.href, ...(finalUrl ? { finalUrl: finalUrl.href } : {}),
       observedAt: observedAt.toISOString(), state, responseHeaders: {}, error },
@@ -253,15 +255,23 @@ function snapshotCommon(
   response: RawPublicResponse,
   mediaType: string,
   observedAt: Date,
-  hash: string,
   contentAssessment?: ContentAssessment,
+  lineage?: SourceSnapshotLineage,
 ) {
-  return { idempotencyKey: `${targetKey}-${hash}`,
+  return { idempotencyKey: snapshotIdempotencyKey(targetKey, requestedUrl, lineage),
+    ...(lineage ? { lineage } : {}),
     object: { sourceIdentity: source.key, kind: objectKind(mediaType), externalKey: requestedUrl.href },
     observation: { requestedUrl: requestedUrl.href, finalUrl: finalUrl.href, observedAt: observedAt.toISOString(),
       state: "accessible" as const, httpStatus: response.statusCode,
       responseHeaders: safeResponseHeaders(response.headers),
       ...(contentAssessment ? { contentAssessment } : {}) } };
+}
+
+function snapshotIdempotencyKey(targetKey: string, requestedUrl: URL, lineage?: SourceSnapshotLineage) {
+  // WHY：幂等键标识计划中的稳定抓取工作，而不是响应字节。不同 URL 可能合法返回相同模板；
+  // 同一工作重放时即使源站内容变化也必须保持同键，交给 Source Dataset 检出冲突。
+  const workIdentity = `${lineage?.workKey ?? "url"}\0${requestedUrl.href}`;
+  return `${targetKey}-${createHash("sha256").update(workIdentity).digest("hex")}`;
 }
 
 function classifyStatus(status: number) {

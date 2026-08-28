@@ -16,38 +16,43 @@ import {
   sourceSnapshots,
 } from "@domain-analysis/db";
 import {
-  rawSourceObservationSchema,
-  rawSourcePayloadSchema,
-  sourceAssetSchema,
-  sourceCollectionBatchSchema,
-  sourceCollectionRunSchema,
-  sourceCollectionTargetRunSchema,
   sourceDatasetRunViewSchema,
-  sourceDatasetTaskViewSchema,
   sourceObjectSchema,
   sourceProviderAssetSchema,
   sourceProviderResourceReferenceSchema,
-  sourceResourceReferenceSchema,
   sourceSnapshotCommitSchema,
-  sourceSnapshotSchema,
   type SourceAccessPolicy,
   type SourceAsset,
   type SourceCollectionBatch,
   type SourceCollectionRun,
   type SourceCollectionTargetRun,
+  type SourceExecutionFailureCategory,
   type SourceDatasetRunView,
+  type SourceDatasetRecordGroupKey,
+  type SourceDatasetRecordPage,
   type SourceDatasetTaskView,
   type SourceProviderAsset,
   type SourceProviderResourceReference,
   type SourceRequestAdmissionPort,
   type SourceSnapshotCommit,
 } from "@domain-analysis/shared";
-import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 
 import { contentHash } from "./contentHash";
 import { createCacacheSourceAssetStore, type SourceAssetStore } from "./sourceAssetStore";
 import { serializeSourceDataset } from "./sourceDatasetExport";
 import { SourceDatasetError } from "./sourceDatasetError";
+import {
+  normalizeAsset,
+  normalizeBatch,
+  normalizeResourceReference,
+  normalizeRun,
+  normalizeSnapshot,
+  normalizeTarget,
+  normalizeTimestamp,
+  sourceSnapshotOutcome,
+} from "./sourceDatasetNormalization";
+import { loadSourceDatasetRecordPage, loadSourceDatasetTaskView } from "./sourceDatasetTaskView";
 import { acquireSourceBatchLease, recoverInterruptedSourceBatches } from "./sourceExecutionRecovery";
 import {
   acquireSourceRunLease,
@@ -64,15 +69,23 @@ type WorkbenchTransaction = Parameters<Parameters<WorkbenchDb["transaction"]>[0]
 
 export interface SourceDatasetModule extends SourceRequestAdmissionPort {
   listTask(taskId: string): Promise<SourceDatasetTaskView>;
+  listTaskRecords(input: { taskId: string; sourceKey: string; targetKey: string;
+    groupKey: SourceDatasetRecordGroupKey; cursor?: string; limit: number }): Promise<SourceDatasetRecordPage>;
   getRun(runId: string): Promise<SourceDatasetRunView | null>;
   exportRun(input: { runId: string; format: "jsonl" | "csv" }): AsyncIterable<string>;
   openAsset(input: { runId: string; assetId: string }): Promise<{ asset: SourceAsset; content: Readable }>;
   acquireRunLease(runId: string): Promise<{ release(): Promise<void> }>;
   acquireBatchLease(batchId: string): Promise<{ release(): Promise<void> }>;
   recoverInterruptedBatches(input?: { taskId?: string }): Promise<string[]>;
+  listPendingRecoveryBatches(): Promise<SourceCollectionBatch[]>;
+  setBatchRecoveryState(batchId: string, state: "pending" | "running" | "completed"):
+    Promise<SourceCollectionBatch>;
+  getBatch(batchId: string): Promise<SourceCollectionBatch | null>;
+  getBatchByCommandId(commandId: string): Promise<SourceCollectionBatch | null>;
+  listBatchRuns(batchId: string): Promise<SourceCollectionRun[]>;
   prepareRunForResume(runId: string): Promise<SourceCollectionRun>;
   startBatch(input: { taskId: string; planId: string; planVersion: number; taskRevision: number;
-    plannedSourceCount: number }): Promise<SourceCollectionBatch>;
+    plannedSourceCount: number; commandId?: string }): Promise<SourceCollectionBatch>;
   finishBatch(input: { batchId: string; status: "completed" | "partial" | "failed" | "stopped";
     terminationReason?: string }): Promise<SourceCollectionBatch>;
   startRun(input: { taskId: string; planId: string; planVersion: number; sourceKey: string;
@@ -84,7 +97,7 @@ export interface SourceDatasetModule extends SourceRequestAdmissionPort {
   finishTarget(input: { runId: string; targetKey: string; status: "completed" | "failed" | "stopped";
     terminationReason?: string }): Promise<SourceCollectionTargetRun>;
   finishRun(input: { runId: string; status: "completed" | "failed" | "stopped";
-    terminationReason?: string }): Promise<SourceCollectionRun>;
+    terminationReason?: string; failureCategory?: SourceExecutionFailureCategory }): Promise<SourceCollectionRun>;
 }
 
 export function createSourceDatasetModule(
@@ -97,20 +110,33 @@ export function createSourceDatasetModule(
   const admission = createSourceRequestAdmission(db, options.now);
   return {
     ...admission,
-    listTask: async (taskId) => sourceDatasetTaskViewSchema.parse({
-      batches: (await db.select().from(sourceCollectionBatches)
-        .where(eq(sourceCollectionBatches.taskId, taskId)).orderBy(desc(sourceCollectionBatches.startedAt)))
-        .map(normalizeBatch),
-      runs: (await db.select().from(sourceCollectionRuns)
-        .where(eq(sourceCollectionRuns.taskId, taskId)).orderBy(desc(sourceCollectionRuns.startedAt)))
-        .map(normalizeRun),
-    }),
+    listTask: (taskId) => loadSourceDatasetTaskView(db, taskId),
+    listTaskRecords: (input) => loadSourceDatasetRecordPage(db, input),
     getRun: (runId) => loadRun(db, runId),
     exportRun: (input) => exportRun(db, input),
     openAsset: (input) => openAsset(db, store, input),
     acquireRunLease: (runId) => acquireSourceRunLease(db, runId),
     acquireBatchLease: (batchId) => acquireSourceBatchLease(db, batchId),
     recoverInterruptedBatches: (input) => recoverInterruptedSourceBatches(db, input?.taskId),
+    listPendingRecoveryBatches: async () => (await db.select().from(sourceCollectionBatches)
+      .where(eq(sourceCollectionBatches.recoveryState, "pending"))
+      .orderBy(asc(sourceCollectionBatches.startedAt))).map(normalizeBatch),
+    setBatchRecoveryState: (batchId, state) => setBatchRecoveryState(db, batchId, state),
+    getBatch: async (batchId) => {
+      const row = await db.query.sourceCollectionBatches.findFirst({
+        where: eq(sourceCollectionBatches.id, batchId),
+      });
+      return row ? normalizeBatch(row) : null;
+    },
+    getBatchByCommandId: async (commandId) => {
+      const row = await db.query.sourceCollectionBatches.findFirst({
+        where: eq(sourceCollectionBatches.commandId, commandId),
+      });
+      return row ? normalizeBatch(row) : null;
+    },
+    listBatchRuns: async (batchId) => (await db.select().from(sourceCollectionRuns)
+      .where(eq(sourceCollectionRuns.executionBatchId, batchId))
+      .orderBy(asc(sourceCollectionRuns.startedAt))).map(normalizeRun),
     prepareRunForResume: (runId) => prepareSourceRunForResume(db, runId),
     startBatch: (input) => startBatch(db, input),
     finishBatch: (input) => finishBatch(db, input),
@@ -124,11 +150,23 @@ export function createSourceDatasetModule(
 
 async function startBatch(db: WorkbenchDb, input: Parameters<SourceDatasetModule["startBatch"]>[0]) {
   const row = { id: `source-batch-${randomUUID()}`, taskId: input.taskId,
+    commandId: input.commandId ?? null,
     sourceCollectionPlanId: input.planId, sourceCollectionPlanVersion: input.planVersion,
-    taskRevision: input.taskRevision, status: "running" as const,
+    taskRevision: input.taskRevision, status: "running" as const, recoveryState: "none" as const,
     plannedSourceCount: input.plannedSourceCount, startedAt: new Date().toISOString(),
     finishedAt: null, terminationReason: null };
   await db.insert(sourceCollectionBatches).values(row);
+  return normalizeBatch(row);
+}
+
+async function setBatchRecoveryState(
+  db: WorkbenchDb,
+  batchId: string,
+  state: "pending" | "running" | "completed",
+) {
+  const [row] = await db.update(sourceCollectionBatches).set({ recoveryState: state })
+    .where(eq(sourceCollectionBatches.id, batchId)).returning();
+  if (!row) throw new SourceDatasetError("batch_not_found", `来源批次不存在：${batchId}`);
   return normalizeBatch(row);
 }
 
@@ -246,7 +284,8 @@ async function finishRun(db: WorkbenchDb, input: Parameters<SourceDatasetModule[
     if (incomplete.length > 0) throw new SourceDatasetError("invalid_state", "只有全部 target 完成的来源运行才能 completed");
   }
   await db.update(sourceCollectionRuns).set({ status: input.status, finishedAt: new Date().toISOString(),
-    terminationReason: input.terminationReason }).where(eq(sourceCollectionRuns.id, input.runId));
+    terminationReason: input.terminationReason,
+    failureCategory: input.failureCategory }).where(eq(sourceCollectionRuns.id, input.runId));
   const row = await db.query.sourceCollectionRuns.findFirst({ where: eq(sourceCollectionRuns.id, input.runId) });
   if (!row) throw new SourceDatasetError("run_not_found", `来源运行不存在：${input.runId}`);
   return normalizeRun(row);
@@ -273,12 +312,21 @@ async function commitSnapshot(db: WorkbenchDb, store: SourceAssetStore, raw: Sna
     if (!run || run.status !== "running" || !target || target.status !== "running") {
       throw new SourceDatasetError("invalid_state", "来源运行或 target 不存在，或已经结束");
     }
+    if (input.lineage) {
+      const work = await transaction.query.sourceCaptureWorkItems.findFirst({ where: and(
+        eq(sourceCaptureWorkItems.runId, input.runId),
+        eq(sourceCaptureWorkItems.targetKey, input.targetKey),
+        eq(sourceCaptureWorkItems.workKey, input.lineage.workKey),
+      ) });
+      if (!work) throw new SourceDatasetError("invalid_state", "Snapshot 血缘引用了不存在的捕获工作");
+    }
     const objectId = await upsertObject(transaction, run.taskId, input);
-    const hash = contentHash({ observation: input.observation, payload: input.payload, resourceReferences });
+    const hash = contentHash({ observation: input.observation, payload: input.payload,
+      resourceReferences, lineage: input.lineage });
     const snapshotId = `source-snapshot-${randomUUID()}`;
     const inserted = await transaction.insert(sourceSnapshots).values({ id: snapshotId,
       runId: run.id, targetKey: input.targetKey, objectId, idempotencyKey: input.idempotencyKey,
-      observation: input.observation, payload: input.payload, contentHash: hash })
+      lineage: input.lineage, observation: input.observation, payload: input.payload, contentHash: hash })
       .onConflictDoNothing().returning({ id: sourceSnapshots.id });
     if (inserted.length === 0) {
       await assertIdempotentReplay(transaction, input.runId, input.idempotencyKey, hash);
@@ -296,9 +344,7 @@ async function commitSnapshot(db: WorkbenchDb, store: SourceAssetStore, raw: Sna
         ...reference,
       })));
     }
-    const counterOutcome = input.observation.state !== "accessible"
-      || input.observation.contentAssessment?.status === "rejected" ? "failed"
-      : input.observation.contentAssessment?.status === "supporting" ? "supporting" : "accepted";
+    const counterOutcome = sourceSnapshotOutcome(input.observation);
     await incrementCounters(transaction, run.id, target.id, counterOutcome, prepared.length);
   });
   return (await loadRun(db, input.runId))!;
@@ -408,67 +454,4 @@ async function* exportRun(db: WorkbenchDb, input: { runId: string; format: "json
   const view = await loadRun(db, input.runId);
   if (!view) throw new SourceDatasetError("run_not_found", `来源运行不存在：${input.runId}`);
   yield* serializeSourceDataset(view, input.format);
-}
-
-function normalizeRun(row: typeof sourceCollectionRuns.$inferSelect) {
-  return sourceCollectionRunSchema.parse({ ...row,
-    executionBatchId: row.executionBatchId ?? undefined,
-    resumedFromRunId: row.resumedFromRunId ?? undefined,
-    sourceCollectionPlanId: row.sourceCollectionPlanId ?? undefined,
-    sourceCollectionPlanSourceKey: row.sourceCollectionPlanSourceKey ?? undefined,
-    sourceCollectionPlanVersion: row.sourceCollectionPlanVersion ?? undefined,
-    providerVersion: row.providerVersion ?? undefined, requestBudget: row.requestBudget ?? undefined,
-    startedAt: normalizeTimestamp(row.startedAt),
-    finishedAt: row.finishedAt ? normalizeTimestamp(row.finishedAt) : undefined,
-    terminationReason: row.terminationReason ?? undefined });
-}
-
-function normalizeBatch(row: typeof sourceCollectionBatches.$inferSelect) {
-  return sourceCollectionBatchSchema.parse({ ...row,
-    startedAt: normalizeTimestamp(row.startedAt),
-    finishedAt: row.finishedAt ? normalizeTimestamp(row.finishedAt) : undefined,
-    terminationReason: row.terminationReason ?? undefined });
-}
-
-function normalizeTarget(row: typeof sourceCollectionTargetRuns.$inferSelect) {
-  return sourceCollectionTargetRunSchema.parse({ ...row,
-    startedAt: row.startedAt ? normalizeTimestamp(row.startedAt) : undefined,
-    finishedAt: row.finishedAt ? normalizeTimestamp(row.finishedAt) : undefined,
-    terminationReason: row.terminationReason ?? undefined });
-}
-
-function normalizeSnapshot(row: typeof sourceSnapshots.$inferSelect) {
-  const rawObservation = row.observation as Record<string, unknown>;
-  const legacyHttp = rawObservation.httpValidation as { status?: number } | undefined;
-  const observation = rawSourceObservationSchema.parse({ requestedUrl: rawObservation.requestedUrl,
-    finalUrl: rawObservation.finalUrl ?? undefined, observedAt: rawObservation.observedAt,
-    state: normalizeState(rawObservation.state), httpStatus: rawObservation.httpStatus ?? legacyHttp?.status,
-    responseHeaders: rawObservation.responseHeaders ?? {},
-    contentAssessment: rawObservation.contentAssessment ?? undefined,
-    error: rawObservation.error ?? rawObservation.failureDetail ?? undefined });
-  const parsedPayload = rawSourcePayloadSchema.safeParse(row.payload);
-  return sourceSnapshotSchema.parse({ id: row.id, runId: row.runId, targetKey: row.targetKey ?? undefined,
-    objectId: row.objectId, idempotencyKey: row.idempotencyKey, observation,
-    payload: row.payload == null ? undefined : parsedPayload.success ? parsedPayload.data
-      : { kind: "legacy_structured_json", value: row.payload }, contentHash: row.contentHash,
-    createdAt: normalizeTimestamp(row.createdAt) });
-}
-
-function normalizeAsset(row: typeof sourceAssets.$inferSelect) {
-  return sourceAssetSchema.parse({ ...row, createdAt: normalizeTimestamp(row.createdAt) });
-}
-
-function normalizeResourceReference(row: typeof sourceResourceReferences.$inferSelect) {
-  return sourceResourceReferenceSchema.parse({ ...row,
-    observedValue: row.observedValue ?? undefined, locator: row.locator ?? undefined,
-    createdAt: normalizeTimestamp(row.createdAt) });
-}
-
-function normalizeState(value: unknown) {
-  const states = ["accessible", "login_required", "verification_required", "access_denied", "not_found", "source_error"] as const;
-  return states.find((state) => state === String(value)) ?? "source_error";
-}
-
-function normalizeTimestamp(value: string | Date) {
-  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }

@@ -1,5 +1,4 @@
 import {
-  applyDefaultJdSourcePolicy,
   captureTaskContentSchema,
   interviewDecisionSchema,
   type CaptureTaskMaterialization,
@@ -79,7 +78,7 @@ export function materializeCaptureTaskContent(
   materialization: CaptureTaskMaterialization,
   timestamp: string,
 ) {
-  const content = applyProfessionalShoppingGuideDefaults(applyDefaultJdSourcePolicy(captureTaskContentSchema.parse({
+  const content = applyProfessionalShoppingGuideDefaults(captureTaskContentSchema.parse({
     ...materialization,
     unresolvedItems: view.unresolvedItems.filter((item) => item.status === "open").map((item) => ({
       key: item.key,
@@ -92,7 +91,7 @@ export function materializeCaptureTaskContent(
       // WHY：只有确认后的正式结构化阶段才创建候选来源，观察时间仍只能由 Workbench 盖章。
       observedAt: timestamp,
     })),
-  })));
+  }));
   return content;
 }
 

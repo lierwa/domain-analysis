@@ -5,19 +5,17 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "dev": "node --env-file=../../.env.example --import=tsx --watch src/index.ts",
-    "start": "node --env-file=../../.env.example --import=tsx src/index.ts",
+    "dev": "node --env-file=../../.env.example --env-file-if-exists=../../.env.local --import=tsx --watch src/index.ts",
+    "start": "node --env-file=../../.env.example --env-file-if-exists=../../.env.local --import=tsx src/index.ts",
     "build": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@domain-analysis/shared": "0.1.0",
     "@domain-analysis/workbench": "0.1.0",
-    "@domain-analysis/worker": "0.1.0",
     "@fastify/cors": "^9.0.1",
     "fastify": "^4.28.1",
     "fastify-sse-v2": "4.2.2",
-    "graphile-worker": "^0.17.3",
     "zod": "^3.23.8"
   }
 }

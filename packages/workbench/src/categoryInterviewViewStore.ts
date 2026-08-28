@@ -89,7 +89,12 @@ function normalizeSession(
   // WHY：历史 task_ready 只能在草稿仍可确认时保留；真实 active/running/failed 状态不能被旧草稿反向升级。
   const phase = rawPhase === "confirmed" ? "confirmed"
     : rawPhase === "task_ready" && hasConfirmableDraft ? "task_ready" : "active";
-  return interviewSessionSchema.parse({ ...normalizeTimestamps(row), phase });
+  const { modelId, reasoningEffort, ...session } = row;
+  return interviewSessionSchema.parse({
+    ...normalizeTimestamps(session),
+    modelSelection: { modelId, reasoningEffort },
+    phase,
+  });
 }
 
 function normalizeDecision(row: typeof categoryInterviewDecisions.$inferSelect) {

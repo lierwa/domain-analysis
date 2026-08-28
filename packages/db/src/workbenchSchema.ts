@@ -9,8 +9,10 @@ import type {
   SourceCaptureWorkItem,
   SourceCollectionTargetRun,
   SourceCollectionPlanContent,
+  SourceExecutionFailureCategory,
   SourceRequestAttempt,
   SourceResourceReference,
+  SourceSnapshotLineage,
 } from "@domain-analysis/shared";
 import { sql } from "drizzle-orm";
 import { boolean, index, integer, jsonb, pgSchema, text, timestamp, uniqueIndex,
@@ -36,6 +38,9 @@ export const captureTasks = workbenchSchema.table("capture_tasks", {
 export const categoryInterviewSessions = workbenchSchema.table("category_interview_sessions", {
   id: text("id").primaryKey(),
   initialRequest: text("initial_request").notNull(),
+  // WHY：已有采访按当前产品默认值回填；新建会话仍显式写入当时选择，避免环境默认变化后历史任务漂移。
+  modelId: text("model_id").notNull().default("gpt-5.6-terra"),
+  reasoningEffort: text("reasoning_effort").notNull().default("medium"),
   phase: text("phase", { enum: ["active", "task_ready", "confirmed"] }).notNull(),
   turnState: text("turn_state", { enum: ["idle", "running", "interrupted", "failed"] }).notNull(),
   revision: integer("revision").notNull().default(1),
@@ -151,16 +156,21 @@ export const sourceCollectionPlans = workbenchSchema.table("source_collection_pl
 
 export const sourceCollectionBatches = workbenchSchema.table("source_collection_batches", {
   id: text("id").primaryKey(),
+  commandId: text("command_id"),
   taskId: text("task_id").notNull().references(() => captureTasks.id),
   sourceCollectionPlanId: text("source_collection_plan_id").notNull().references(() => sourceCollectionPlans.id),
   sourceCollectionPlanVersion: integer("source_collection_plan_version").notNull(),
   taskRevision: integer("task_revision").notNull(),
   status: text("status", { enum: ["running", "completed", "partial", "failed", "stopped"] }).notNull(),
+  recoveryState: text("recovery_state", { enum: ["none", "pending", "running", "completed"] })
+    .notNull().default("none"),
   plannedSourceCount: integer("planned_source_count").notNull(),
   startedAt: timestamp("started_at", { mode: "string", withTimezone: true }).notNull(),
   finishedAt: timestamp("finished_at", { mode: "string", withTimezone: true }),
   terminationReason: text("termination_reason"),
 }, (table) => [
+  uniqueIndex("source_collection_batch_command_uq").on(table.commandId)
+    .where(sql`${table.commandId} is not null`),
   index("source_collection_batch_task_time_idx").on(table.taskId, table.startedAt),
   index("source_collection_batch_plan_idx").on(table.sourceCollectionPlanId, table.sourceCollectionPlanVersion),
 ]);
@@ -186,6 +196,7 @@ export const sourceCollectionRuns = workbenchSchema.table("source_collection_run
   startedAt: timestamp("started_at", { mode: "string", withTimezone: true }).notNull(),
   finishedAt: timestamp("finished_at", { mode: "string", withTimezone: true }),
   terminationReason: text("termination_reason"),
+  failureCategory: text("failure_category").$type<SourceExecutionFailureCategory>(),
 }, (table) => [
   uniqueIndex("source_collection_run_resume_uq").on(table.resumedFromRunId),
   index("source_collection_run_task_time_idx").on(table.taskId, table.startedAt),
@@ -287,6 +298,7 @@ export const sourceSnapshots = workbenchSchema.table("source_snapshots", {
   targetKey: text("target_key"),
   objectId: text("object_id").notNull().references(() => sourceObjects.id),
   idempotencyKey: text("idempotency_key").notNull(),
+  lineage: jsonb("lineage_json").$type<SourceSnapshotLineage>(),
   observation: jsonb("observation_json").$type<RawSourceObservation>().notNull(),
   payload: jsonb("content_json").$type<RawSourcePayload>(),
   contentHash: text("content_hash").notNull(),

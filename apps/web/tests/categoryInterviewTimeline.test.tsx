@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   fetchCategoryInterview: vi.fn(),
   startCategoryInterview: vi.fn(),
   streamCategoryInterviewTurn: vi.fn(),
+  updateInterviewModelSelection: vi.fn(),
 }));
 
 const hooks = vi.hoisted(() => ({
@@ -85,6 +86,10 @@ describe("品类采访组件输入提交", () => {
     const second = thread.props.onNew(message("抓冰箱"));
 
     expect(api.startCategoryInterview).toHaveBeenCalledOnce();
+    expect(api.startCategoryInterview).toHaveBeenCalledWith("抓冰箱", {
+      modelId: "gpt-5.6-terra",
+      reasoningEffort: "medium",
+    });
     start.resolve(view);
     await Promise.all([first, second]);
     expect(api.streamCategoryInterviewTurn).toHaveBeenCalledOnce();
@@ -114,11 +119,11 @@ describe("品类采访组件运行生命周期", () => {
     await vi.advanceTimersByTimeAsync(200);
 
     expect(api.streamCategoryInterviewTurn).toHaveBeenCalledOnce();
-    expect(hooks.setters[3]).not.toHaveBeenCalledWith(false);
+    expect(hooks.setters[6]).not.toHaveBeenCalledWith(false);
     refreshed.resolve(converged);
     await Promise.all([active, blocked]);
-    expect(hooks.setters[3]).toHaveBeenLastCalledWith(false);
-    expect(hooks.setters[5]).toHaveBeenLastCalledWith({
+    expect(hooks.setters[6]).toHaveBeenLastCalledWith(false);
+    expect(hooks.setters[8]).toHaveBeenLastCalledWith({
       trigger: "user_message",
       text: "抓电视机",
       retryMessageId: "user-message-1",
@@ -140,11 +145,11 @@ describe("品类采访组件运行生命周期", () => {
     const blocked = thread.props.onNew(message("刷新完成前不应开始"));
 
     expect(api.streamCategoryInterviewTurn).toHaveBeenCalledOnce();
-    expect(hooks.setters[3]).not.toHaveBeenCalledWith(false);
+    expect(hooks.setters[6]).not.toHaveBeenCalledWith(false);
     refreshed.resolve(converged);
     await Promise.all([active, blocked]);
-    expect(hooks.setters[5]).toHaveBeenLastCalledWith(undefined);
-    expect(hooks.setters[3]).toHaveBeenLastCalledWith(false);
+    expect(hooks.setters[8]).toHaveBeenLastCalledWith(undefined);
+    expect(hooks.setters[6]).toHaveBeenLastCalledWith(false);
   });
 
   it("start 失败也进入统一错误与重试状态", async () => {
@@ -154,14 +159,25 @@ describe("品类采访组件运行生命周期", () => {
 
     await expect(thread.props.onNew(message("抓冰箱"))).resolves.toBeUndefined();
 
-    expect(hooks.setters[4]).toHaveBeenCalledWith("无法创建采访");
-    expect(hooks.setters[5]).toHaveBeenCalledWith({ trigger: "user_message", text: "抓冰箱" });
-    expect(hooks.setters[3]).toHaveBeenLastCalledWith(false);
+    expect(hooks.setters[7]).toHaveBeenCalledWith("无法创建采访");
+    expect(hooks.setters[8]).toHaveBeenCalledWith({ trigger: "user_message", text: "抓冰箱" });
+    expect(hooks.setters[6]).toHaveBeenLastCalledWith(false);
   });
 });
 
 function prepareComponent(view: CategoryInterviewView | undefined) {
-  hooks.values = [view, view?.messages ?? [], false, false, undefined, undefined];
+  hooks.values = [
+    view,
+    view?.messages ?? [],
+    false,
+    view?.session.modelSelection ?? { modelId: "gpt-5.6-terra", reasoningEffort: "medium" },
+    false,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    false,
+  ];
 }
 
 function renderThread() {
@@ -193,6 +209,7 @@ function interviewView({
     session: {
       id: "interview-session-1",
       initialRequest: "抓冰箱",
+      modelSelection: { modelId: "gpt-5.6-terra", reasoningEffort: "medium" },
       phase: "active",
       turnState,
       revision: 1,

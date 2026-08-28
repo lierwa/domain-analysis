@@ -8,6 +8,7 @@ import type {
   SourceProviderEvent,
   SourceRequestAdmissionPort,
 } from "@domain-analysis/shared";
+import { SourceProviderFailure } from "@domain-analysis/shared";
 import { parseSitemap, RobotsTxtFile } from "@crawlee/utils";
 import robotsParser from "robots-parser";
 
@@ -27,10 +28,13 @@ import {
 } from "./publicWebResourceContent";
 import {
   createPublicResourceTransport,
+  preflightPublicResourceEnvironment,
   publicWebUserAgent,
-  type PublicRedirectEvent,
+  type PublicResourceTransportOptions,
   type RawPublicResponse,
 } from "./publicResourceTransport";
+import { requestPublicResourcePersistently as requestPersistently,
+  type PublicResourceRequest } from "./publicResourceRetry";
 
 const providerKey = "public.web-resource";
 const providerVersion = "2.0.0";
@@ -38,19 +42,31 @@ const maximumAllowedBytes = 25_000_000;
 const maximumRobotsBytes = 256_000;
 
 export interface PublicWebResourceProviderOptions {
-  request?: (url: URL, maximumBytes: number, signal?: AbortSignal,
-    onRedirect?: (event: PublicRedirectEvent) => Promise<void>) => Promise<RawPublicResponse>;
+  request?: PublicResourceRequest;
   now?: () => Date;
   queueStorageDirectory?: string;
+  transportOptions?: PublicResourceTransportOptions;
+  environmentPreflight?: () => Promise<void>;
 }
 
 export function createPublicWebResourceProvider(options: PublicWebResourceProviderOptions = {}) {
-  const request = options.request ?? createPublicResourceTransport();
+  const request = options.request ?? createPublicResourceTransport(options.transportOptions);
+  const environmentPreflight = options.environmentPreflight
+    ?? (() => preflightPublicResourceEnvironment(options.transportOptions));
   const now = options.now ?? (() => new Date());
   return {
     key: providerKey,
     version: providerVersion,
     validate: validatePublicSource,
+    async preflightEnvironment(sources: CrawlPlanSource[]) {
+      for (const source of sources) validatePublicSource(source);
+      const needsPersistentQueue = sources.some((source) => source.targets.some((target) =>
+        target.providerConfiguration.some((item) => item.key === "route" && item.value === "site")));
+      if (needsPersistentQueue && !options.queueStorageDirectory) {
+        throw new Error("site route 缺少持久 RequestQueue 存储目录");
+      }
+      await environmentPreflight();
+    },
     async preflight(source: CrawlPlanSource) { validatePublicSource(source); },
     async *collect(source: CrawlPlanSource, runId: string, admission?: SourceRequestAdmissionPort,
       signal?: AbortSignal, context?: SourceProviderCollectionContext): AsyncIterable<SourceProviderEvent> {
@@ -66,8 +82,9 @@ export function createPublicWebResourceProvider(options: PublicWebResourceProvid
         const robotsUrl = new URL("/robots.txt", origin);
         const owner = targets.find((plan) => plan.url.origin === origin);
         if (!owner) throw new Error(`robots.txt 找不到所属 target：${origin}`);
-        const response = await requestPersistently(source, runId, admission, owner.target.key,
-          `robots:${origin}`, "robots_policy", robotsUrl, maximumRobotsBytes, request, runSignal);
+        const response = await requestPersistently({ source, runId, admission, targetKey: owner.target.key,
+          workKey: `robots:${origin}`, captureUnit: "robots_policy", url: robotsUrl,
+          maximumBytes: maximumRobotsBytes, request, signal: runSignal });
         robots.set(origin, parseRobots(robotsUrl, response));
       }
       for (const plan of targets) {
@@ -87,109 +104,23 @@ export function createPublicWebResourceProvider(options: PublicWebResourceProvid
           yield inaccessible(target.key, url, now(), "access_denied", "robots.txt 不允许访问该资源");
           return;
         }
-        const response = await requestPersistently(source, runId, admission, target.key,
-          `target:${target.key}`, target.captureUnit, url, configuration.maximumBytes, request, runSignal);
+        const workKey = `target:${target.key}`;
+        const response = await requestPersistently({ source, runId, admission, targetKey: target.key,
+          workKey, captureUnit: target.captureUnit, url, maximumBytes: configuration.maximumBytes,
+          request, signal: runSignal });
         const assessment = assessExactResponse(source, target, response, url);
-        const event = captureEvent(source, target.key, url, response, now(), assessment);
+        const event = captureEvent(source, target.key, url, response, now(), assessment,
+          { workKey, discoveryKind: "planned_entry", depth: 0 });
         yield event;
         if (event.snapshot.observation.state !== "accessible") return;
         if (assessment.status !== "accepted") {
-          throw new Error(`内容验收未达标：${target.key} ${assessment.reason}`);
+          throw new SourceProviderFailure("content_not_accepted",
+            `内容验收未达标：${target.key} ${assessment.reason}`);
         }
         yield { type: "target.completed", targetKey: target.key };
       }
     },
   };
-}
-
-async function requestPersistently(
-  source: CrawlPlanSource,
-  runId: string,
-  admission: SourceRequestAdmissionPort,
-  targetKey: string,
-  workKey: string,
-  captureUnit: string,
-  url: URL,
-  maximumBytes: number,
-  request: NonNullable<PublicWebResourceProviderOptions["request"]>,
-  signal?: AbortSignal,
-) {
-  await admission.ensureCaptureWorkItem({ runId, targetKey, workKey, captureUnit, expectedUnitCount: 1 });
-  await admission.startCaptureWorkItem({ runId, workKey });
-  let currentUrl = url;
-  let attempt: Awaited<ReturnType<typeof reserveWhenEligible>> | undefined = await reserveWhenEligible(
-    source, runId, admission, targetKey, workKey, currentUrl, signal);
-  let redirectParentAttemptId: string | undefined;
-  try {
-    const response = await request(url, maximumBytes, signal, async (event) => {
-      if (event.type === "response") {
-        if (!attempt) throw new Error("重定向响应找不到当前请求尝试");
-        await admission.finishRequest({ attemptId: attempt.id, state: "completed",
-          finalUrl: event.hop.fromUrl.href, httpStatus: event.hop.statusCode });
-        redirectParentAttemptId = attempt.id;
-        attempt = undefined;
-        return;
-      }
-      currentUrl = event.toUrl;
-      attempt = await reserveWhenEligible(source, runId, admission, targetKey, workKey,
-        currentUrl, signal, redirectParentAttemptId);
-    });
-    if (!attempt) throw new Error("重定向后没有预留最终请求尝试");
-    const restricted = restrictionReason(response.statusCode);
-    await admission.finishRequest({ attemptId: attempt.id,
-      state: restricted ? "restricted" : response.statusCode >= 500 ? "failed" : "completed",
-      finalUrl: response.finalUrl ?? currentUrl.href,
-      httpStatus: response.statusCode, bytes: response.body.byteLength,
-      ...(restricted ? { restrictionReason: restricted } : {}) });
-    await admission.finishCaptureWorkItem({ runId, workKey,
-      status: restricted ? "stopped" : response.statusCode >= 500 ? "failed" : "completed",
-      observedUnitCount: restricted || response.statusCode >= 500 ? 0 : 1,
-      ...(restricted ? { terminationReason: restricted } : response.statusCode >= 500
-        ? { terminationReason: `HTTP ${response.statusCode}` } : {}) });
-    return response;
-  } catch (error) {
-    if (attempt) {
-      await admission.finishRequest({ attemptId: attempt.id, state: "failed" }).catch(() => undefined);
-    }
-    await admission.finishCaptureWorkItem({ runId, workKey, status: "failed", observedUnitCount: 0,
-      terminationReason: boundedFailure(error) }).catch(() => undefined);
-    throw error;
-  }
-}
-
-async function reserveWhenEligible(
-  source: CrawlPlanSource,
-  runId: string,
-  admission: SourceRequestAdmissionPort,
-  targetKey: string,
-  workKey: string,
-  url: URL,
-  signal?: AbortSignal,
-  redirectParentAttemptId?: string,
-) {
-  while (true) {
-    const result = await admission.reserveRequest({ runId, targetKey, workKey,
-      gateKey: `${providerKey}@${providerVersion}:${url.origin}`,
-      providerKey, providerVersion, policyVersion: source.accessPolicy.version,
-      requestedUrl: url.href, ...(redirectParentAttemptId ? { redirectParentAttemptId } : {}),
-      minimumIntervalMs: source.accessPolicy.minimumIntervalMs,
-      maxRequestsPerMinute: source.accessPolicy.maxRequestsPerMinute });
-    if (result.status === "admitted") return result.attempt;
-    if (result.status === "blocked") throw new Error(`持久请求 gate 阻止访问：${result.reason}`);
-    const waitMs = Math.max(0, new Date(result.retryAt).getTime() - Date.now());
-    if (waitMs > 0) await delay(waitMs, undefined, { signal });
-  }
-}
-
-function restrictionReason(status: number) {
-  if (status === 429) return "rate_limited";
-  if (status === 401) return "login_required";
-  if (status === 403) return "access_denied";
-  return undefined;
-}
-
-function boundedFailure(error: unknown) {
-  return (error instanceof Error ? error.message : String(error)).slice(0, 2000);
 }
 
 function validatePublicSource(source: CrawlPlanSource) {
@@ -309,8 +240,9 @@ async function* collectSiteTarget(input: {
     scheduled += await enqueueSiteRequest(queue, input.plan.url, 0, "seed");
     const sitemap = await loadSitemapCandidates(input);
     for (const event of sitemap.events) yield event;
-    for (const url of rankSitemapCandidates(sitemap.urls, input.plan).slice(0, Math.floor(input.maximumPages / 2))) {
-      scheduled += await enqueueSiteRequest(queue, url, 1, "sitemap");
+    for (const candidate of rankSitemapCandidates(sitemap.urls, input.plan)
+      .slice(0, Math.floor(input.maximumPages / 2))) {
+      scheduled += await enqueueSiteRequest(queue, candidate.url, 1, "sitemap", candidate.parentUrl);
     }
     let processed = 0;
     let idlePolls = 0;
@@ -332,12 +264,14 @@ async function* collectSiteTarget(input: {
         processed += 1;
         continue;
       }
-      const workKey = `page:${digest(url.href)}`;
+      // WHY：Source Run 内工作键全局唯一；同一官网的多个 target 可能访问同一 URL，必须保留 target 身份。
+      const workKey = `page:${digest(`${input.plan.target.key}\0${url.href}`)}`;
       let response: RawPublicResponse;
       try {
-        response = await requestPersistently(input.source, input.runId, input.admission,
-          input.plan.target.key, workKey, input.plan.target.captureUnit, url,
-          input.maximumBytes, input.request, input.signal);
+        response = await requestPersistently({ source: input.source, runId: input.runId,
+          admission: input.admission, targetKey: input.plan.target.key, workKey,
+          captureUnit: input.plan.target.captureUnit, url, maximumBytes: input.maximumBytes,
+          request: input.request, signal: input.signal });
       } catch (error) {
         // WHY：失败页仍是未完成工作；立即归还队列可让负责人显式继续时直接领取，
         // 不必等待 Crawlee 的双锁恢复窗口，也不会把失败误记成已处理。
@@ -345,7 +279,13 @@ async function* collectSiteTarget(input: {
         throw error;
       }
       const assessment = assessSiteResponse(response, input.plan);
-      const event = captureEvent(input.source, input.plan.target.key, url, response, input.now(), assessment);
+      const event = captureEvent(input.source, input.plan.target.key, url, response, input.now(), assessment, {
+        workKey,
+        discoveryKind: route.discoveredBy === "seed" ? "planned_entry"
+          : route.discoveredBy === "sitemap" ? "sitemap_entry" : "html_link",
+        depth: route.depth,
+        ...(route.parentUrl ? { parentUrl: route.parentUrl } : {}),
+      });
       yield event;
       if (event.snapshot.observation.state !== "accessible") {
         await queue.reclaimRequest(queued);
@@ -355,7 +295,7 @@ async function* collectSiteTarget(input: {
       if (route.depth < input.plan.maximumDepth && scheduled < input.maximumPages) {
         for (const link of extractSiteLinks(response, url, input.plan.requiredTerms)) {
           if (scheduled >= input.maximumPages) break;
-          scheduled += await enqueueSiteRequest(queue, link, route.depth + 1, "html");
+          scheduled += await enqueueSiteRequest(queue, link, route.depth + 1, "html", url.href);
         }
       }
       await queue.markRequestHandled(queued);
@@ -365,61 +305,86 @@ async function* collectSiteTarget(input: {
     await configuration.getStorageClient().teardown?.();
   }
   if (accepted < input.plan.minimumAcceptedPages) {
-    throw new Error(`内容验收未达标：计划至少 ${input.plan.minimumAcceptedPages} 页，实际 ${accepted} 页`);
+    throw new SourceProviderFailure("content_not_accepted",
+      `内容验收未达标：计划至少 ${input.plan.minimumAcceptedPages} 页，实际 ${accepted} 页`);
   }
   yield { type: "target.completed", targetKey: input.plan.target.key };
 }
 
 async function loadSitemapCandidates(input: Parameters<typeof collectSiteTarget>[0]) {
   const events: Array<Extract<SourceProviderEvent, { type: "capture" }>> = [];
-  const pageUrls = new Set<string>();
-  const pending = [...input.robots.sitemapUrls];
-  if (pending.length === 0) pending.push(new URL("/sitemap.xml", input.plan.url.origin).href);
+  const pageUrls = new Map<string, string>();
+  const robotsUrl = new URL("/robots.txt", input.plan.url.origin).href;
+  const pending = input.robots.sitemapUrls.map((url) => ({ url, parentUrl: robotsUrl, depth: 0 }));
+  if (pending.length === 0) pending.push({
+    url: new URL("/sitemap.xml", input.plan.url.origin).href, parentUrl: robotsUrl, depth: 0,
+  });
   const seen = new Set<string>();
   while (pending.length > 0 && seen.size < 4) {
-    const sitemapUrl = assertPublicHttpsUrl(pending.shift()!);
+    const sitemap = pending.shift()!;
+    const sitemapUrl = assertPublicHttpsUrl(sitemap.url);
     if (sitemapUrl.origin !== input.plan.url.origin || seen.has(sitemapUrl.href)) continue;
     seen.add(sitemapUrl.href);
-    const response = await requestPersistently(input.source, input.runId, input.admission,
-      input.plan.target.key, `sitemap:${digest(sitemapUrl.href)}`, "sitemap", sitemapUrl,
-      maximumRobotsBytes, input.request, input.signal);
+    const workKey = `sitemap:${digest(`${input.plan.target.key}\0${sitemapUrl.href}`)}`;
+    // WHY：sitemap 是来源内容和 URL 分母的一部分，服从计划声明的原始响应上限；
+    // robots.txt 的 256KB 防护只约束策略文件，不能截断真实站点常见的大型 sitemap。
+    const response = await requestPersistently({ source: input.source, runId: input.runId,
+      admission: input.admission, targetKey: input.plan.target.key, workKey,
+      captureUnit: "sitemap", url: sitemapUrl, maximumBytes: input.maximumBytes,
+      request: input.request, signal: input.signal });
     if (response.statusCode < 200 || response.statusCode >= 300) continue;
-    events.push(captureEvent(input.source, input.plan.target.key, sitemapUrl, response, input.now(),
-      supportingAssessment("sitemap_raw", "sitemap 只支撑 URL 分母，不计入内容完成数")));
     const text = Buffer.from(response.body).toString("utf8");
-    for await (const item of parseSitemap([{ type: "raw", content: text, depth: 0 }], undefined,
-      { emitNestedSitemaps: true, maxDepth: 0, sitemapRetries: 0, reportNetworkErrors: false })) {
-      const candidate = safeSameOriginUrl(item.loc, input.plan.url.origin);
-      if (!candidate) continue;
-      if (item.originSitemapUrl === null) pending.push(candidate.href);
-      else if (pageUrls.size < input.maximumPages * 20) pageUrls.add(candidate.href);
+    let parseFailure: string | undefined;
+    try {
+      for await (const item of parseSitemap([{ type: "raw", content: text, depth: 0 }], undefined,
+        { emitNestedSitemaps: true, maxDepth: 0, sitemapRetries: 0, reportNetworkErrors: false })) {
+        const candidate = safeSameOriginUrl(item.loc, input.plan.url.origin);
+        if (!candidate) continue;
+        if (item.originSitemapUrl === null && sitemap.depth < 3) {
+          pending.push({ url: candidate.href, parentUrl: sitemapUrl.href, depth: sitemap.depth + 1 });
+        } else if (pageUrls.size < input.maximumPages * 20) {
+          pageUrls.set(candidate.href, sitemapUrl.href);
+        }
+      }
+    } catch (error) {
+      // WHY：sitemap 是可选发现线索；格式错误要保留原文与失败事实，但不能阻止已确认入口继续执行。
+      parseFailure = boundedFailure(error).slice(0, 1_800);
     }
+    events.push(captureEvent(input.source, input.plan.target.key, sitemapUrl, response, input.now(),
+      supportingAssessment("sitemap_raw", parseFailure
+        ? `sitemap 原文已保存但 URL 解析失败：${parseFailure}`
+        : "sitemap 只支撑 URL 分母，不计入内容完成数"),
+      { workKey, discoveryKind: "sitemap_document", depth: sitemap.depth, parentUrl: sitemap.parentUrl }));
   }
-  return { events, urls: [...pageUrls].map((url) => new URL(url)) };
+  return { events, urls: [...pageUrls].map(([url, parentUrl]) => ({ url: new URL(url), parentUrl })) };
 }
 
-function rankSitemapCandidates(urls: URL[], plan: SitePlan) {
-  return urls.filter(isPageCandidate).map((url) => ({ url,
-    score: signalMatches(url.href, plan.requiredTerms).length * 10 + sharedPathScore(url, plan.url) }))
+function rankSitemapCandidates(urls: Array<{ url: URL; parentUrl: string }>, plan: SitePlan) {
+  return urls.filter(({ url }) => isPageCandidate(url)).map((candidate) => ({ ...candidate,
+    score: signalMatches(candidate.url.href, plan.requiredTerms).length * 10
+      + sharedPathScore(candidate.url, plan.url) }))
     .filter((item) => item.score > 0).sort((left, right) => right.score - left.score)
-    .map((item) => item.url);
+    .map(({ score: _score, ...candidate }) => candidate);
 }
 
 async function enqueueSiteRequest(queue: Awaited<ReturnType<typeof openPersistentRequestQueue>>,
-  url: URL, depth: number, discoveredBy: "seed" | "sitemap" | "html") {
+  url: URL, depth: number, discoveredBy: "seed" | "sitemap" | "html", parentUrl?: string) {
   const result = await queue.addRequest({ url: url.href, uniqueKey: `page:${url.href}`,
-    userData: { depth, discoveredBy } });
+    userData: { depth, discoveredBy, ...(parentUrl ? { parentUrl } : {}) } });
   return result.wasAlreadyPresent || result.wasAlreadyHandled ? 0 : 1;
 }
 
 function parseQueueRoute(value: Record<string, unknown>) {
   const depth = Number(value.depth);
   const discoveredBy = value.discoveredBy;
+  const parentUrl = typeof value.parentUrl === "string" ? value.parentUrl : undefined;
   if (!Number.isInteger(depth) || depth < 0 || depth > 3
-    || (discoveredBy !== "seed" && discoveredBy !== "sitemap" && discoveredBy !== "html")) {
+    || (discoveredBy !== "seed" && discoveredBy !== "sitemap" && discoveredBy !== "html")
+    || (discoveredBy === "seed" ? parentUrl !== undefined : !parentUrl)) {
     throw new Error("持久 RequestQueue 包含无效 route metadata");
   }
-  return { depth, discoveredBy };
+  if (parentUrl) assertPublicHttpsUrl(parentUrl);
+  return { depth, discoveredBy, parentUrl };
 }
 
 function parseRobots(url: URL, response: RawPublicResponse) {
@@ -442,4 +407,8 @@ function isAllowedByRobots(details: RobotsDetails, url: URL) {
 
 function digest(value: string) {
   return createHash("sha256").update(value).digest("hex").slice(0, 20);
+}
+
+function boundedFailure(error: unknown) {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 2000);
 }

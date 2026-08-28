@@ -25,7 +25,7 @@ import { parseCodexStructuredOutput, zodSchemaToCodexJsonSchema } from "./codexS
 export interface CodexCategoryInterviewRuntimeOptions {
   repositoryRoot: string;
   model: string;
-  reasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoningEffort: string;
   executable?: string;
 }
 
@@ -62,7 +62,9 @@ async function* runInterviewTurn(
   let eventSequence = 0;
   let finalizingStarted = false;
   // WHY：同一运行时复用官方 stdio 连接，但每轮仍新建 ephemeral thread；Workbench 继续独占业务会话事实。
-  for await (const item of client.run(interviewPrompt(input), input.signal)) {
+  for await (const item of client.run(
+    interviewPrompt(input), input.signal, undefined, undefined, input.session.session.modelSelection,
+  )) {
     if (item.type === "text_delta") {
       yield { type: "text_delta", delta: item.delta };
       continue;
@@ -105,7 +107,9 @@ async function materializeCaptureTask(
 ): Promise<CaptureTaskMaterialization> {
   await prepareRuntimeSkill(options.repositoryRoot, runtimeSkillPath);
   let result: CodexAppServerResult | undefined;
-  for await (const item of client.run(materializationPrompt(input))) {
+  for await (const item of client.run(
+    materializationPrompt(input), undefined, undefined, undefined, input.session.session.modelSelection,
+  )) {
     if (item.type === "result") result = item.result;
   }
   if (!result) throw new Error("Codex 结构化执行流未返回结果");
@@ -188,7 +192,7 @@ function interviewPrompt(input: CategoryInterviewRuntimeInput) {
     "若当前存在 proposed Decision，先判断用户原文如何处理它。只有语义明确回答时才返回 decisionResolution：decisionId 必须引用现有 proposal；序号、‘按推荐’等表达规范化成对应 option label；自定义答案提炼成准确选择；rationale 说明如何理解整条原文。用户若纠正或否定问题前提，且该问题确实不应由负责人决定，则改用 decisionWithdrawal 引用并撤回现有 proposal，rationale 记录原因；两者不能同时返回。用户同时补充的范围、排除项、来源或事实不能丢弃。若语义不明确或只是在追问原因，则两者都省略，先正常回应或只追问一个必要澄清。",
     "decisionResolution 与 decisionWithdrawal 都不是单独回合。处理当前问题后必须在同一个 final_answer 继续推进：仍有下一个真实负责人取舍就提出一个新的 proposedDecision；没有则完成必要调查并形成 draftMarkdown。不要只回复‘已记录’后等待用户再说‘继续’。",
     "需要负责人决定时，assistantText 只写背景，不得抄写问题、选项或编号；只用 proposedDecision 表达唯一问题、2–3 个建议、推荐选择与理由。owner=user 未决项必须与这个 proposal 使用同一个 key，resolvedUnresolvedKeys 只能独立解决系统负责的未决事实。界面会把问题确定性编号后合成为普通对话，用户可以直接输入建议之外的答案。",
-    "来源平台、网站与渠道是系统调查事实，不能提出给负责人选择；采访只确认品类、市场、内容和排除边界，品牌与官网执行入口由确认后的 Planning Agent 深度搜索。当前正式规划排除京东。若本轮把当前品类切换为另一品类，必须先调用 web search 完成新调查，再提出该品类的负责人问题或形成草案。只要本轮仍有新的 proposedDecision 或 user unresolved item，就必须省略 draftMarkdown；本轮 decisionResolution 已明确解决最后一个旧问题时可以同时形成草案。",
+    "来源平台、网站与渠道是系统调查事实，不能提出给负责人选择；采访只确认品类、市场、内容和排除边界，品牌与执行入口由确认后的 Planning Agent 深度搜索。来源只有在公开、可审计并能由当前 Provider 执行时才进入计划。若本轮把当前品类切换为另一品类，必须先调用 web search 完成新调查，再提出该品类的负责人问题或形成草案。只要本轮仍有新的 proposedDecision 或 user unresolved item，就必须省略 draftMarkdown；本轮 decisionResolution 已明确解决最后一个旧问题时可以同时形成草案。",
     "生成 draftMarkdown 前，必须逐项检查会改变纳入商品集合、市场范围或观察时间范围的边界依据。只有用户当前或历史原文、confirmed Interview Decision、Skill 明确批准的系统默认，或不包含负责人选择的客观调查事实，才能直接成为草案边界。其余会改变结果的边界必须选择影响最大的一个形成 proposedDecision，并省略 draftMarkdown；推荐答案只是 proposal，不等于用户确认。这不是最低问题数要求，用户已完整给出必要范围时允许零问题生成草案。",
     "draftMarkdown 是给人审阅的采访范围草案，不是 CaptureTask 数据结构。它只能使用普通 Markdown，总结用户原始要求、已确认范围、纳入/排除项、采访回答和调查事实；来源可以用自然语言和链接记录。严禁在这里输出 JSON、taskCandidate、sourceCandidates、observedAt、decisionIds 或正式 Crawl Plan。",
     "生成 draftMarkdown 时必须同时返回 draftCoverage.scopeEvidenceUrls：列出用于判断品类边界、市场口径或负责人取舍背景的全部关键网页搜索证据。每个 URL 必须来自本会话时间线里已完成的 web_search，并原样写进 draftMarkdown，且不能重复。它只证明采访范围经过调查，不是品牌清单、执行来源或 Crawl Plan；品牌官网、参数说明书、标准监管和技术原理由 Planning Agent 在任务确认后深搜。不生成草案时必须省略 draftCoverage。",
@@ -224,7 +228,7 @@ function materializationPrompt(input: CategoryInterviewMaterializationInput) {
     "把用户已经确认的 Markdown 采访范围草案忠实转换成正式 Capture Task。",
     "这是确认后的纯结构化步骤：不得调用 web search、不得提出问题、不得补充草案中不存在的事实、不得改变范围。",
     "sourceCandidates 只收录草案中已经明确出现且具有有效 http/https URL 的调查种子；没有精确 URL 就省略，不得为了凑品牌、平台、标准或技术四类入口现场编造。完整来源清单由后续 Planning Agent 深搜。",
-    "originalRequest 使用最初用户要求；category.code 使用稳定的小写英文 slug。京东是否适用只按草案事实表达，Workbench 会统一应用当前排除策略。",
+    "originalRequest 使用最初用户要求；category.code 使用稳定的小写英文 slug。来源候选只忠实转换草案中已经确认的公开入口，不增加平台专用字段。",
     "最终只返回符合下方 JSON Schema 的 JSON 对象，不要使用 Markdown 代码块或添加解释。",
     `Final answer JSON Schema: ${JSON.stringify(zodSchemaToCodexJsonSchema(captureTaskMaterializationSchema))}`,
     `Initial request: ${JSON.stringify(input.session.session.initialRequest)}`,

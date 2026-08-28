@@ -18,6 +18,33 @@ describe("来源执行 target contract", () => {
     expect(sourceSnapshotCommitSchema.safeParse(withoutTarget).success).toBe(false);
   });
 
+  it("新快照可保存可校验的站内发现血缘", () => {
+    const commit = sourceSnapshotCommitSchema.parse({
+      ...snapshotCommit(),
+      lineage: {
+        workKey: "page:product-1",
+        discoveryKind: "html_link",
+        depth: 2,
+        parentUrl: "https://example.com/catalog/brand",
+      },
+    });
+
+    expect(commit.lineage).toEqual({
+      workKey: "page:product-1",
+      discoveryKind: "html_link",
+      depth: 2,
+      parentUrl: "https://example.com/catalog/brand",
+    });
+    expect(sourceSnapshotCommitSchema.safeParse({
+      ...snapshotCommit(),
+      lineage: { workKey: "page:product-1", discoveryKind: "html_link", depth: 2 },
+    }).success).toBe(false);
+    expect(sourceSnapshotCommitSchema.safeParse({
+      ...snapshotCommit(),
+      lineage: { workKey: "target:manual", discoveryKind: "planned_entry", depth: 1 },
+    }).success).toBe(false);
+  });
+
   it("Provider 产物把原始附件字节绑定到明确 target", () => {
     const content = new TextEncoder().encode("manual-pdf");
     const { runId: _runId, targetKey: _targetKey, ...snapshot } = snapshotCommit();
@@ -26,6 +53,7 @@ describe("来源执行 target contract", () => {
       targetKey: "official.manual",
       snapshot: {
         ...snapshot,
+        lineage: { workKey: "target:official.manual", discoveryKind: "planned_entry", depth: 0 },
         payload: {
           kind: "asset",
           assetKey: "manual-pdf",
@@ -52,10 +80,10 @@ describe("来源执行 target contract", () => {
     const { runId: _runId, targetKey: _targetKey, ...snapshot } = snapshotCommit();
     const event = sourceProviderEventSchema.parse({
       type: "capture",
-      targetKey: "jd.product-details",
+      targetKey: "market.product-records",
       snapshot: {
         ...snapshot,
-        object: { sourceIdentity: "jd", kind: "product", externalKey: "sku-1" },
+        object: { sourceIdentity: "market-catalog", kind: "product", externalKey: "product-1" },
         payload: {
           kind: "inline_text",
           mediaType: "text/html",

@@ -28,11 +28,15 @@ export async function listStandaloneInterviewSessions(db: WorkbenchDb): Promise<
   // WHY：正式任务由 Capture Task 记录代表；这里只列独立未完成采访，避免修订中的同一任务重复出现两次。
   return rows
     .filter((row) => row.phase !== "confirmed" && !linkedSessionIds.has(row.id))
-    .map((row) => interviewSessionSchema.parse({
-      ...row,
-      createdAt: new Date(row.createdAt).toISOString(),
-      updatedAt: new Date(row.updatedAt).toISOString(),
-    }));
+    .map((row) => {
+      const { modelId, reasoningEffort, ...session } = row;
+      return interviewSessionSchema.parse({
+        ...session,
+        modelSelection: { modelId, reasoningEffort },
+        createdAt: new Date(row.createdAt).toISOString(),
+        updatedAt: new Date(row.updatedAt).toISOString(),
+      });
+    });
 }
 
 export async function removeStandaloneInterviewSession(db: WorkbenchDb, sessionId: string) {
