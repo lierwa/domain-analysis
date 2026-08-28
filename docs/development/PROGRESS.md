@@ -32,7 +32,7 @@ Z1 V0 交付点已完成；下一阶段按 `ROADMAP.md` 决定是否进入 V1。
 
 ## Git 与接续状态
 
-文档当前只存在于本机工作区，未提交、未推送。新的本机开发任务必须从当前 working tree 创建，才能读取这些文档和既有用户改动。
+文档与实现已提交并推送至 `codex/zol-v0-vertical-publish-20260828`；本地、tracking 和远程分支已完成 SHA parity，ahead/behind 为 `0 0`。后续任务可从该分支或其远程分支继续。
 
 ## 本轮 Baseline Impact
 
@@ -48,4 +48,4 @@ Baseline Impact:
 - tests and real-surface validation: ZOL provider unit tests, 全仓 workspace typecheck, formal PostgreSQL Source Dataset run, request ledger, raw JSONL export and terminal-state audit；全量测试中的既有 Web/Workbench 失败保持范围外
 ```
 
-正式证据：task `task-zol-v0-b437758c-e40a-4602-9c3d-74d91faaae21`，plan `plan-zol-v0-b437758c-e40a-4602-9c3d-74d91faaae21`，batch `source-batch-378bd9d5-dd47-4d3d-bb1c-c31bef8b0982`，run `source-run-22592d98-33a9-4cf8-b689-4436c4aafceb`，原始导出 `/private/tmp/task-zol-v0-b437758c-e40a-4602-9c3d-74d91faaae21.jsonl`。本轮未 commit、push 或 merge。
+正式证据：task `task-zol-v0-b437758c-e40a-4602-9c3d-74d91faaae21`，plan `plan-zol-v0-b437758c-e40a-4602-9c3d-74d91faaae21`，batch `source-batch-378bd9d5-dd47-4d3d-bb1c-c31bef8b0982`，run `source-run-22592d98-33a9-4cf8-b689-4436c4aafceb`，原始导出 `/private/tmp/task-zol-v0-b437758c-e40a-4602-9c3d-74d91faaae21.jsonl`。本轮已 commit 并 push，未 merge。
