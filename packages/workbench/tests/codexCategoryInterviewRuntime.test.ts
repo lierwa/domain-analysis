@@ -168,6 +168,9 @@ describe("Codex 采访结果投影与连接复用", () => {
 
     expect(output).toMatchObject({
       category: { code: "refrigerator", label: "冰箱" },
+      brandSelectionPolicy: { mode: "source_brand_ranking", minimumScoreExclusive: 0, maxBrands: 20 },
+      executionCadencePolicy: { mode: "fixed", brandBatchSize: 3, modelsPerBrandPerRound: 10 },
+      modelCoveragePolicy: { mode: "max_models_per_brand", maxModelsPerBrand: 20 },
       sourceCandidates: [{ entryUrl: "https://catalog.example.com/refrigerators" }],
     });
     expect(output.sourceCandidates[0]).not.toHaveProperty("observedAt");
@@ -304,7 +307,7 @@ async function handle(message) {
     if (!prompt.includes("来源只有在公开、可审计并能由当前 Provider 执行时才进入计划")) process.exit(10);
     if (!prompt.includes("draftCoverage.scopeEvidenceUrls")) process.exit(11);
     if (!prompt.includes("逐项检查会改变纳入商品集合、市场范围或观察时间范围的边界依据")) process.exit(12);
-    if (!prompt.includes("品牌官网、参数说明书、标准监管和技术原理由 Planning Agent")) process.exit(13);
+    if (!prompt.includes("品牌官网、参数说明书、标准监管和技术原理由 Planning Run")) process.exit(13);
     if (!prompt.includes("不是品牌清单、执行来源或 Crawl Plan")) process.exit(14);
     const skill = message.params.input.find((item) => item.type === "skill");
     const normalizedSkillPath = String(skill?.path).replaceAll("\\\\", "/");
@@ -369,6 +372,10 @@ function materializationSource() {
     originalRequest: "抓冰箱",
     category: { code: "refrigerator", label: "冰箱" },
     marketScope: "中国大陆当前在售家用冰箱",
+    brandSelectionPolicy: { mode: "source_brand_ranking", scoreField: "comprehensive_score",
+      minimumScoreExclusive: 0, maxBrands: 20 },
+    executionCadencePolicy: { mode: "fixed", brandBatchSize: 3, modelsPerBrandPerRound: 10 },
+    modelCoveragePolicy: { mode: "max_models_per_brand", maxModelsPerBrand: 20 },
     generalTopics: ["品牌、型号、商品详情和原始参数"],
     categoryTopics: ["能效、容量、制冷方式和核心部件"],
     sourceCandidates: [{
@@ -393,7 +400,9 @@ function handle(message) {
   }
   if (message.method !== "turn/start") return;
   const prompt = message.params.input.find((item) => item.type === "text")?.text ?? "";
-  if (!prompt.includes("确认后的纯结构化步骤") || !prompt.includes("不得调用 web search")) process.exit(32);
+  if (!prompt.includes("确认后的纯结构化步骤") || !prompt.includes("不得调用 web search")
+    || !prompt.includes("source_brand_ranking/comprehensive_score/minimumScoreExclusive=0/maxBrands=20")
+    || !prompt.includes("第三方商品数据库、聚合目录或媒体平台不是品牌官网")) process.exit(32);
   emit({ id: message.id, result: { turn: { id: "turn-1" } } });
   emit({ method: "turn/started", params: { turn: { id: "turn-1" } } });
   const finalItem = { id: "message-1", type: "agentMessage", text: ${JSON.stringify(output)}, phase: "final_answer" };

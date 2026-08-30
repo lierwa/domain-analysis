@@ -101,6 +101,92 @@ a {
   @apply break-all font-mono text-xs text-muted;
 }
 
+/* WHY: 运行状态必须像仪表盘读数，而不是一个无法解释的禁用按钮。 */
+.source-run-status {
+  display: inline-flex;
+  min-height: 2.25rem;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid rgb(var(--color-success) / 0.36);
+  border-radius: 999px;
+  background: rgb(var(--color-success) / 0.08);
+  padding: 0 0.875rem;
+  color: rgb(var(--color-success));
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.source-run-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 0 rgb(var(--color-success) / 0.36);
+  animation: source-run-pulse 1.8s ease-out infinite;
+}
+
+.source-run-status--warning {
+  border-color: rgb(var(--color-warning) / 0.4);
+  background: rgb(var(--color-warning) / 0.08);
+  color: rgb(var(--color-warning));
+}
+
+.source-run-status--warning .source-run-status-dot {
+  animation: none;
+  box-shadow: none;
+}
+
+.source-run-progress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(5rem, 1fr));
+  margin-top: 0.75rem;
+  overflow: hidden;
+  border: 1px solid rgb(var(--color-line));
+  border-radius: 0.625rem;
+  background: rgb(var(--color-line));
+  gap: 1px;
+}
+
+.source-run-progress-metric {
+  min-width: 0;
+  background: rgb(var(--color-panel));
+  padding: 0.65rem 0.75rem;
+}
+
+.source-run-progress-metric dt {
+  color: rgb(var(--color-muted));
+  font-size: 0.625rem;
+  line-height: 1rem;
+}
+
+.source-run-progress-metric dd {
+  margin: 0.125rem 0 0;
+  color: rgb(var(--color-ink));
+  font-size: 0.875rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.source-run-progress > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  background: rgb(var(--color-surface));
+  padding: 0.45rem 0.75rem;
+  color: rgb(var(--color-muted));
+  font-size: 0.625rem;
+}
+
+@keyframes source-run-pulse {
+  70% { box-shadow: 0 0 0 0.4rem rgb(var(--color-success) / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--color-success) / 0); }
+}
+
+@media (max-width: 639px) {
+  .source-run-progress {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;

@@ -190,6 +190,64 @@ describe("来源执行准备", () => {
     expect(publicCollect).toHaveBeenCalledOnce();
   });
 
+  it("单个资源不存在且实际覆盖低于最大目标时仍完成来源运行", async () => {
+    const source = executableSource("brand", "public.web-resource");
+    source.targets[0]!.quantity = { mode: "target_count", targetCount: 1, unit: "份",
+      denominator: "计划内最多一份", rationale: "来源不足时保留实际结果" };
+    const plan = { id: "plan-1", taskId: "task-1", taskRevision: 2, version: 3,
+      status: "confirmed", content: { executionChecklistVersion: 3, sources: [source] } } as unknown as CrawlPlan;
+    const planning = { requireExecutablePlan: vi.fn(async () => plan) } as unknown as CrawlPlanExecutionReader;
+    const startedRun = { id: "run-1", taskId: "task-1", sourceCollectionPlanId: "plan-1",
+      sourceCollectionPlanSourceKey: "brand", sourceCollectionPlanVersion: 3,
+      providerKey: "public.web-resource", providerVersion: "1.0.0", requestBudget: 1,
+      accessPolicy: { kind: "paced_http" as const, version: "test", maxRequestsPerMinute: 1,
+        minimumIntervalMs: 1, jitterMs: { min: 0, max: 0 }, batchSize: 1,
+        batchCooldownMs: 60_000, maximumRunMs: 1_000 }, status: "running" as const,
+      snapshotCount: 0, accessibleCount: 0, failedCount: 0, assetCount: 0,
+      startedAt: "2026-08-21T00:00:00.000Z" };
+    const batch = { id: "batch-1", taskId: "task-1", sourceCollectionPlanId: "plan-1",
+      sourceCollectionPlanVersion: 3, taskRevision: 2, status: "running" as const,
+      plannedSourceCount: 1, startedAt: "2026-08-21T00:00:00.000Z" };
+    const finishTarget = vi.fn(async () => ({}));
+    const finishRun = vi.fn(async (input: Parameters<SourceDatasetModule["finishRun"]>[0]) => ({
+      ...startedRun, status: input.status, terminationReason: input.terminationReason,
+      failureCategory: input.failureCategory, finishedAt: "2026-08-21T00:00:01.000Z",
+    }));
+    const datasets = { getBatchByCommandId: vi.fn(async () => null),
+      startBatch: vi.fn(async () => batch), finishBatch: vi.fn(async (input) => ({ ...batch,
+        status: input.status, terminationReason: input.terminationReason,
+        finishedAt: "2026-08-21T00:00:02.000Z" })), startRun: vi.fn(async () => startedRun),
+      startTarget: vi.fn(async () => ({})), finishTarget, finishRun,
+      commitSnapshot: vi.fn(async () => ({ ...startedRun, snapshotCount: 1, failedCount: 1 })),
+      getRun: vi.fn(async () => null),
+      acquireBatchLease: vi.fn(async () => ({ release: async () => undefined })),
+      acquireRunLease: vi.fn(async () => ({ release: async () => undefined })),
+    } as unknown as SourceDatasetModule;
+    const sourceProvider = { key: "public.web-resource", version: "1.0.0", validate: vi.fn(),
+      preflight: vi.fn(async () => undefined), collect: async function* () {
+        yield { type: "capture" as const, targetKey: "brand-target", snapshot: {
+          idempotencyKey: "missing-resource", object: { sourceIdentity: "fixture",
+            kind: "web_resource", externalKey: "https://example.com/missing" },
+          observation: { requestedUrl: "https://example.com/missing",
+            observedAt: "2026-08-21T00:00:00.000Z", state: "not_found" as const,
+            responseHeaders: {}, error: "资源不存在" },
+        } };
+        yield { type: "target.completed" as const, targetKey: "brand-target", observedUnitCount: 0 };
+      } } satisfies SourceProvider;
+    const execution = createSourceExecutionModule(planning, datasets,
+      new Map([[sourceProvider.key, sourceProvider]]));
+
+    const events = [];
+    for await (const event of execution.start({ taskId: "task-1", planId: "plan-1",
+      expectedTaskRevision: 2, expectedPlanVersion: 3 })) events.push(event);
+
+    expect(finishTarget).toHaveBeenCalledWith(expect.objectContaining({ status: "completed",
+      observedUnitCount: 0 }));
+    expect(finishRun).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+    expect(events.some((event) => event.type === "run.failed")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "batch.completed" });
+  });
+
   it("规划模块判定旧计划不可执行时不创建批次、不预检也不访问 Provider", async () => {
     const oldPlan = { id: "plan-old", taskId: "task-1", taskRevision: 2, version: 1,
       status: "confirmed", content: { executionChecklistVersion: 2,
@@ -237,10 +295,22 @@ describe("来源执行准备", () => {
     const finishRun = vi.fn(async () => ({ ...previous, id: "run-resumed",
       resumedFromRunId: previous.id, status: "completed" as const,
       finishedAt: "2026-08-21T00:00:02.000Z", terminationReason: "plan_scope_completed" }));
+    const batch = { id: "batch-1", taskId: "task-1", sourceCollectionPlanId: "plan-1",
+      sourceCollectionPlanVersion: 3, taskRevision: 2, status: "running" as const,
+      recoveryState: "running" as const, plannedSourceCount: 1,
+      startedAt: "2026-08-21T00:00:00.000Z" };
+    const reopenBatch = vi.fn(async () => batch);
+    const finishBatch = vi.fn(async () => ({ ...batch, status: "completed" as const,
+      finishedAt: "2026-08-21T00:00:03.000Z", terminationReason: "1/1 个来源完成" }));
     const datasets = { getRun: vi.fn(async (runId: string) => runId === previous.id
       ? { run: previous, targets: [], workItems: [], requestAttempts: [], accessGates: [], records: [] } : null),
       startRun, startTarget: vi.fn(async () => ({})), finishTarget: vi.fn(async () => ({})),
       finishRun, prepareRunForResume: vi.fn(async () => previous),
+      listCompletedCaptureWorkKeys: vi.fn(async () => ["model:haier:done"]),
+      reopenBatch, getBatch: vi.fn(async () => batch), finishBatch,
+      setBatchRecoveryState: vi.fn(async () => ({ ...batch, recoveryState: "completed" as const })),
+      listBatchRuns: vi.fn(async () => [{ ...previous, id: "run-resumed", status: "completed" as const,
+        resumedFromRunId: previous.id }]),
       acquireRunLease: vi.fn(async () => ({ release: async () => undefined })) } as unknown as SourceDatasetModule;
     const contexts: unknown[] = [];
     const provider = { key: "public.web-resource", version: "1.0.0", validate: vi.fn(),
@@ -253,15 +323,20 @@ describe("来源执行准备", () => {
 
     const events = [];
     for await (const event of execution.resume({ taskId: "task-1", runId: previous.id,
-      expectedTaskRevision: 2, expectedPlanVersion: 3 })) events.push(event);
+      expectedTaskRevision: 2, expectedPlanVersion: 3,
+      commandId: "source-command-resume" })) events.push(event);
 
     expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ resumedFromRunId: previous.id,
-      batchId: previous.executionBatchId }));
+      batchId: previous.executionBatchId, executionCommandId: "source-command-resume" }));
     expect(contexts).toEqual([{ resumedFromRunId: previous.id, queueRunId: previous.id,
+      completedWorkKeys: ["model:haier:done"],
       accessPolicy: expect.objectContaining({ kind: "paced_http", version: "test",
         batchSize: 1, batchCooldownMs: 60_000 }) }]);
     expect(events.at(-1)).toMatchObject({ type: "run.completed",
       run: { id: "run-resumed", resumedFromRunId: previous.id } });
+    expect(reopenBatch).toHaveBeenCalledWith("batch-1");
+    expect(finishBatch).toHaveBeenCalledWith({ batchId: "batch-1", status: "completed",
+      terminationReason: "1/1 个来源完成" });
   });
 });
 

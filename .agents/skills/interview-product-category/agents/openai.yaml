@@ -1,7 +1,7 @@
 interface:
-  display_name: "商品抓取任务"
-  short_description: "主动调查范围和来源，形成可确认的抓取任务草稿"
-  default_prompt: "使用 $interview-product-category 新建一个冰箱数据抓取任务。"
+  display_name: "标准商品门类采访"
+  short_description: "确认门类业务范围并形成可审核的 Capture Task 草案"
+  default_prompt: "使用 $interview-product-category 采访一个标准商品门类采集任务。"
 
 policy:
   allow_implicit_invocation: false

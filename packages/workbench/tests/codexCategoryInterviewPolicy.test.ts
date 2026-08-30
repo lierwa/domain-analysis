@@ -12,6 +12,7 @@ describe("采访首轮调查门", () => {
       session: {
         id: "session-1",
         initialRequest: "抓显示器",
+        modelSelection: { modelId: "gpt-5.6-terra", reasoningEffort: "medium" },
         phase: "active",
         turnState: "running",
         revision: 4,
@@ -39,6 +40,7 @@ describe("采访首轮调查门", () => {
       session: {
         id: "session-1",
         initialRequest: "抓显示器",
+        modelSelection: { modelId: "gpt-5.6-terra", reasoningEffort: "medium" },
         phase: "active",
         turnState: "running",
         revision: 4,
@@ -89,6 +91,7 @@ describe("采访后续调查门", () => {
     const view = categoryInterviewViewSchema.parse({
       session: {
         id: "session-1", initialRequest: "抓显示器", phase: "active", turnState: "running",
+        modelSelection: { modelId: "gpt-5.6-terra", reasoningEffort: "medium" },
         revision: 4, createdAt: "2026-08-19T00:00:00.000Z", updatedAt: "2026-08-19T00:03:00.000Z",
       },
       messages: [

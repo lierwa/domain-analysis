@@ -5,4 +5,7 @@ export * from "./ephemeralCrawleeConfiguration";
 export * from "./publicNetworkPolicy";
 export * from "./publicResourceTransport";
 export * from "./publicWebResourceProvider";
-export * from "./zolCategoryProvider";
+export * from "./zolCatalogGalleryProvider";
+export * from "./zolCatalogParsing";
+export * from "./zolBrandRankingReader";
+export * from "./zolGalleryParsing";

@@ -40,7 +40,6 @@
     "build:db": "npm run check:runtime --silent && npm --workspace @domain-analysis/db run build",
     "build:worker": "npm run check:runtime --silent && npm --workspace @domain-analysis/worker run build",
     "test": "npm run check:runtime --silent && npm run db:ensure-local && node --env-file=.env.example ./node_modules/vitest/vitest.mjs run",
-    "run:zol-v0": "npm run check:runtime --silent && node --env-file=.env.example --env-file-if-exists=.env.local --import=tsx scripts/run-zol-v0.ts",
     "typecheck": "npm run typecheck:shared && npm run typecheck:db && npm run typecheck:workbench && npm run typecheck:worker && npm run typecheck:api && npm run typecheck:web",
     "typecheck:api": "npm run check:runtime --silent && npm --workspace @domain-analysis/api run typecheck",
     "typecheck:web": "npm run check:runtime --silent && npm --workspace @domain-analysis/web run typecheck",

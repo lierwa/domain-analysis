@@ -64,13 +64,14 @@ describeWithPostgres("Source Dataset 资源引用", () => {
         batchCooldownMs: 1, maximumRunMs: 1_000 }, targetKeys: ["product-detail"] });
     await datasets.startTarget({ runId: run.id, targetKey: "product-detail" });
     const html = "<html>product</html>";
-    const view = await datasets.commitSnapshot({ runId: run.id, targetKey: "product-detail",
+    await datasets.commitSnapshot({ runId: run.id, targetKey: "product-detail",
       idempotencyKey: "model-1", object: { sourceIdentity: "brand.example", kind: "product", externalKey: "model-1" },
       observation: { requestedUrl: "https://brand.example/products/model-1", observedAt: at,
         state: "accessible", responseHeaders: {} }, payload: { kind: "inline_text", mediaType: "text/html",
         charset: "utf-8", text: html, bytes: Buffer.byteLength(html), contentHash: hash(html) },
       assets: [], resourceReferences: references(25) });
 
+    const view = (await datasets.getRun(run.id))!;
     const record = view.records[0]!;
     expect(record.assets).toEqual([]);
     expect(record.resourceReferences).toHaveLength(25);
@@ -107,7 +108,7 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       workKey: "page:sony", captureUnit: "公开目录页", expectedUnitCount: 1 });
     await datasets.startCaptureWorkItem({ runId: run.id, workKey: "page:sony" });
     const html = "<html>索尼电视产品目录</html>";
-    const view = await datasets.commitSnapshot({ runId: run.id, targetKey: "market.catalog",
+    await datasets.commitSnapshot({ runId: run.id, targetKey: "market.catalog",
       idempotencyKey: "sony-page", object: { sourceIdentity: "zol.catalog", kind: "web_resource",
         externalKey: "https://detail.zol.com.cn/digital_tv/sony/" },
       lineage: { workKey: "page:sony", discoveryKind: "html_link", depth: 1,
@@ -118,6 +119,7 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       payload: { kind: "inline_text", mediaType: "text/html", charset: "gbk", text: html,
         bytes: Buffer.byteLength(html), contentHash: hash(html) } });
 
+    const view = (await datasets.getRun(run.id))!;
     expect(view.records[0]?.snapshot.lineage).toEqual({ workKey: "page:sony",
       discoveryKind: "html_link", depth: 1, parentUrl: "https://detail.zol.com.cn/digital_tv/" });
     await expect(datasets.listTask(taskId)).resolves.toMatchObject({
@@ -170,7 +172,7 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       payload: { kind: "inline_text", mediaType: "text/html", charset: "utf-8", text: html,
         bytes: Buffer.byteLength(html), contentHash: hash(html) }, assets: [], resourceReferences: [] });
     const sitemap = "<urlset></urlset>";
-    const view = await datasets.commitSnapshot({ runId: run.id, targetKey: "catalog",
+    const updatedRun = await datasets.commitSnapshot({ runId: run.id, targetKey: "catalog",
       idempotencyKey: "sitemap", object: { sourceIdentity: "brand.example", kind: "web_resource",
         externalKey: "https://brand.example/sitemap.xml" },
       observation: { requestedUrl: "https://brand.example/sitemap.xml", observedAt: at,
@@ -179,7 +181,8 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       payload: { kind: "inline_text", mediaType: "application/xml", charset: "utf-8", text: sitemap,
         bytes: Buffer.byteLength(sitemap), contentHash: hash(sitemap) }, assets: [], resourceReferences: [] });
 
-    expect(view.run).toMatchObject({ snapshotCount: 2, accessibleCount: 0, failedCount: 1 });
+    const view = (await datasets.getRun(run.id))!;
+    expect(updatedRun).toMatchObject({ snapshotCount: 2, accessibleCount: 0, failedCount: 1 });
     expect(view.targets[0]).toMatchObject({ snapshotCount: 2, accessibleCount: 0, failedCount: 1 });
     expect(view.records.map((record) => record.snapshot.observation.contentAssessment?.status))
       .toEqual(["rejected", "supporting"]);
@@ -212,7 +215,7 @@ describeWithPostgres("Source Dataset 资源引用", () => {
     await datasets.startCaptureWorkItem({ runId: run.id, workKey: "product:model-1" });
 
     await expect(datasets.finishTarget({ runId: run.id, targetKey: "product-detail",
-      status: "completed", terminationReason: "target_scope_completed" }))
+      status: "completed", observedUnitCount: 1, terminationReason: "target_scope_completed" }))
       .rejects.toThrow("仍有未完成捕获工作");
 
     child = spawn(process.execPath, ["--import=tsx", runLeaseChildScript(), databaseUrl!, run.id], {
@@ -229,13 +232,24 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       targets: [expect.objectContaining({ status: "stopped" })],
       workItems: [expect.objectContaining({ status: "stopped" })],
     });
-    await expect(datasets.startRun({ taskId, planId: "plan-target-work-gate", planVersion: 1,
+    const resumed = await datasets.startRun({ taskId, planId: "plan-target-work-gate", planVersion: 1,
       sourceKey: "brand", providerKey: "public.web-resource", providerVersion: "1.0.0", requestBudget: 1,
       accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 1,
         minimumIntervalMs: 60_000, jitterMs: { min: 0, max: 0 }, batchSize: 1,
         batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product-detail"],
-      resumedFromRunId: run.id })).resolves.toMatchObject({ resumedFromRunId: run.id, status: "running" });
-  });
+      resumedFromRunId: run.id });
+    expect(resumed).toMatchObject({ resumedFromRunId: run.id, status: "running" });
+    await datasets.startTarget({ runId: resumed.id, targetKey: "product-detail" });
+    await datasets.ensureCaptureWorkItem({ runId: resumed.id, targetKey: "product-detail",
+      workKey: "product:model-2", captureUnit: "exact_page", expectedUnitCount: 1 });
+    await datasets.startCaptureWorkItem({ runId: resumed.id, workKey: "product:model-2" });
+    await datasets.finishTarget({ runId: resumed.id, targetKey: "product-detail", status: "failed",
+      terminationReason: "fixture_failure" });
+    await expect(datasets.getRun(resumed.id)).resolves.toMatchObject({
+      targets: [expect.objectContaining({ status: "failed" })],
+      workItems: [expect.objectContaining({ status: "failed", terminationReason: "fixture_failure" })],
+    });
+  }, 15_000);
 
   it("启动恢复把无活动执行进程的 running 批次和运行收口为 stopped", async () => {
     await migrateWorkbenchDatabase(databaseUrl!);
@@ -320,6 +334,11 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       providerVersion: "2.0.0", requestBudget: 2, accessPolicy: fixtureAccessPolicy(),
       targetKeys: ["catalog"] });
     await datasets.startTarget({ runId: first.id, targetKey: "catalog" });
+    await datasets.ensureCaptureWorkItem({ runId: first.id, targetKey: "catalog",
+      workKey: "model:haier:1001", captureUnit: "zol_model_bundle", expectedUnitCount: 1 });
+    await datasets.startCaptureWorkItem({ runId: first.id, workKey: "model:haier:1001" });
+    await datasets.finishCaptureWorkItem({ runId: first.id, workKey: "model:haier:1001",
+      status: "completed", observedUnitCount: 1 });
     await datasets.finishTarget({ runId: first.id, targetKey: "catalog", status: "failed",
       terminationReason: "temporary TLS failure" });
     await datasets.finishRun({ runId: first.id, status: "failed",
@@ -330,10 +349,15 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       providerVersion: "2.0.0", requestBudget: 2, accessPolicy: fixtureAccessPolicy(),
       targetKeys: ["catalog"], resumedFromRunId: first.id });
     await datasets.startTarget({ runId: latest.id, targetKey: "catalog" });
+    await expect(datasets.listCompletedCaptureWorkKeys({ runId: latest.id,
+      captureUnit: "zol_model_bundle" })).resolves.toEqual(["model:haier:1001"]);
     await datasets.finishTarget({ runId: latest.id, targetKey: "catalog", status: "completed",
-      terminationReason: "target_scope_completed" });
+      observedUnitCount: 0, terminationReason: "target_scope_completed" });
     await datasets.finishRun({ runId: latest.id, status: "completed",
       terminationReason: "plan_scope_completed" });
+    await expect(datasets.getRun(latest.id)).resolves.toMatchObject({
+      targets: [expect.objectContaining({ observedUnitCount: 0 })],
+    });
     await datasets.finishBatch({ batchId: batch.id, status: "partial",
       terminationReason: "历史批次摘要尚未包含恢复运行" });
 
@@ -353,7 +377,8 @@ describeWithPostgres("Source Dataset 资源引用", () => {
     db = createWorkbenchDb(databaseUrl!);
     taskId = `task-automatic-source-recovery-${randomUUID()}`;
     const at = "2026-08-28T01:00:00.000Z";
-    const content = currentPlanContent(taskId, at);
+    const providerVersion = `test-${randomUUID()}`;
+    const content = currentPlanContent(taskId, at, providerVersion);
     await db.insert(captureTasks).values({ id: taskId, name: "自动来源恢复",
       originalRequest: "抓取公开产品目录", marketScope: "本地 fixture", status: "ready",
       revision: 1, createdAt: at, updatedAt: at, confirmedAt: at });
@@ -372,7 +397,7 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       status: "confirmed", content } as never;
     const planning = { requireExecutablePlan: async () => plan } satisfies CrawlPlanExecutionReader;
     const collectCalls: string[] = [];
-    const provider = { key: "public.web-resource", version: "2.0.0", validate() {},
+    const provider = { key: "public.web-resource", version: providerVersion, validate() {},
       async preflightEnvironment() {}, async preflight() {}, async *collect(source) {
         collectCalls.push(source.key);
         yield { type: "target.completed" as const, targetKey: source.targets[0]!.key };
@@ -396,7 +421,8 @@ describeWithPostgres("Source Dataset 资源引用", () => {
     db = createWorkbenchDb(databaseUrl!);
     taskId = `task-safe-attempt-recovery-${randomUUID()}`;
     const at = "2026-08-28T02:00:00.000Z";
-    const content = currentPlanContent(taskId, at);
+    const providerVersion = `test-${randomUUID()}`;
+    const content = currentPlanContent(taskId, at, providerVersion);
     await db.insert(captureTasks).values({ id: taskId, name: "安全 Attempt 恢复",
       originalRequest: "抓取公开产品目录", marketScope: "本地 fixture", status: "ready",
       revision: 1, createdAt: at, updatedAt: at, confirmedAt: at });
@@ -410,7 +436,7 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       planVersion: 4, taskRevision: 1, plannedSourceCount: 1 });
     const previous = await datasets.startRun({ taskId, planId: "plan-safe-attempt-recovery",
       planVersion: 4, batchId: batch.id, sourceKey: "zol.catalog",
-      providerKey: "public.web-resource", providerVersion: "2.0.0", requestBudget: 10,
+      providerKey: "public.web-resource", providerVersion, requestBudget: 10,
       accessPolicy: fixtureAccessPolicy(), targetKeys: ["market.catalog"] });
     await datasets.startTarget({ runId: previous.id, targetKey: "market.catalog" });
     await datasets.ensureCaptureWorkItem({ runId: previous.id, targetKey: "market.catalog",
@@ -418,7 +444,7 @@ describeWithPostgres("Source Dataset 资源引用", () => {
     await datasets.startCaptureWorkItem({ runId: previous.id, workKey: "page:entry" });
     const admission = await datasets.reserveRequest({ runId: previous.id, targetKey: "market.catalog",
       workKey: "page:entry", gateKey: `fixture-safe:${taskId}`,
-      providerKey: "public.web-resource", providerVersion: "2.0.0", policyVersion: "fixture",
+      providerKey: "public.web-resource", providerVersion, policyVersion: "fixture",
       requestedUrl: "https://detail.zol.com.cn/digital_tv/", minimumIntervalMs: 1,
       maxRequestsPerMinute: 1 });
     if (admission.status !== "admitted") throw new Error("fixture 请求没有获得准入");
@@ -434,7 +460,7 @@ describeWithPostgres("Source Dataset 资源引用", () => {
     const plan = { id: "plan-safe-attempt-recovery", taskId, taskRevision: 1, version: 4,
       status: "confirmed", content } as never;
     const planning = { requireExecutablePlan: async () => plan } satisfies CrawlPlanExecutionReader;
-    const provider = completingProvider();
+    const provider = completingProvider(providerVersion);
     const execution = createSourceExecutionModule(planning, datasets,
       new Map([[provider.key, provider]]));
 
@@ -451,7 +477,8 @@ describeWithPostgres("Source Dataset 资源引用", () => {
     db = createWorkbenchDb(databaseUrl!);
     taskId = `task-unknown-attempt-recovery-${randomUUID()}`;
     const at = "2026-08-28T03:00:00.000Z";
-    const content = currentPlanContent(taskId, at);
+    const providerVersion = `test-${randomUUID()}`;
+    const content = currentPlanContent(taskId, at, providerVersion);
     await db.insert(captureTasks).values({ id: taskId, name: "未知结果恢复",
       originalRequest: "抓取公开产品目录", marketScope: "本地 fixture", status: "ready",
       revision: 1, createdAt: at, updatedAt: at, confirmedAt: at });
@@ -465,7 +492,7 @@ describeWithPostgres("Source Dataset 资源引用", () => {
       planVersion: 4, taskRevision: 1, plannedSourceCount: 1 });
     const previous = await datasets.startRun({ taskId, planId: "plan-unknown-attempt-recovery",
       planVersion: 4, batchId: batch.id, sourceKey: "zol.catalog",
-      providerKey: "public.web-resource", providerVersion: "2.0.0", requestBudget: 10,
+      providerKey: "public.web-resource", providerVersion, requestBudget: 10,
       accessPolicy: fixtureAccessPolicy(), targetKeys: ["market.catalog"] });
     await datasets.startTarget({ runId: previous.id, targetKey: "market.catalog" });
     await datasets.ensureCaptureWorkItem({ runId: previous.id, targetKey: "market.catalog",
@@ -473,7 +500,7 @@ describeWithPostgres("Source Dataset 资源引用", () => {
     await datasets.startCaptureWorkItem({ runId: previous.id, workKey: "page:entry" });
     await datasets.reserveRequest({ runId: previous.id, targetKey: "market.catalog",
       workKey: "page:entry", gateKey: `fixture-unknown:${taskId}`,
-      providerKey: "public.web-resource", providerVersion: "2.0.0", policyVersion: "fixture",
+      providerKey: "public.web-resource", providerVersion, policyVersion: "fixture",
       requestedUrl: "https://detail.zol.com.cn/digital_tv/", minimumIntervalMs: 1,
       maxRequestsPerMinute: 1 });
     await datasets.prepareRunForResume(previous.id);
@@ -488,7 +515,7 @@ describeWithPostgres("Source Dataset 资源引用", () => {
     const plan = { id: "plan-unknown-attempt-recovery", taskId, taskRevision: 1, version: 4,
       status: "confirmed", content } as never;
     const planning = { requireExecutablePlan: async () => plan } satisfies CrawlPlanExecutionReader;
-    const provider = completingProvider();
+    const provider = completingProvider(providerVersion);
     const execution = createSourceExecutionModule(planning, datasets,
       new Map([[provider.key, provider]]));
 
@@ -520,7 +547,9 @@ function runLeaseChildScript() {
 function waitForLine(child: ChildProcess, expected: string) {
   return new Promise<void>((resolve, reject) => {
     let output = "";
-    const timeout = setTimeout(() => reject(new Error(`租约子进程未输出 ${expected}：${output}`)), 5_000);
+    // WHY：全套 Vitest 并发时，Node/tsx 子进程的冷启动会竞争 CPU；20 秒只放宽进程启动门，
+    // 子进程提前退出仍立即失败，不会掩盖租约协议错误或业务等待。
+    const timeout = setTimeout(() => reject(new Error(`租约子进程未输出 ${expected}：${output}`)), 20_000);
     child.stdout?.on("data", (chunk) => {
       output += String(chunk);
       if (output.includes(expected)) { clearTimeout(timeout); resolve(); }
@@ -551,22 +580,22 @@ function fixtureAccessPolicy() {
     batchCooldownMs: 1, maximumRunMs: 1_000 };
 }
 
-function completingProvider() {
+function completingProvider(version: string) {
   const collect = vi.fn(async function* (source: Parameters<SourceProvider["collect"]>[0]) {
     yield { type: "target.completed" as const, targetKey: source.targets[0]!.key };
   });
-  return { key: "public.web-resource", version: "2.0.0", validate() {},
+  return { key: "public.web-resource", version, validate() {},
     async preflightEnvironment() {}, async preflight() {}, collect } satisfies SourceProvider;
 }
 
-function currentPlanContent(taskId: string, observedAt: string) {
+function currentPlanContent(taskId: string, observedAt: string, providerVersion = "2.0.0") {
   return {
-    taskId, taskRevision: 1, summary: "抓取跨品牌市场目录", excludedContent: [],
-    executionChecklistVersion: 4 as const,
+    taskId, taskRevision: 1, summary: "抓取跨品牌市场目录", excludedContent: [], planningBlockers: [],
+    executionChecklistVersion: 5 as const,
     sources: [{ key: "zol.catalog", name: "ZOL 电视产品库", publisher: "中关村在线",
       sourceKind: "other" as const, role: "跨品牌市场目录", sourceCandidateIds: [],
       entryUrls: ["https://detail.zol.com.cn/digital_tv/"],
-      provider: { key: "public.web-resource", version: "2.0.0", configuration: [
+      provider: { key: "public.web-resource", version: providerVersion, configuration: [
         { key: "mode", value: "planned_routes" }, { key: "maximum_bytes", value: 100_000 },
         { key: "maximum_pages_per_target", value: 10 },
       ] },

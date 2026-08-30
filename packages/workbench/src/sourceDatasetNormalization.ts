@@ -21,6 +21,7 @@ import {
 
 export function normalizeRun(row: typeof sourceCollectionRuns.$inferSelect) {
   return sourceCollectionRunSchema.parse({ ...row,
+    executionCommandId: row.executionCommandId ?? undefined,
     executionBatchId: row.executionBatchId ?? undefined,
     resumedFromRunId: row.resumedFromRunId ?? undefined,
     sourceCollectionPlanId: row.sourceCollectionPlanId ?? undefined,
@@ -43,6 +44,7 @@ export function normalizeBatch(row: typeof sourceCollectionBatches.$inferSelect)
 
 export function normalizeTarget(row: typeof sourceCollectionTargetRuns.$inferSelect) {
   return sourceCollectionTargetRunSchema.parse({ ...row,
+    observedUnitCount: row.observedUnitCount ?? undefined,
     startedAt: row.startedAt ? normalizeTimestamp(row.startedAt) : undefined,
     finishedAt: row.finishedAt ? normalizeTimestamp(row.finishedAt) : undefined,
     terminationReason: row.terminationReason ?? undefined });

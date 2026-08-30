@@ -1,0 +1,7 @@
+interface:
+  display_name: "标准商品门类规划"
+  short_description: "核验 ZOL 品牌榜并生成可审核的门类抓取计划"
+  default_prompt: "使用 $plan-product-crawl 为已确认的 Capture Task 生成下一份 Crawl Plan Draft。"
+
+policy:
+  allow_implicit_invocation: false

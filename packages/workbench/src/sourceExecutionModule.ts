@@ -21,8 +21,19 @@ import {
 } from "@domain-analysis/shared";
 
 import type { SourceDatasetModule } from "./sourceDatasetModule";
-import { classifySourceExecutionFailure, observationFailureCategory } from "./sourceExecutionFailure";
+import { SourceExecutionError } from "./sourceExecutionError";
+import {
+  classifySourceExecutionFailure,
+  isAccessRestrictionObservation,
+} from "./sourceExecutionFailure";
 import { countSourceTerminal, sourceBatchOutcome } from "./sourceExecutionOutcome";
+import {
+  finalizeResumedBatch,
+  findResumeRootRunId,
+  isSafeAutomaticRecovery,
+  latestRunsBySource,
+} from "./sourceRunRecovery";
+export { SourceExecutionError } from "./sourceExecutionError";
 
 export interface SourceProvider {
   readonly key: string;
@@ -35,7 +46,6 @@ export interface SourceProvider {
     signal?: AbortSignal, context?: SourceProviderCollectionContext): AsyncIterable<SourceProviderEvent>;
   close?(): Promise<void>;
 }
-
 export interface CrawlPlanExecutionReader {
   requireExecutablePlan(input: {
     taskId: string;
@@ -44,26 +54,15 @@ export interface CrawlPlanExecutionReader {
     expectedPlanVersion: number;
   }): Promise<CrawlPlan>;
 }
-
 export interface SourceExecutionModule {
   prepare(input: { taskId: string; planId: string; expectedTaskRevision: number;
     expectedPlanVersion: number }): Promise<SourcePreparation>;
   start(input: { taskId: string; planId: string; expectedTaskRevision: number;
     expectedPlanVersion: number; commandId?: string; signal?: AbortSignal }): AsyncIterable<SourceExecutionEvent>;
   resume(input: { taskId: string; runId: string; expectedTaskRevision: number;
-    expectedPlanVersion: number; signal?: AbortSignal }): AsyncIterable<SourceRunEvent>;
+    expectedPlanVersion: number; commandId?: string; signal?: AbortSignal }): AsyncIterable<SourceRunEvent>;
   recoverBatch(input: { batchId: string; signal?: AbortSignal }): Promise<void>;
   validateSource(source: CrawlPlanSource): void;
-}
-
-export class SourceExecutionError extends Error {
-  constructor(
-    readonly code: "not_found" | "revision_conflict" | "invalid_state" | "preflight_failed",
-    message: string,
-  ) {
-    super(message);
-    this.name = "SourceExecutionError";
-  }
 }
 
 export function createSourceExecutionModule(
@@ -160,11 +159,20 @@ export function createSourceExecutionModule(
       await preflightSource(source, provider);
       const preparedRun = await datasets.prepareRunForResume(previous.run.id);
       const queueRunId = await findResumeRootRunId(datasets, preparedRun);
+      const completedWorkKeys = await datasets.listCompletedCaptureWorkKeys({
+        runId: preparedRun.id, captureUnit: "zol_model_bundle",
+      });
       // WHY：恢复产生新 Source Run，但仍属于用户最初启动的同一批次；只继承批次关系，
       // 不修改旧运行和批次事实，确保 UI、导出与失败重试都能按一次抓取聚合。
-      yield* executeSource(plan, source, provider, datasets, raw.signal,
-        sourceProviderCollectionContextSchema.parse({ resumedFromRunId: preparedRun.id, queueRunId,
-          accessPolicy: effectiveAccessPolicy(source) }), preparedRun.executionBatchId);
+      const batchId = preparedRun.executionBatchId;
+      if (batchId) await datasets.reopenBatch(batchId);
+      try {
+        yield* executeSource(plan, source, provider, datasets, raw.signal,
+          sourceProviderCollectionContextSchema.parse({ resumedFromRunId: preparedRun.id, queueRunId,
+            accessPolicy: effectiveAccessPolicy(source), completedWorkKeys }), batchId, raw.commandId);
+      } finally {
+        if (batchId) await finalizeResumedBatch(datasets, batchId, Boolean(raw.signal?.aborted));
+      }
     },
     recoverBatch: (input) => recoverExecutionBatch(planning, datasets, resolve, input),
   };
@@ -202,8 +210,11 @@ async function recoverExecutionBatch(
       }
       const prepared = await datasets.prepareRunForResume(previous.id);
       const queueRunId = await findResumeRootRunId(datasets, prepared);
+      const completedWorkKeys = await datasets.listCompletedCaptureWorkKeys({
+        runId: prepared.id, captureUnit: "zol_model_bundle",
+      });
       const context = sourceProviderCollectionContextSchema.parse({ resumedFromRunId: prepared.id,
-        queueRunId, accessPolicy: effectiveAccessPolicy(source) });
+        queueRunId, accessPolicy: effectiveAccessPolicy(source), completedWorkKeys });
       await consumeRun(executeSource(plan, source, provider, datasets, input.signal, context, batch.id));
     }
     await datasets.setBatchRecoveryState(batch.id, "completed");
@@ -213,22 +224,6 @@ async function recoverExecutionBatch(
   } finally {
     await lease.release();
   }
-}
-
-function latestRunsBySource(runs: SourceCollectionRun[]) {
-  const latest = new Map<string, SourceCollectionRun>();
-  for (const run of runs) {
-    if (run.sourceCollectionPlanSourceKey) latest.set(run.sourceCollectionPlanSourceKey, run);
-  }
-  return latest;
-}
-
-async function isSafeAutomaticRecovery(datasets: SourceDatasetModule, run: SourceCollectionRun) {
-  if (run.failureCategory !== "execution_process_lost" || run.snapshotCount > 0) return false;
-  const view = await datasets.getRun(run.id);
-  if (!view) return false;
-  return !view.requestAttempts.some((attempt) => attempt.state === "started"
-    || (attempt.state === "cancelled" && attempt.restrictionReason === "request_outcome_unknown"));
 }
 
 async function consumeRun(events: AsyncIterable<SourceRunEvent>) {
@@ -295,9 +290,10 @@ async function* executeSource(
   signal?: AbortSignal,
   collectionContext?: SourceProviderCollectionContext,
   batchId?: string,
+  executionCommandId?: string,
 ): AsyncIterable<SourceRunEvent> {
   const run = await datasets.startRun({ taskId: plan.taskId, planId: plan.id, planVersion: plan.version,
-    batchId,
+    batchId, executionCommandId,
     sourceKey: source.key, providerKey: provider.key, providerVersion: provider.version,
     requestBudget: source.stopPolicy.requestBudget, accessPolicy: effectiveAccessPolicy(source),
     targetKeys: source.targets.map((target) => target.key),
@@ -318,7 +314,7 @@ async function* executeSource(
       const state = requireTargetState(states, event.targetKey);
       if (event.type === "capture") {
         await ensureTargetRunning(datasets, run.id, event.targetKey, state);
-        const view = await datasets.commitSnapshot({ ...event.snapshot, runId: run.id,
+        const updatedRun = await datasets.commitSnapshot({ ...event.snapshot, runId: run.id,
           targetKey: event.targetKey, assets: event.assets,
           resourceReferences: event.resourceReferences });
         if (event.snapshot.observation.state === "accessible"
@@ -326,24 +322,28 @@ async function* executeSource(
           && event.snapshot.observation.contentAssessment?.status !== "supporting") {
           state.accessibleCount += 1;
         }
-        yield parseRunEvent({ type: "run.updated", run: view.run });
-        if (event.snapshot.observation.state !== "accessible" && source.stopPolicy.stopOnAccessRestriction) {
+        yield parseRunEvent({ type: "run.updated", run: updatedRun });
+        // WHY：stopOnAccessRestriction 只熔断登录、验证和拒绝访问；单个资源不存在或源站临时错误
+        // 已经由 work item 留痕，不能把可隔离失败扩大成整个来源运行失败。
+        if (isAccessRestrictionObservation(event.snapshot.observation.state)
+          && source.stopPolicy.stopOnAccessRestriction) {
           state.status = "failed";
           await datasets.finishTarget({ runId: run.id, targetKey: event.targetKey, status: "failed",
             terminationReason: event.snapshot.observation.state });
           await closeOpenTargets(datasets, run.id, states, event.snapshot.observation.state, false);
           const failed = await datasets.finishRun({ runId: run.id, status: "failed",
             terminationReason: event.snapshot.observation.state,
-            failureCategory: observationFailureCategory(event.snapshot.observation.state) });
+            failureCategory: "source_restricted" });
           yield parseRunEvent({ type: "run.failed", run: failed });
           return;
         }
         continue;
       }
       await ensureTargetRunning(datasets, run.id, event.targetKey, state);
-      assertQuantityReached(source.targets, event.targetKey, state.accessibleCount);
+      const observedUnitCount = event.observedUnitCount ?? state.accessibleCount;
+      assertQuantityReached(source.targets, event.targetKey, observedUnitCount);
       await datasets.finishTarget({ runId: run.id, targetKey: event.targetKey,
-        status: "completed", terminationReason: "target_scope_completed" });
+        status: "completed", observedUnitCount, terminationReason: "target_scope_completed" });
       state.status = "completed";
       const updated = await datasets.getRun(run.id);
       if (updated) yield parseRunEvent({ type: "run.updated", run: updated.run });
@@ -383,19 +383,6 @@ function requireResumableSource(plan: CrawlPlan, run: SourceCollectionRun) {
     throw new SourceExecutionError("revision_conflict", "前序运行与当前确认计划或 Provider 不一致");
   }
   return source;
-}
-
-async function findResumeRootRunId(datasets: SourceDatasetModule, run: SourceCollectionRun) {
-  const seen = new Set<string>();
-  let current = run;
-  while (current.resumedFromRunId) {
-    if (seen.has(current.id)) throw new SourceExecutionError("invalid_state", "Source Run 恢复链形成循环");
-    seen.add(current.id);
-    const parent = await datasets.getRun(current.resumedFromRunId);
-    if (!parent) throw new SourceExecutionError("invalid_state", "Source Run 恢复链不完整");
-    current = parent.run;
-  }
-  return current.id;
 }
 
 function resolveProvider(providers: ReadonlyMap<string, SourceProvider>, source: CrawlPlanSource) {
@@ -469,8 +456,13 @@ async function ensureTargetRunning(
 
 function assertQuantityReached(targets: CrawlPlanTarget[], targetKey: string, accessibleCount: number) {
   const target = targets.find((item) => item.key === targetKey)!;
-  if (target.quantity.mode !== "all_available" && accessibleCount !== target.quantity.targetCount) {
-    throw new Error(`target 数量未对账：${targetKey} 计划 ${target.quantity.targetCount}，实际 ${accessibleCount}`);
+  const invalidSample = target.quantity.mode === "sample" && accessibleCount !== target.quantity.targetCount;
+  const exceededTarget = target.quantity.mode === "target_count" && accessibleCount > target.quantity.targetCount;
+  // WHY：target_count 是本次计划的最大覆盖边界；来源穷尽或隔离失败允许实际数更小，
+  // 但 sample 仍是精确抽样数，任何模式都不允许越过计划上限。
+  if (invalidSample || exceededTarget) {
+    const planned = target.quantity.mode === "all_available" ? "全部可用" : target.quantity.targetCount;
+    throw new Error(`target 数量未对账：${targetKey} 计划 ${planned}，实际 ${accessibleCount}`);
   }
 }
 

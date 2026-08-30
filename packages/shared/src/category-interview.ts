@@ -128,7 +128,7 @@ const decisionWithdrawalSchema = z.object({
 const draftCoverageUrlSchema = z.string().url().max(2048);
 
 export const categoryInterviewDraftCoverageSchema = z.object({
-  // WHY：采访只需证明品类边界经过真实调查；品牌、官网、标准和原理的执行入口由确认后的 Planning Agent 深搜并对账。
+  // WHY：采访只需证明品类边界经过真实调查；品牌、官网、标准和原理的执行入口由确认后的 Planning Run 调查并对账。
   scopeEvidenceUrls: z.array(draftCoverageUrlSchema).min(1).max(100),
 }).strict();
 

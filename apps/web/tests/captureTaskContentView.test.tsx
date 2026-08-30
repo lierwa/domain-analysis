@@ -10,6 +10,10 @@ describe("抓取任务内容投影", () => {
       originalRequest: "抓取电视资料",
       category: { code: "television", label: "电视" },
       marketScope: "中国大陆零售市场",
+      brandSelectionPolicy: { mode: "source_brand_ranking", scoreField: "comprehensive_score",
+        minimumScoreExclusive: 0, maxBrands: 20 },
+      executionCadencePolicy: { mode: "fixed", brandBatchSize: 3, modelsPerBrandPerRound: 10 },
+      modelCoveragePolicy: { mode: "max_models_per_brand", maxModelsPerBrand: 20 },
       generalTopics: ["品牌与型号"],
       categoryTopics: [],
       sourceCandidates: [{
@@ -27,6 +31,9 @@ describe("抓取任务内容投影", () => {
 
     expect(html).toContain("中国大陆零售市场");
     expect(html).toContain("品牌与型号");
+    expect(html).toContain("每个品牌最多 20 个不同型号");
+    expect(html).toContain("综合评分大于 0");
+    expect(html).toContain("每批 3 个品牌");
     expect(html).toContain("公开电视市场目录");
     expect(html).toContain("候选来源（1）");
   });

@@ -4,8 +4,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildSourceDataGraph,
+  formatRunElapsed,
   groupSourceRunsByBatch,
   initialSourceDataMapExpansion,
+  latestRunForPlan,
   shouldPollSourceDataset,
   shouldPollSourceRun,
   SourceRunDetail,
@@ -233,7 +235,12 @@ describe("原始数据血缘地图", () => {
   });
 
   it("展示 target 结果、计划版本和附件下载入口", () => {
-    const html = renderToString(<SourceRunDetail taskId="task-1" view={view()} />);
+    const runView = view();
+    runView.records[0]!.assets.push({ id: "asset-image", snapshotId: "snapshot-1", assetKey: "image-0",
+      filename: "front.webp", sourceUrl: "https://img.example.com/0.webp", mediaType: "image/webp",
+      contentHash: "2".repeat(64), casIntegrity: "sha512-image", bytes: 12,
+      createdAt: "2026-08-20T00:00:00.000Z" });
+    const html = renderToString(<SourceRunDetail taskId="task-1" view={runView} />);
     const visible = html.replaceAll("<!-- -->", "");
 
     expect(visible).toContain("清单逐项对账");
@@ -248,6 +255,9 @@ describe("原始数据血缘地图", () => {
     expect(visible).toContain("1 · 1 completed");
     expect(visible).toContain("图片 URL 引用 25");
     expect(visible).toContain("https://img.example.com/24.webp");
+    expect(visible).toContain("型号图片画廊");
+    expect(html).toContain("assets/asset-image?disposition=inline");
+    expect(html).not.toContain('src="https://img.example.com/0.webp"');
     expect(visible).not.toContain("显式继续");
   });
 
@@ -273,6 +283,17 @@ describe("原始数据血缘地图", () => {
     expect(shouldPollSourceDataset(dataset)).toBe(true);
     expect(shouldPollSourceRun(dataset, "run-current")).toBe(true);
     expect(shouldPollSourceRun(dataset, "run-stale")).toBe(false);
+  });
+
+  it("进度只读取当前执行的运行摘要，并格式化真实耗时", () => {
+    const dataset = pollingView("running");
+
+    expect(latestRunForPlan(dataset, "plan-2", 2, "standard")?.id).toBe("run-current");
+    expect(latestRunForPlan(pollingView("partial"), "plan-2", 2, "standard")?.status).toBe("failed");
+    expect(formatRunElapsed("2026-08-21T08:00:00.000Z",
+      Date.parse("2026-08-21T09:07:42.000Z"))).toBe("1 小时 07 分");
+    expect(formatRunElapsed("2026-08-21T08:00:00.000Z",
+      Date.parse("2026-08-21T08:03:09.000Z"))).toBe("3 分 09 秒");
   });
 
 });

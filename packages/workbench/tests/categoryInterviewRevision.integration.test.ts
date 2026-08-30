@@ -77,7 +77,7 @@ describeWithPostgres("采访草案与正式抓取任务的阶段边界", () => {
     expect(confirmed.task.content.sourceCandidates[0]?.observedAt).toBe("2026-08-19T14:00:00.000Z");
   });
 
-  it("确认草案时允许来源种子不完整，完整来源留给 Planning Agent 深搜", async () => {
+  it("确认草案时允许来源种子不完整，完整来源留给 Planning Run 调查", async () => {
     const harness = await createHarness("抓电视");
     ({ db } = harness);
     sessionId = harness.view.session.id;
@@ -255,6 +255,10 @@ function taskMaterialization(code: string, label: string): CaptureTaskMaterializ
     originalRequest: `抓${label}`,
     category: { code, label },
     marketScope: "中国大陆当前在售新机",
+    brandSelectionPolicy: { mode: "source_brand_ranking", scoreField: "comprehensive_score",
+      minimumScoreExclusive: 0, maxBrands: 20 },
+    executionCadencePolicy: { mode: "fixed", brandBatchSize: 3, modelsPerBrandPerRound: 10 },
+    modelCoveragePolicy: { mode: "max_models_per_brand", maxModelsPerBrand: 20 },
     generalTopics: ["品牌、型号、商品详情和参数"],
     categoryTopics: ["品类关键参数"],
     sourceCandidates: [{

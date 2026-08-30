@@ -1,4 +1,5 @@
 import type {
+  CaptureTaskMaterialization,
   CategoryInterviewDraftCoverage,
   CategoryInterviewRuntimeOutput,
   CategoryInterviewView,
@@ -6,7 +7,7 @@ import type {
 } from "@domain-analysis/shared";
 import { describe, expect, it } from "vitest";
 
-import { prepareInterviewTurn } from "../src/categoryInterviewTurnPolicy";
+import { materializeCaptureTaskContent, prepareInterviewTurn } from "../src/categoryInterviewTurnPolicy";
 
 describe("采访草案完成门", () => {
   it("没有品类范围搜索凭证时不能把调查判为完成", () => {
@@ -91,6 +92,37 @@ describe("采访草案完成门", () => {
       interviewView(), output, "2026-08-20T00:00:01.000Z", (kind) => kind, "message-user",
       [],
     )).toThrow("系统负责的来源与内容调查尚未完成");
+  });
+});
+
+describe("确认草案结构化", () => {
+  it("忠实保留已确认内容与排除项，不注入额外业务主题", () => {
+    const materialization: CaptureTaskMaterialization = {
+      originalRequest: "抓 ZOL 冰箱型号、参数和来源原图",
+      category: { code: "refrigerator", label: "冰箱" },
+      marketScope: "ZOL 公开冰箱目录",
+      brandSelectionPolicy: { mode: "source_brand_ranking", scoreField: "comprehensive_score",
+        minimumScoreExclusive: 0, maxBrands: 20 },
+      executionCadencePolicy: { mode: "fixed", brandBatchSize: 3, modelsPerBrandPerRound: 10 },
+      modelCoveragePolicy: { mode: "max_models_per_brand", maxModelsPerBrand: 20 },
+      generalTopics: ["型号", "参数页", "图集页", "产品绑定的全部来源原图"],
+      categoryTopics: ["多开门", "双门"],
+      sourceCandidates: [{
+        id: "source-zol", name: "ZOL 冰箱目录", publisher: "ZOL 中关村在线",
+        entryUrl: "https://detail.zol.com.cn/icebox/", sourceKind: "other",
+        expectedContents: ["品牌目录", "型号", "参数", "图片"],
+        observedFormats: ["HTML"], accessState: "public",
+      }],
+      excludedContent: ["电商报价", "用户点评"],
+    };
+
+    const content = materializeCaptureTaskContent(
+      interviewView(), materialization, "2026-08-20T00:00:01.000Z",
+    );
+
+    expect(content.generalTopics).toEqual(materialization.generalTopics);
+    expect(content.excludedContent).toEqual(["电商报价", "用户点评"]);
+    expect(content.sourceCandidates[0]).toMatchObject({ sourceKind: "other" });
   });
 });
 

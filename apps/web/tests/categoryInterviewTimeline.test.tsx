@@ -18,6 +18,16 @@ const hooks = vi.hoisted(() => ({
 
 vi.mock("../src/lib/api", () => api);
 
+vi.mock("usehooks-ts", () => ({
+  useLocalStorage: <T,>(_key: string, initial: T) => {
+    const index = hooks.cursor++;
+    const value = index < hooks.values.length ? hooks.values[index] as T : initial;
+    const setter = vi.fn();
+    hooks.setters[index] = setter;
+    return [value, setter, vi.fn()] as const;
+  },
+}));
+
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   return {

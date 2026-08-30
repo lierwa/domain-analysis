@@ -1,6 +1,77 @@
 import { describe, expect, it } from "vitest";
 
-import { categoryInterviewRuntimeOutputSchema, interviewTimelineEventSchema } from "../src";
+import {
+  captureTaskMaterializationSchema,
+  captureTaskRequiresImages,
+  categoryInterviewRuntimeOutputSchema,
+  interviewTimelineEventSchema,
+  modelCoveragePolicySchema,
+} from "../src";
+
+describe("Capture Task 图片范围", () => {
+  it("以明确纳入的图集主题为正向事实，不把局部图片排除误判成全部排除", () => {
+    expect(captureTaskRequiresImages({
+      generalTopics: [],
+      categoryTopics: ["图集明确列出的全部不同商品原图"],
+      excludedContent: ["未在 ZOL 图集中明确列出的图片"],
+    } as never)).toBe(true);
+    expect(captureTaskRequiresImages({
+      generalTopics: ["产品绑定的全部来源原图"],
+      categoryTopics: ["多门款结构"],
+      excludedContent: [],
+    } as never)).toBe(true);
+    expect(captureTaskRequiresImages({
+      generalTopics: [],
+      categoryTopics: ["规格参数"],
+      excludedContent: ["未在 ZOL 图集中明确列出的图片"],
+    } as never)).toBe(false);
+  });
+});
+
+describe("Capture Task 每品牌型号覆盖", () => {
+  it("把已确认的排行榜、品牌批次和型号上限显式写入新任务", () => {
+    const content = captureTaskMaterializationSchema.parse({
+      originalRequest: "调查冰箱门类",
+      category: { code: "refrigerator", label: "冰箱" },
+      marketScope: "中国大陆公开市场",
+      brandSelectionPolicy: { mode: "source_brand_ranking", scoreField: "comprehensive_score",
+        minimumScoreExclusive: 0, maxBrands: 20 },
+      executionCadencePolicy: { mode: "fixed", brandBatchSize: 3, modelsPerBrandPerRound: 10 },
+      modelCoveragePolicy: { mode: "max_models_per_brand", maxModelsPerBrand: 20 },
+      generalTopics: ["品牌、型号、参数与来源原图"], categoryTopics: [],
+      sourceCandidates: [], excludedContent: [],
+    });
+
+    expect(content).toMatchObject({
+      brandSelectionPolicy: { minimumScoreExclusive: 0, maxBrands: 20 },
+      executionCadencePolicy: { brandBatchSize: 3, modelsPerBrandPerRound: 10 },
+      modelCoveragePolicy: { maxModelsPerBrand: 20 },
+    });
+  });
+
+  it("接受负责人确认的每品牌 20 个型号上限", () => {
+    expect(modelCoveragePolicySchema.parse({
+      mode: "max_models_per_brand",
+      maxModelsPerBrand: 20,
+    })).toEqual({ mode: "max_models_per_brand", maxModelsPerBrand: 20 });
+  });
+
+  it("拒绝无效上限，并要求新任务结构化时显式携带覆盖策略", () => {
+    expect(modelCoveragePolicySchema.safeParse({
+      mode: "max_models_per_brand",
+      maxModelsPerBrand: 0,
+    }).success).toBe(false);
+    expect(captureTaskMaterializationSchema.safeParse({
+      originalRequest: "抓冰箱",
+      category: { code: "refrigerator", label: "冰箱" },
+      marketScope: "中国大陆当前在售家用冰箱",
+      generalTopics: ["品牌与型号"],
+      categoryTopics: [],
+      sourceCandidates: [],
+      excludedContent: [],
+    }).success).toBe(false);
+  });
+});
 
 describe("抓取任务对话契约", () => {
   it("即使换 key 也拒绝把来源平台选择伪装成负责人问题", () => {

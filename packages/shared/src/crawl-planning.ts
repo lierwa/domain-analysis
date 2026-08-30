@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { sourceAccessStates, sourceKinds } from "./capture-task";
+import { interviewMessageTimelinePartSchema, interviewTurnActivitySchema } from "./category-interview";
 
 const idSchema = z.string().min(1).max(240);
 const keySchema = z.string().regex(/^[a-z][a-z0-9_.-]+$/);
@@ -22,8 +23,17 @@ export const captureQuantitySchema = z.discriminatedUnion("mode", [
 
 const providerConfigurationSchema = z.array(z.object({
   key: keySchema,
-  value: z.union([z.string(), z.number(), z.boolean(), z.array(boundedText).max(30)]),
+  value: z.union([z.string(), z.number(), z.boolean(), z.array(boundedText).max(500)]),
 }).strict()).max(50);
+
+const assetAccessPolicySchema = z.object({
+  maxRequestsPerMinute: z.number().int().positive(),
+  minimumIntervalMs: z.number().int().positive(),
+  concurrency: z.number().int().positive().max(32),
+  queueCapacity: z.number().int().positive().max(10_000),
+}).strict().refine((policy) => policy.queueCapacity >= policy.concurrency, {
+  message: "附件队列容量不能小于并发数", path: ["queueCapacity"],
+});
 
 export const crawlPlanTargetSchema = z.object({
   key: keySchema,
@@ -45,7 +55,7 @@ export const crawlPlanSourceSchema = z.object({
   sourceKind: z.enum(sourceKinds),
   sourceCandidateIds: z.array(idSchema).max(100).default([]),
   role: z.string().trim().min(1).max(1_000),
-  entryUrls: z.array(z.string().url().max(2_048)).min(1).max(50),
+  entryUrls: z.array(z.string().url().max(2_048)).min(1).max(500),
   provider: z.object({
     key: keySchema,
     version: idSchema,
@@ -57,6 +67,7 @@ export const crawlPlanSourceSchema = z.object({
     maxRequestsPerMinute: z.number().int().positive(),
     minimumIntervalMs: z.number().int().positive(),
     maximumRunMs: z.number().int().positive(),
+    assetPolicy: assetAccessPolicySchema.optional(),
   }).strict(),
   stopPolicy: z.object({
     requestBudget: z.number().int().positive(),
@@ -78,18 +89,25 @@ export const crawlPlanSourceSchema = z.object({
 export const crawlPlanContentSchema = z.object({
   summary: z.string().trim().min(1).max(4_000),
   excludedContent: z.array(boundedText).max(100),
-  sources: z.array(crawlPlanSourceSchema).min(1).max(100),
+  // WHY：规划必须能够持久化“榜单不可验证”的受阻草稿；空来源只允许与明确的计划级阻塞同时存在。
+  sources: z.array(crawlPlanSourceSchema).max(100),
+  planningBlockers: z.array(boundedText).max(100).default([]),
   researchAudit: z.unknown().optional(),
   executionChecklistVersion: z.number().int().positive().optional(),
   taskId: idSchema,
   taskRevision: z.number().int().positive(),
-}).strict();
+}).strict().superRefine((content, context) => {
+  if (content.sources.length === 0 && content.planningBlockers.length === 0) {
+    context.addIssue({ code: "custom", path: ["sources"], message: "没有执行来源的计划必须记录计划级阻塞" });
+  }
+});
 
 export const crawlPlanSchema = z.object({
   id: idSchema,
   taskId: idSchema,
   taskRevision: z.number().int().positive(),
-  planningRunId: idSchema,
+  // WHY：确定性来源计划可以由负责人在 Workbench 直接确认，不需要伪造一次 LLM planning run。
+  planningRunId: idSchema.optional(),
   version: z.number().int().positive(),
   status: z.enum(["draft", "confirmed", "superseded"]),
   contentHash: hashSchema,
@@ -97,6 +115,151 @@ export const crawlPlanSchema = z.object({
   createdAt: isoDateSchema,
   confirmedAt: isoDateSchema.optional(),
 }).strict();
+
+const brandCatalogEntrySchema = z.object({
+  key: keySchema,
+  name: z.string().trim().min(1).max(300),
+  catalogUrl: z.string().url().max(2_048),
+}).strict();
+
+const brandRankingFields = {
+  kind: z.literal("brand_ranking_selection"),
+  categoryUrl: z.string().url().max(2_048),
+  categorySlug: keySchema,
+  evidenceUrls: z.array(z.string().url().max(2_048)).min(1).max(100),
+  observedAt: isoDateSchema,
+  selectionPolicy: z.object({
+    scoreField: z.literal("comprehensive_score"),
+    minimumScoreExclusive: z.number().finite(),
+    maxBrands: z.number().int().positive().max(500),
+  }).strict(),
+};
+
+const rankedBrandRowSchema = z.object({
+  rank: z.number().int().positive(),
+  name: z.string().trim().min(1).max(300),
+  comprehensiveScore: z.number().finite(),
+  key: keySchema.optional(),
+  catalogUrl: z.string().url().max(2_048).optional(),
+  blockageReason: boundedText.optional(),
+}).strict().superRefine((row, context) => {
+  const mapped = Boolean(row.key && row.catalogUrl);
+  if (!mapped && !row.blockageReason) {
+    context.addIssue({ code: "custom", path: ["blockageReason"], message: "未映射的榜单品牌必须记录原因" });
+  }
+  if ((row.key && !row.catalogUrl) || (!row.key && row.catalogUrl)) {
+    context.addIssue({ code: "custom", path: ["catalogUrl"], message: "品牌 key 与目录 URL 必须同时存在" });
+  }
+});
+
+const verifiedBrandRankingAuditSchema = z.object({
+  ...brandRankingFields,
+  rankingStatus: z.literal("verified"),
+  rankingUrl: z.string().url().max(2_048),
+  rankingRows: z.array(rankedBrandRowSchema).min(1).max(500),
+  executionBrands: z.array(brandCatalogEntrySchema).max(500),
+  blockedSelectedBrands: z.array(z.object({
+    rank: z.number().int().positive(),
+    name: z.string().trim().min(1).max(300),
+    reason: boundedText,
+  }).strict()).max(500),
+  brandBatchSize: z.number().int().positive().max(100),
+  modelsPerBrandPerRound: z.number().int().positive().max(100),
+  maxModelsPerBrand: z.number().int().positive().max(100),
+  estimatedModelCapacity: z.number().int().nonnegative(),
+  requestBudget: z.number().int().positive(),
+  maximumRunMs: z.number().int().positive(),
+  budgetRationale: boundedText,
+}).strict().superRefine((audit, context) => {
+  const ranks = audit.rankingRows.map((row) => row.rank);
+  if (new Set(ranks).size !== ranks.length
+    || ranks.some((rank, index) => index > 0 && rank <= ranks[index - 1]!)) {
+    context.addIssue({ code: "custom", path: ["rankingRows"], message: "榜单名次必须唯一并按升序保存" });
+  }
+  const selectedRows = audit.rankingRows
+    .filter((row) => row.comprehensiveScore > audit.selectionPolicy.minimumScoreExclusive)
+    .slice(0, audit.selectionPolicy.maxBrands);
+  const expectedExecution = selectedRows.filter((row) => row.key && row.catalogUrl)
+    .map((row) => ({ key: row.key!, name: row.name, catalogUrl: row.catalogUrl! }));
+  if (JSON.stringify(audit.executionBrands) !== JSON.stringify(expectedExecution)) {
+    context.addIssue({ code: "custom", path: ["executionBrands"], message: "执行品牌必须由榜单、评分阈值和品牌上限确定性推导" });
+  }
+  const expectedBlocked = selectedRows.filter((row) => !row.key || !row.catalogUrl)
+    .map((row) => ({ rank: row.rank, name: row.name, reason: row.blockageReason! }));
+  if (JSON.stringify(audit.blockedSelectedBrands) !== JSON.stringify(expectedBlocked)) {
+    context.addIssue({ code: "custom", path: ["blockedSelectedBrands"], message: "受阻执行品牌必须与入选榜单行一致" });
+  }
+  if (audit.estimatedModelCapacity !== audit.executionBrands.length * audit.maxModelsPerBrand) {
+    context.addIssue({ code: "custom", path: ["estimatedModelCapacity"], message: "型号容量必须由执行品牌数和每品牌上限推导" });
+  }
+});
+
+const unavailableBrandRankingAuditSchema = z.object({
+  ...brandRankingFields,
+  rankingStatus: z.literal("unavailable"),
+  rankingEvidenceUrls: z.array(z.string().url().max(2_048)).min(1).max(100),
+  rankingReason: boundedText,
+}).strict();
+
+export const brandRankingPlanningAuditSchema = z.union([
+  verifiedBrandRankingAuditSchema,
+  unavailableBrandRankingAuditSchema,
+]);
+
+export const crawlPlanningRunSchema = z.object({
+  id: idSchema,
+  taskId: idSchema,
+  taskRevision: z.number().int().positive(),
+  instruction: z.string().trim().min(1).max(10_000).optional(),
+  status: z.enum(["running", "completed", "interrupted", "failed"]),
+  timelineParts: z.array(interviewMessageTimelinePartSchema).max(200),
+  planId: idSchema.optional(),
+  error: z.string().trim().min(1).max(2_000).optional(),
+  startedAt: isoDateSchema,
+  finishedAt: isoDateSchema.optional(),
+}).strict().superRefine((run, context) => {
+  if (run.status !== "running" && !run.finishedAt) {
+    context.addIssue({ code: "custom", path: ["finishedAt"], message: "已结束规划必须记录结束时间" });
+  }
+  if (run.status === "completed" && !run.planId) {
+    context.addIssue({ code: "custom", path: ["planId"], message: "已完成规划必须关联计划草稿" });
+  }
+  if (run.status === "failed" && !run.error) {
+    context.addIssue({ code: "custom", path: ["error"], message: "失败规划必须记录公开错误" });
+  }
+});
+
+export const crawlPlanningViewSchema = z.object({
+  taskId: idSchema,
+  taskRevision: z.number().int().positive(),
+  runs: z.array(crawlPlanningRunSchema),
+  plans: z.array(crawlPlanSchema),
+}).strict();
+
+export const crawlPlanningRunRequestSchema = z.object({
+  expectedTaskRevision: z.number().int().positive(),
+  instruction: z.string().trim().min(1).max(10_000).optional(),
+}).strict();
+
+export const confirmCrawlPlanSchema = z.object({
+  expectedTaskRevision: z.number().int().positive(),
+}).strict();
+
+const planningEventBase = { taskId: idSchema, runId: idSchema };
+export const crawlPlanningEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("run.started"), ...planningEventBase }).strict(),
+  z.object({ type: z.literal("run.activity"), ...planningEventBase,
+    activity: interviewTurnActivitySchema }).strict(),
+  z.object({ type: z.literal("assistant.delta"), ...planningEventBase, delta: z.string().min(1) }).strict(),
+  z.object({ type: z.literal("run.completed"), ...planningEventBase,
+    run: crawlPlanningRunSchema, plan: crawlPlanSchema }).strict(),
+  z.object({ type: z.literal("run.interrupted"), ...planningEventBase,
+    run: crawlPlanningRunSchema }).strict(),
+  z.object({ type: z.literal("run.failed"), ...planningEventBase,
+    run: crawlPlanningRunSchema, error: z.string().min(1).max(2_000) }).strict(),
+  z.object({ type: z.literal("stream.failed"), taskId: idSchema,
+    error: z.string().min(1).max(2_000) }).strict(),
+]);
 
 export const sourceExecutionPlanRequestSchema = z.object({
   expectedTaskRevision: z.number().int().positive(),
@@ -118,4 +281,8 @@ export type CrawlPlanTarget = z.infer<typeof crawlPlanTargetSchema>;
 export type CrawlPlanSource = z.infer<typeof crawlPlanSourceSchema>;
 export type CrawlPlanContent = z.infer<typeof crawlPlanContentSchema>;
 export type CrawlPlan = z.infer<typeof crawlPlanSchema>;
+export type BrandRankingPlanningAudit = z.infer<typeof brandRankingPlanningAuditSchema>;
+export type CrawlPlanningRun = z.infer<typeof crawlPlanningRunSchema>;
+export type CrawlPlanningView = z.infer<typeof crawlPlanningViewSchema>;
+export type CrawlPlanningEvent = z.infer<typeof crawlPlanningEventSchema>;
 export type SourcePreparation = z.infer<typeof sourcePreparationSchema>;

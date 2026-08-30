@@ -77,7 +77,7 @@ export function CategoryInterviewTimeline({
   const actionErrorAlreadyVisible = turns.actionError
     ? isActionErrorAlreadyVisible(messages, turns.actionError)
     : false;
-  // WHY：历史坏数据可能同时含未确认问题和草稿；页面必须以真实 Decision 状态为准，不能继续展示可确认草稿。
+  // WHY：持久化记录可能同时含未确认问题和草稿；页面必须以真实 Decision 状态决定是否展示确认动作。
   const draftTask = turns.isRunning || view?.session.phase !== "task_ready" || hasOpenOwnerDecision
     ? undefined : [...(view?.taskDrafts ?? [])].reverse()
     .find((draft) => draft.status === "draft");

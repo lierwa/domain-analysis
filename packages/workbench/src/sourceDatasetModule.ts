@@ -83,6 +83,8 @@ export interface SourceDatasetModule extends SourceRequestAdmissionPort {
   getBatch(batchId: string): Promise<SourceCollectionBatch | null>;
   getBatchByCommandId(commandId: string): Promise<SourceCollectionBatch | null>;
   listBatchRuns(batchId: string): Promise<SourceCollectionRun[]>;
+  reopenBatch(batchId: string): Promise<SourceCollectionBatch>;
+  listCompletedCaptureWorkKeys(input: { runId: string; captureUnit: string }): Promise<string[]>;
   prepareRunForResume(runId: string): Promise<SourceCollectionRun>;
   startBatch(input: { taskId: string; planId: string; planVersion: number; taskRevision: number;
     plannedSourceCount: number; commandId?: string }): Promise<SourceCollectionBatch>;
@@ -91,11 +93,11 @@ export interface SourceDatasetModule extends SourceRequestAdmissionPort {
   startRun(input: { taskId: string; planId: string; planVersion: number; sourceKey: string;
     providerKey: string; providerVersion: string; requestBudget: number;
     accessPolicy: SourceAccessPolicy; targetKeys: string[];
-    batchId?: string; resumedFromRunId?: string }): Promise<SourceCollectionRun>;
+    executionCommandId?: string; batchId?: string; resumedFromRunId?: string }): Promise<SourceCollectionRun>;
   startTarget(input: { runId: string; targetKey: string }): Promise<SourceCollectionTargetRun>;
-  commitSnapshot(input: SnapshotWrite): Promise<SourceDatasetRunView>;
+  commitSnapshot(input: SnapshotWrite): Promise<SourceCollectionRun>;
   finishTarget(input: { runId: string; targetKey: string; status: "completed" | "failed" | "stopped";
-    terminationReason?: string }): Promise<SourceCollectionTargetRun>;
+    observedUnitCount?: number; terminationReason?: string }): Promise<SourceCollectionTargetRun>;
   finishRun(input: { runId: string; status: "completed" | "failed" | "stopped";
     terminationReason?: string; failureCategory?: SourceExecutionFailureCategory }): Promise<SourceCollectionRun>;
 }
@@ -137,6 +139,8 @@ export function createSourceDatasetModule(
     listBatchRuns: async (batchId) => (await db.select().from(sourceCollectionRuns)
       .where(eq(sourceCollectionRuns.executionBatchId, batchId))
       .orderBy(asc(sourceCollectionRuns.startedAt))).map(normalizeRun),
+    reopenBatch: (batchId) => reopenBatch(db, batchId),
+    listCompletedCaptureWorkKeys: (input) => listCompletedCaptureWorkKeys(db, input),
     prepareRunForResume: (runId) => prepareSourceRunForResume(db, runId),
     startBatch: (input) => startBatch(db, input),
     finishBatch: (input) => finishBatch(db, input),
@@ -188,6 +192,7 @@ async function startRun(
     throw new SourceDatasetError("invalid_state", "来源运行必须包含非空且唯一的 target key");
   }
   const row = { id: `source-run-${randomUUID()}`, taskId: input.taskId,
+    executionCommandId: input.executionCommandId,
     executionBatchId: input.batchId,
     resumedFromRunId: input.resumedFromRunId,
     sourceCollectionPlanId: input.planId, sourceCollectionPlanSourceKey: input.sourceKey,
@@ -222,16 +227,23 @@ async function validateAndReleaseResume(
     || previous.requestBudget !== input.requestBudget) {
     throw new SourceDatasetError("invalid_state", "只能从同一计划、来源、Provider 和预算的已停止运行显式继续");
   }
-  const attempts = await transaction.select({ gateKey: sourceRequestAttempts.gateKey })
-    .from(sourceRequestAttempts).where(eq(sourceRequestAttempts.runId, previous.id));
-  const gateKeys = [...new Set(attempts.map((attempt) => attempt.gateKey))];
-  if (gateKeys.length === 0) return;
-  // WHY：人工继续只解除持久开路；冷却时间和窗口计数继续保留，不能借恢复绕过频控。
+  // WHY：HTML 与图片的限制共享 Provider 熔断；人工继续必须成组解除同一 Provider 版本的所有 lane，
+  // 但冷却时间和窗口计数继续保留，不能借恢复绕过频控。
   await transaction.update(sourceAccessGateStates).set({ circuitState: "closed",
     blockedAt: null, blockedReason: null, manualResumeRequired: false,
     updatedAt: new Date().toISOString() })
-    .where(and(inArray(sourceAccessGateStates.key, gateKeys),
+    .where(and(eq(sourceAccessGateStates.providerKey, input.providerKey),
+      eq(sourceAccessGateStates.providerVersion, input.providerVersion),
       eq(sourceAccessGateStates.manualResumeRequired, true)));
+}
+
+async function reopenBatch(db: WorkbenchDb, batchId: string) {
+  const [row] = await db.update(sourceCollectionBatches).set({ status: "running",
+    recoveryState: "running", finishedAt: null, terminationReason: null })
+    .where(and(eq(sourceCollectionBatches.id, batchId),
+      inArray(sourceCollectionBatches.status, ["stopped", "failed", "partial"]))).returning();
+  if (!row) throw new SourceDatasetError("invalid_state", "只有未完成的终态批次可以继续");
+  return normalizeBatch(row);
 }
 
 async function startTarget(db: WorkbenchDb, input: { runId: string; targetKey: string }) {
@@ -248,29 +260,68 @@ async function finishTarget(
   db: WorkbenchDb,
   input: Parameters<SourceDatasetModule["finishTarget"]>[0],
 ) {
-  const row = await db.query.sourceCollectionTargetRuns.findFirst({ where: and(
-    eq(sourceCollectionTargetRuns.runId, input.runId), eq(sourceCollectionTargetRuns.targetKey, input.targetKey),
-  ) });
-  if (!row || (row.status !== "running" && !(row.status === "pending" && input.status === "stopped"))) {
-    throw new SourceDatasetError("invalid_state", `target 不存在或已经结束：${input.targetKey}`);
+  if (input.observedUnitCount != null
+    && (!Number.isInteger(input.observedUnitCount) || input.observedUnitCount < 0)) {
+    throw new SourceDatasetError("invalid_state", "target observed 数量必须是非负整数");
   }
-  if (input.status === "completed") {
-    // WHY：快照数无法表达动态发现队列是否耗尽；target 只能由持久工作账本证明完整完成。
-    const incompleteWork = await db.select({ id: sourceCaptureWorkItems.id }).from(sourceCaptureWorkItems)
-      .where(and(eq(sourceCaptureWorkItems.runId, input.runId),
-        eq(sourceCaptureWorkItems.targetKey, input.targetKey), ne(sourceCaptureWorkItems.status, "completed")))
-      .limit(1);
-    if (incompleteWork.length > 0) {
-      throw new SourceDatasetError("invalid_state", `target 仍有未完成捕获工作：${input.targetKey}`);
+  if (input.status === "completed" && input.observedUnitCount == null) {
+    throw new SourceDatasetError("invalid_state", "完成 target 必须持久化业务单元数量");
+  }
+  return db.transaction(async (transaction) => {
+    const row = await transaction.query.sourceCollectionTargetRuns.findFirst({ where: and(
+      eq(sourceCollectionTargetRuns.runId, input.runId), eq(sourceCollectionTargetRuns.targetKey, input.targetKey),
+    ) });
+    if (!row || (row.status !== "running" && !(row.status === "pending" && input.status === "stopped"))) {
+      throw new SourceDatasetError("invalid_state", `target 不存在或已经结束：${input.targetKey}`);
     }
-  }
-  await db.update(sourceCollectionTargetRuns).set({ status: input.status,
-    finishedAt: new Date().toISOString(), terminationReason: input.terminationReason })
-    .where(eq(sourceCollectionTargetRuns.id, row.id));
-  const updated = await db.query.sourceCollectionTargetRuns.findFirst({
-    where: eq(sourceCollectionTargetRuns.id, row.id),
+    if (input.status === "completed") {
+      // WHY：快照数无法表达动态发现队列是否耗尽；target 只能由持久工作账本证明完整完成。
+      const incompleteWork = await transaction.select({ id: sourceCaptureWorkItems.id })
+        .from(sourceCaptureWorkItems).where(and(eq(sourceCaptureWorkItems.runId, input.runId),
+          eq(sourceCaptureWorkItems.targetKey, input.targetKey), ne(sourceCaptureWorkItems.status, "completed")))
+        .limit(1);
+      if (incompleteWork.length > 0) {
+        throw new SourceDatasetError("invalid_state", `target 仍有未完成捕获工作：${input.targetKey}`);
+      }
+    } else {
+      const finishedAt = new Date().toISOString();
+      // WHY：target 已经失败或停止后，其工作项不可能继续执行；两者必须在同一事务收口，
+      // 否则历史失败 Run 会继续显示伪造的 running 状态并破坏恢复对账。
+      await transaction.update(sourceCaptureWorkItems).set({ status: input.status, finishedAt,
+        terminationReason: input.terminationReason }).where(and(eq(sourceCaptureWorkItems.runId, input.runId),
+        eq(sourceCaptureWorkItems.targetKey, input.targetKey),
+        inArray(sourceCaptureWorkItems.status, ["pending", "running"])));
+    }
+    await transaction.update(sourceCollectionTargetRuns).set({ status: input.status,
+      observedUnitCount: input.observedUnitCount,
+      finishedAt: new Date().toISOString(), terminationReason: input.terminationReason })
+      .where(eq(sourceCollectionTargetRuns.id, row.id));
+    const updated = await transaction.query.sourceCollectionTargetRuns.findFirst({
+      where: eq(sourceCollectionTargetRuns.id, row.id),
+    });
+    return normalizeTarget(updated!);
   });
-  return normalizeTarget(updated!);
+}
+
+async function listCompletedCaptureWorkKeys(
+  db: WorkbenchDb,
+  input: Parameters<SourceDatasetModule["listCompletedCaptureWorkKeys"]>[0],
+) {
+  const runIds: string[] = [];
+  let runId: string | null | undefined = input.runId;
+  while (runId) {
+    if (runIds.includes(runId)) throw new SourceDatasetError("invalid_state", "Source Run 恢复链形成循环");
+    const run: typeof sourceCollectionRuns.$inferSelect | undefined =
+      await db.query.sourceCollectionRuns.findFirst({ where: eq(sourceCollectionRuns.id, runId) });
+    if (!run) throw new SourceDatasetError("run_not_found", `来源运行不存在：${runId}`);
+    runIds.push(run.id);
+    runId = run.resumedFromRunId;
+  }
+  const rows = await db.select({ workKey: sourceCaptureWorkItems.workKey }).from(sourceCaptureWorkItems)
+    .where(and(inArray(sourceCaptureWorkItems.runId, runIds),
+      eq(sourceCaptureWorkItems.captureUnit, input.captureUnit),
+      eq(sourceCaptureWorkItems.status, "completed")));
+  return [...new Set(rows.map((row) => row.workKey))];
 }
 
 async function finishRun(db: WorkbenchDb, input: Parameters<SourceDatasetModule["finishRun"]>[0]) {
@@ -347,7 +398,12 @@ async function commitSnapshot(db: WorkbenchDb, store: SourceAssetStore, raw: Sna
     const counterOutcome = sourceSnapshotOutcome(input.observation);
     await incrementCounters(transaction, run.id, target.id, counterOutcome, prepared.length);
   });
-  return (await loadRun(db, input.runId))!;
+  const updatedRun = await db.query.sourceCollectionRuns.findFirst({
+    where: eq(sourceCollectionRuns.id, input.runId),
+  });
+  if (!updatedRun) throw new SourceDatasetError("run_not_found", `来源运行不存在：${input.runId}`);
+  // WHY：提交热路径只需要更新后的计数；完整 Run View 包含全部原始快照，逐条重载会形成 O(n²) 内存放大。
+  return normalizeRun(updatedRun);
 }
 
 function validateInlinePayloadHash(input: SourceSnapshotCommit) {

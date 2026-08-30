@@ -60,7 +60,9 @@ describe("PacedAccessGate local HTTP fixture", () => {
     await gate.onIdle();
 
     const elapsed = fixture.timestamps[1]! - fixture.timestamps[0]!;
-    expect(elapsed).toBeGreaterThanOrEqual(110);
+    // WHY：本地服务端时间戳晚于客户端调度起点，Windows 并行测试下可吞掉约 10–15ms；
+    // 这里保护“接近 120ms 且没有叠成 240ms”的业务不变量，不把 1ms 采样差当成限速失败。
+    expect(elapsed).toBeGreaterThanOrEqual(100);
     expect(elapsed).toBeLessThan(160);
   });
 

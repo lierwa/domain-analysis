@@ -1,14 +1,20 @@
 import {
   captureTaskSchema,
+  crawlPlanningEventSchema,
+  crawlPlanningRunRequestSchema,
+  crawlPlanningViewSchema,
   categoryInterviewViewSchema,
   interviewTimelineEventSchema,
   interviewTurnRequestSchema,
   sourceDatasetTaskViewSchema,
   sourceDatasetRecordPageSchema,
   sourceDatasetRunViewSchema,
+  sourceExecutionAcceptanceSchema,
+  sourcePreparationSchema,
   taskModelSelectionSchema,
   type CaptureTask,
   type CategoryInterviewView,
+  type CrawlPlanningEvent,
   type InterviewSession,
   type InterviewTimelineEvent,
   type InterviewTurnRequest,
@@ -163,6 +169,66 @@ export function sourceRunExportUrl(taskId: string, runId: string, format: "jsonl
   return `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs/${encodeURIComponent(runId)}/export?format=${format}`;
 }
 
-export function sourceAssetUrl(taskId: string, runId: string, assetId: string) {
-  return `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs/${encodeURIComponent(runId)}/assets/${encodeURIComponent(assetId)}`;
+export function sourceAssetUrl(taskId: string, runId: string, assetId: string, disposition: "inline" | "attachment" = "attachment") {
+  return `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs/${encodeURIComponent(runId)}/assets/${encodeURIComponent(assetId)}?disposition=${disposition}`;
+}
+
+export async function fetchCrawlPlanning(taskId: string) {
+  const data = await request<{ item: unknown }>(
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-planning`,
+  );
+  return crawlPlanningViewSchema.parse(data.item);
+}
+
+export async function streamCrawlPlanningRun(
+  taskId: string,
+  expectedTaskRevision: number,
+  onEvent: (event: CrawlPlanningEvent) => void,
+  signal?: AbortSignal,
+) {
+  const body = crawlPlanningRunRequestSchema.parse({ expectedTaskRevision });
+  const response = await fetch(`/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-planning/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok || !response.body) throw await apiErrorFromResponse(response);
+  const parser = createParser({
+    onEvent: (event) => onEvent(crawlPlanningEventSchema.parse(JSON.parse(event.data))),
+  });
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    parser.feed(decoder.decode(value, { stream: true }));
+  }
+  parser.feed(decoder.decode());
+}
+
+export async function confirmCrawlPlan(taskId: string, planId: string, expectedTaskRevision: number) {
+  const data = await request<{ item: unknown }>(
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-plans/${encodeURIComponent(planId)}/confirm`,
+    { method: "POST", body: JSON.stringify({ expectedTaskRevision }) },
+  );
+  return crawlPlanningViewSchema.parse(data.item);
+}
+
+export async function prepareSourcePlan(taskId: string, planId: string,
+  expectedTaskRevision: number, expectedPlanVersion: number) {
+  const data = await request<{ item: unknown }>(
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-plans/${encodeURIComponent(planId)}/prepare`,
+    { method: "POST", body: JSON.stringify({ expectedTaskRevision, expectedPlanVersion }) },
+  );
+  return sourcePreparationSchema.parse(data.item);
+}
+
+export async function startSourcePlan(taskId: string, planId: string,
+  expectedTaskRevision: number, expectedPlanVersion: number) {
+  const data = await request<{ item: unknown }>(
+    `/api/capture-tasks/${encodeURIComponent(taskId)}/crawl-plans/${encodeURIComponent(planId)}/start`,
+    { method: "POST", body: JSON.stringify({ expectedTaskRevision, expectedPlanVersion }) },
+  );
+  return sourceExecutionAcceptanceSchema.parse(data.item);
 }

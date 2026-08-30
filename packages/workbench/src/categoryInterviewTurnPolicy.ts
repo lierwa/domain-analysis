@@ -9,9 +9,6 @@ import {
 } from "@domain-analysis/shared";
 
 import { CategoryInterviewError } from "./categoryInterviewRecords";
-import {
-  applyProfessionalShoppingGuideDefaults,
-} from "./captureTaskReadiness";
 
 export interface InterviewDecisionChange {
   proposed: InterviewDecision;
@@ -78,7 +75,7 @@ export function materializeCaptureTaskContent(
   materialization: CaptureTaskMaterialization,
   timestamp: string,
 ) {
-  const content = applyProfessionalShoppingGuideDefaults(captureTaskContentSchema.parse({
+  const content = captureTaskContentSchema.parse({
     ...materialization,
     unresolvedItems: view.unresolvedItems.filter((item) => item.status === "open").map((item) => ({
       key: item.key,
@@ -91,7 +88,7 @@ export function materializeCaptureTaskContent(
       // WHY：只有确认后的正式结构化阶段才创建候选来源，观察时间仍只能由 Workbench 盖章。
       observedAt: timestamp,
     })),
-  }));
+  });
   return content;
 }
 

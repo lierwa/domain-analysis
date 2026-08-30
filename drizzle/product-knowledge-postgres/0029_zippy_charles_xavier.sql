@@ -1,0 +1,2 @@
+ALTER TABLE "workbench"."source_collection_runs" ADD COLUMN "execution_command_id" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "source_collection_run_command_uq" ON "workbench"."source_collection_runs" USING btree ("execution_command_id") WHERE "workbench"."source_collection_runs"."execution_command_id" is not null;

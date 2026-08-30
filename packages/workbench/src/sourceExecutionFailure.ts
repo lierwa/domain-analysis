@@ -13,18 +13,14 @@ export function classifySourceExecutionFailure(error: unknown) {
     return "plan_revision_required" as const;
   }
   if (/内容验收未达标|target 数量未对账/i.test(message)) return "content_not_accepted" as const;
-  if (/ECONNRESET|EAI_AGAIN|ETIMEDOUT|HTTP\/2.*internal|socket disconnected|请求超时/i.test(message)) {
+  if (/ECONNRESET|EAI_AGAIN|ETIMEDOUT|HTTP\/2.*internal|socket disconnected|请求超时|可信 DoH 查询失败：DNS status 2|^(?:502|503|504)\s+-\s+/i.test(message)) {
     return "transient_transport" as const;
   }
   return "contract_fault" as const;
 }
 
-export function observationFailureCategory(state: string) {
-  if (state === "login_required" || state === "verification_required" || state === "access_denied") {
-    return "source_restricted" as const;
-  }
-  if (state === "not_found") return "plan_revision_required" as const;
-  return "contract_fault" as const;
+export function isAccessRestrictionObservation(state: string) {
+  return state === "login_required" || state === "verification_required" || state === "access_denied";
 }
 
 function boundedMessage(error: unknown) {

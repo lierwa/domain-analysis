@@ -178,6 +178,7 @@ export const sourceCollectionBatches = workbenchSchema.table("source_collection_
 export const sourceCollectionRuns = workbenchSchema.table("source_collection_runs", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull().references(() => captureTasks.id),
+  executionCommandId: text("execution_command_id"),
   executionBatchId: text("execution_batch_id").references(() => sourceCollectionBatches.id),
   resumedFromRunId: text("resumed_from_run_id")
     .references((): AnyPgColumn => sourceCollectionRuns.id),
@@ -198,6 +199,8 @@ export const sourceCollectionRuns = workbenchSchema.table("source_collection_run
   terminationReason: text("termination_reason"),
   failureCategory: text("failure_category").$type<SourceExecutionFailureCategory>(),
 }, (table) => [
+  uniqueIndex("source_collection_run_command_uq").on(table.executionCommandId)
+    .where(sql`${table.executionCommandId} is not null`),
   uniqueIndex("source_collection_run_resume_uq").on(table.resumedFromRunId),
   index("source_collection_run_task_time_idx").on(table.taskId, table.startedAt),
   index("source_collection_run_batch_idx").on(table.executionBatchId),
@@ -214,6 +217,7 @@ export const sourceCollectionTargetRuns = workbenchSchema.table("source_collecti
   accessibleCount: integer("accessible_count").notNull().default(0),
   failedCount: integer("failed_count").notNull().default(0),
   assetCount: integer("asset_count").notNull().default(0),
+  observedUnitCount: integer("observed_unit_count"),
   startedAt: timestamp("started_at", { mode: "string", withTimezone: true }),
   finishedAt: timestamp("finished_at", { mode: "string", withTimezone: true }),
   terminationReason: text("termination_reason"),

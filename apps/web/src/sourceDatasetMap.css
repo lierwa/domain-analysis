@@ -1,0 +1,492 @@
+.source-map-search {
+  display: flex;
+  height: 2.25rem;
+  min-width: 12rem;
+  max-width: 18rem;
+  flex: 0 1 18rem;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  padding: 0 0.625rem;
+  background: rgb(var(--color-panel) / 0.78);
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.source-map-search:focus-within {
+  border-color: rgb(var(--color-ink) / 0.5);
+  background: rgb(var(--color-surface));
+  box-shadow: inset 0 0 0 1px rgb(var(--color-ink) / 0.08);
+}
+
+.source-map-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+.source-map-search > span {
+  flex: none;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--color-muted));
+}
+
+.source-map-surface-controls {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 20;
+  display: flex;
+  gap: 0.375rem;
+}
+
+.source-map-surface-controls > div {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid rgb(var(--color-line));
+  border-radius: 0.375rem;
+  background: rgb(var(--color-surface) / 0.96);
+  box-shadow: 0 2px 8px rgb(var(--color-ink) / 0.06);
+}
+
+.source-map-surface-controls button {
+  display: inline-flex;
+  height: 2rem;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0 0.5rem;
+  color: rgb(var(--color-muted));
+  font-size: 0.6875rem;
+  font-weight: 600;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.source-map-surface-controls button + button {
+  border-left: 1px solid rgb(var(--color-line));
+}
+
+.source-map-surface-controls button svg {
+  height: 0.8rem;
+  width: 0.8rem;
+  stroke-width: 1.8;
+}
+
+.source-map-surface-controls button:hover,
+.source-map-surface-controls button:focus-visible {
+  background: rgb(var(--color-panel));
+  color: rgb(var(--color-ink));
+  outline: none;
+}
+
+.source-map-surface-controls button.is-active {
+  background: rgb(var(--color-ink));
+  color: rgb(var(--color-surface));
+}
+
+/* WHY：这里是高分叉数据电路，不是表单卡片墙。端口、线和行必须形成同一个视觉锚点。 */
+.source-map-canvas .react-flow {
+  background: rgb(255 255 255);
+  font-family: "SF Pro Text", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+  overscroll-behavior: contain;
+}
+
+.source-map-canvas .react-flow__background {
+  opacity: 0.72;
+}
+
+.source-map-canvas .react-flow__node {
+  cursor: default;
+  outline: none !important;
+}
+
+.source-map-canvas .react-flow__node:focus-visible .source-map-node {
+  border-color: rgb(var(--color-ink));
+  box-shadow: inset 0 0 0 1px rgb(var(--color-ink));
+}
+
+.source-map-node {
+  height: 100%;
+  overflow: visible;
+  border: 1px solid rgb(var(--color-line));
+  border-radius: 0.4rem;
+  background: rgb(var(--color-surface));
+  color: rgb(var(--color-ink));
+  box-shadow: 0 1px 2px rgb(var(--color-ink) / 0.05);
+}
+
+.source-map-node-header {
+  display: flex;
+  min-height: 4.25rem;
+  min-width: 0;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.625rem 0.5rem 0.875rem;
+  background: rgb(var(--color-panel) / 0.64);
+}
+
+.source-map-node--kind-collection .source-map-node-header {
+  background: rgb(15 15 15);
+  color: rgb(255 255 255);
+}
+
+.source-map-node--kind-collection .source-map-node-eyebrow,
+.source-map-node--kind-collection .source-map-node-meta {
+  color: rgb(255 255 255 / 0.64);
+}
+
+.source-map-node--kind-collection .source-map-expand-button {
+  color: rgb(255 255 255 / 0.72);
+}
+
+.source-map-node--kind-collection .source-map-expand-button:hover,
+.source-map-node--kind-collection .source-map-expand-button:focus-visible {
+  background: rgb(255 255 255 / 0.12);
+  color: rgb(255 255 255);
+}
+
+.source-map-node--kind-source .source-map-node-header {
+  background: rgb(var(--color-panel) / 0.78);
+}
+
+.source-map-node--kind-task {
+  border-color: rgb(var(--color-ink));
+  background: rgb(var(--color-ink));
+  color: rgb(var(--color-surface));
+}
+
+.source-map-node--kind-task .source-map-node-eyebrow,
+.source-map-node--kind-task .source-map-node-meta {
+  color: rgb(var(--color-surface) / 0.62);
+}
+
+.source-map-node--selected {
+  border-color: rgb(var(--color-ink));
+  box-shadow: inset 0 0 0 1px rgb(var(--color-ink)), 0 3px 10px rgb(var(--color-ink) / 0.08);
+}
+
+.source-map-node--matched {
+  border-color: rgb(var(--color-warning));
+  box-shadow: inset 0 0 0 1px rgb(var(--color-warning) / 0.25);
+}
+
+.source-map-node-eyebrow {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 0.8rem;
+  letter-spacing: 0.04em;
+  color: rgb(var(--color-muted));
+}
+
+.source-map-node-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.84rem;
+  font-weight: 620;
+  line-height: 1.08rem;
+  letter-spacing: -0.01em;
+}
+
+.source-map-node-meta {
+  margin-top: 0.16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.66rem;
+  line-height: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--color-muted));
+}
+
+.source-map-expand-button {
+  display: inline-flex;
+  height: 2.75rem;
+  width: 2.75rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.25rem;
+  color: rgb(var(--color-muted));
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.source-map-expand-button:hover,
+.source-map-expand-button:focus-visible {
+  background: rgb(var(--color-line) / 0.55);
+  color: rgb(var(--color-ink));
+  outline: none;
+}
+
+.source-map-record-summary,
+.source-map-record-loading,
+.source-map-record-error {
+  display: flex;
+  min-height: 3rem;
+  align-items: center;
+  gap: 0.375rem;
+  border-top: 1px solid rgb(var(--color-line));
+  padding: 0 0.75rem;
+  font-size: 0.6875rem;
+  color: rgb(var(--color-muted));
+}
+
+.source-map-record-error {
+  color: rgb(var(--color-danger));
+}
+
+.source-map-records {
+  display: flex;
+  min-height: 0;
+  height: calc(100% - 4.25rem);
+  flex-direction: column;
+  overflow: hidden;
+  border-top: 1px solid rgb(var(--color-line));
+  border-radius: 0 0 0.35rem 0.35rem;
+  background: rgb(var(--color-surface));
+}
+
+.source-map-record-list {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.source-map-inline-children {
+  height: auto;
+  overflow: visible;
+  border-top: 1px solid rgb(var(--color-line));
+  border-radius: 0 0 0.35rem 0.35rem;
+  background: rgb(var(--color-surface));
+}
+
+.source-map-inline-children > li {
+  position: relative;
+  display: flex;
+  min-height: 2.625rem;
+  align-items: stretch;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.source-map-inline-children > li + li {
+  border-top: 1px solid rgb(var(--color-line));
+}
+
+.source-map-inline-child--active {
+  background: rgb(248 244 236);
+  color: rgb(var(--color-ink));
+}
+
+.source-map-inline-title {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 1rem 0.4rem 0.875rem;
+  text-align: left;
+}
+
+.source-map-inline-title-text,
+.source-map-inline-meta {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-map-inline-title-text {
+  min-width: 0;
+  flex: 1;
+  font-size: 0.77rem;
+  font-weight: 600;
+  line-height: 1rem;
+}
+
+.source-map-inline-meta {
+  max-width: 8rem;
+  flex: none;
+  font-size: 0.64rem;
+  line-height: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--color-muted));
+}
+
+.source-map-inline-title:hover,
+.source-map-inline-title:focus-visible {
+  background: rgb(var(--color-panel));
+  color: rgb(var(--color-ink));
+  outline: none;
+}
+
+.source-map-inline-child--active .source-map-inline-meta {
+  color: rgb(var(--color-muted));
+}
+
+.source-map-inline-child--active .source-map-inline-title:hover,
+.source-map-inline-child--active .source-map-inline-title:focus-visible {
+  background: rgb(242 235 222);
+  color: inherit;
+}
+
+.source-map-record-list > li + li {
+  border-top: 1px solid rgb(var(--color-line));
+}
+
+.source-map-record-row {
+  display: flex;
+  min-height: 2.625rem;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  text-align: left;
+}
+
+.source-map-record-row:hover,
+.source-map-record-row:focus-visible {
+  background: rgb(var(--color-panel));
+  outline: none;
+}
+
+.source-map-record-pager {
+  display: flex;
+  min-height: 3rem;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid rgb(var(--color-line));
+  padding: 0 0.375rem 0 0.75rem;
+  font-size: 0.625rem;
+  color: rgb(var(--color-muted));
+}
+
+.source-map-record-pager button {
+  display: inline-flex;
+  height: 2.5rem;
+  width: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.25rem;
+}
+
+.source-map-record-pager button:hover:not(:disabled),
+.source-map-record-pager button:focus-visible:not(:disabled) {
+  background: rgb(var(--color-panel));
+  color: rgb(var(--color-ink));
+  outline: none;
+}
+
+.source-map-record-pager button:disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+
+.source-map-handle,
+.source-map-row-handle {
+  z-index: 5;
+  height: 0.625rem !important;
+  width: 0.625rem !important;
+  border: 2px solid rgb(var(--color-surface)) !important;
+  background: rgb(var(--color-muted)) !important;
+  opacity: 1;
+  box-shadow: 0 0 0 1px rgb(var(--color-muted) / 0.38);
+}
+
+.source-map-handle--target {
+  left: -1px !important;
+}
+
+.source-map-handle--source,
+.source-map-row-handle {
+  right: -1px !important;
+}
+
+.source-map-row-handle {
+  background: rgb(var(--color-line)) !important;
+}
+
+.source-map-row-handle--active {
+  background: rgb(var(--color-ink)) !important;
+  box-shadow: 0 0 0 1px rgb(var(--color-ink) / 0.36), 0 0 0 4px rgb(var(--color-surface));
+}
+
+.source-map-canvas .source-map-edge .react-flow__edge-path {
+  transition: stroke 160ms ease, stroke-width 160ms ease;
+}
+
+.source-map-canvas .source-map-edge:hover .react-flow__edge-path {
+  stroke: rgb(var(--color-ink) / 0.78) !important;
+  stroke-width: 2px !important;
+}
+
+.source-map-zoom-controls {
+  position: absolute;
+  bottom: 0.75rem;
+  left: 0.75rem;
+  z-index: 20;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid rgb(var(--color-line));
+  border-radius: 0.375rem;
+  background: rgb(var(--color-surface) / 0.96);
+  box-shadow: 0 2px 8px rgb(var(--color-ink) / 0.06);
+}
+
+.source-map-zoom-controls button,
+.source-map-zoom-controls output {
+  display: flex;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid rgb(var(--color-line));
+  color: rgb(var(--color-ink));
+}
+
+.source-map-zoom-controls button {
+  width: 2rem;
+}
+
+.source-map-zoom-controls output {
+  width: 3rem;
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--color-muted));
+}
+
+.source-map-zoom-controls button:last-child {
+  border-right: 0;
+}
+
+.source-map-zoom-controls button:hover,
+.source-map-zoom-controls button:focus-visible {
+  background: rgb(var(--color-panel));
+  outline: none;
+}
+
+.source-map-canvas .react-flow__minimap {
+  overflow: hidden;
+  border: 1px solid rgb(var(--color-line));
+  border-radius: 0.4rem;
+  background: rgb(var(--color-surface));
+  box-shadow: 0 2px 10px rgb(var(--color-ink) / 0.08);
+}
+
+.source-map-canvas .react-flow__minimap-node {
+  fill: rgb(var(--color-muted));
+  stroke: rgb(var(--color-surface));
+}
+
+@media (max-width: 640px) {
+  .source-map-minimap {
+    display: none;
+  }
+}

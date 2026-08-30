@@ -11,7 +11,6 @@ import {
 import {
   sourceAccessGateStateSchema,
   sourceCaptureWorkItemSchema,
-  sourceCollectionRunSchema,
   sourceRequestAttemptSchema,
   type SourceRequestAdmission,
   type SourceRequestAdmissionPort,
@@ -20,6 +19,7 @@ import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 
 import { SourceDatasetError } from "./sourceDatasetError";
 import { acquireSourceExecutionLease } from "./sourceExecutionLease";
+import { normalizeRun } from "./sourceDatasetNormalization";
 
 type WorkbenchTransaction = Parameters<Parameters<WorkbenchDb["transaction"]>[0]>[0];
 
@@ -49,7 +49,7 @@ export async function acquireSourceRunLease(db: WorkbenchDb, runId: string) {
 export async function prepareSourceRunForResume(db: WorkbenchDb, runId: string) {
   const existing = await db.query.sourceCollectionRuns.findFirst({ where: eq(sourceCollectionRuns.id, runId) });
   if (!existing) throw new SourceDatasetError("run_not_found", `来源运行不存在：${runId}`);
-  if (existing.status === "failed" || existing.status === "stopped") return normalizeCollectionRun(existing);
+  if (existing.status === "failed" || existing.status === "stopped") return normalizeRun(existing);
   if (existing.status === "completed") throw new SourceDatasetError("invalid_state", "已完成 Source Run 不能继续");
   const lease = await acquireSourceRunLease(db, runId);
   try {
@@ -80,7 +80,7 @@ export async function prepareSourceRunForResume(db: WorkbenchDb, runId: string) 
         .where(and(eq(sourceCollectionRuns.id, runId),
         eq(sourceCollectionRuns.status, "running"))).returning();
       if (changed.length !== 1) throw new SourceDatasetError("invalid_state", "Source Run 恢复准备失败");
-      return normalizeCollectionRun(changed[0]!);
+      return normalizeRun(changed[0]!);
     });
   } finally { await lease.release(); }
 }
@@ -181,12 +181,17 @@ async function reserveRequest(
 ): Promise<SourceRequestAdmission> {
   validateAdmissionInput(input);
   return db.transaction(async (transaction) => {
+    await lockProvider(transaction, input.providerKey, input.providerVersion);
     await lockGate(transaction, input.gateKey);
     const run = await requireRunningTarget(transaction, input.runId, input.targetKey);
-    const policy = run.accessPolicy;
-    if (policy.kind !== "paced_http" || policy.version !== input.policyVersion
-      || policy.minimumIntervalMs !== input.minimumIntervalMs
-      || policy.maxRequestsPerMinute !== input.maxRequestsPerMinute) {
+    const runPolicy = run.accessPolicy;
+    if (runPolicy.kind !== "paced_http") {
+      throw new SourceDatasetError("invalid_state", "请求准入策略与 Source Run 冻结策略不一致");
+    }
+    const lanePolicy = input.requestLane === "asset" ? runPolicy.assetPolicy : runPolicy;
+    if (!lanePolicy || runPolicy.version !== input.policyVersion
+      || lanePolicy.minimumIntervalMs !== input.minimumIntervalMs
+      || lanePolicy.maxRequestsPerMinute !== input.maxRequestsPerMinute) {
       throw new SourceDatasetError("invalid_state", "请求准入策略与 Source Run 冻结策略不一致");
     }
     const work = await transaction.query.sourceCaptureWorkItems.findFirst({ where: and(
@@ -202,9 +207,14 @@ async function reserveRequest(
     if (!existingGate) throw new SourceDatasetError("invalid_state", `请求 gate 创建失败：${input.gateKey}`);
     const admissionTime = now();
     const gate = await alignGatePolicy(transaction, existingGate, input, admissionTime);
-    if (gate.circuitState === "open") return {
-      status: "blocked", reason: gate.blockedReason ?? "circuit_open",
-      manualResumeRequired: gate.manualResumeRequired,
+    const blockedGate = await transaction.query.sourceAccessGateStates.findFirst({ where: and(
+      eq(sourceAccessGateStates.providerKey, input.providerKey),
+      eq(sourceAccessGateStates.providerVersion, input.providerVersion),
+      eq(sourceAccessGateStates.circuitState, "open"),
+    ) });
+    if (blockedGate || gate.circuitState === "open") return {
+      status: "blocked", reason: blockedGate?.blockedReason ?? gate.blockedReason ?? "circuit_open",
+      manualResumeRequired: blockedGate?.manualResumeRequired ?? gate.manualResumeRequired,
     };
     const lineageIds = await loadRunLineageIds(transaction, run);
     const attempted = await transaction.select({ count: sql<number>`count(*)::int` })
@@ -260,6 +270,11 @@ async function finishRequest(
       where: eq(sourceRequestAttempts.id, input.attemptId),
     });
     if (!existing) throw new SourceDatasetError("invalid_state", `请求尝试不存在：${input.attemptId}`);
+    const gate = await transaction.query.sourceAccessGateStates.findFirst({
+      where: eq(sourceAccessGateStates.key, existing.gateKey),
+    });
+    if (!gate) throw new SourceDatasetError("invalid_state", `请求 gate 不存在：${existing.gateKey}`);
+    await lockProvider(transaction, gate.providerKey, gate.providerVersion);
     await lockGate(transaction, existing.gateKey);
     const finishedAt = now().toISOString();
     const changed = await transaction.update(sourceRequestAttempts).set({ ...input, finishedAt })
@@ -270,7 +285,8 @@ async function finishRequest(
       // WHY：首个明确限制是整个 Provider 身份的停止事实；持久开路防止另一进程或重启后继续打源站。
       await transaction.update(sourceAccessGateStates).set({ circuitState: "open", blockedAt: finishedAt,
         blockedReason: input.restrictionReason, manualResumeRequired: true, updatedAt: finishedAt })
-        .where(eq(sourceAccessGateStates.key, existing.gateKey));
+        .where(and(eq(sourceAccessGateStates.providerKey, gate.providerKey),
+          eq(sourceAccessGateStates.providerVersion, gate.providerVersion)));
     }
     return normalizeAttempt(changed[0]!);
   });
@@ -386,6 +402,13 @@ async function lockGate(transaction: WorkbenchTransaction, gateKey: string) {
   )`);
 }
 
+async function lockProvider(transaction: WorkbenchTransaction, providerKey: string, providerVersion: string) {
+  // WHY：HTML 与图片使用独立节奏 gate，但共享同一个 Provider 身份的访问限制事实。
+  await transaction.execute(sql`select pg_advisory_xact_lock(
+    hashtext('source-access-provider'), hashtext(${`${providerKey}@${providerVersion}`})
+  )`);
+}
+
 function normalizeWorkItem(row: typeof sourceCaptureWorkItems.$inferSelect) {
   return sourceCaptureWorkItemSchema.parse({ ...row,
     parentObjectKey: row.parentObjectKey ?? undefined,
@@ -413,21 +436,6 @@ function normalizeGate(row: typeof sourceAccessGateStates.$inferSelect) {
     blockedAt: row.blockedAt ? normalizeTimestamp(row.blockedAt) : undefined,
     blockedReason: row.blockedReason ?? undefined,
     updatedAt: normalizeTimestamp(row.updatedAt) });
-}
-
-function normalizeCollectionRun(row: typeof sourceCollectionRuns.$inferSelect) {
-  return sourceCollectionRunSchema.parse({ ...row,
-    executionBatchId: row.executionBatchId ?? undefined,
-    resumedFromRunId: row.resumedFromRunId ?? undefined,
-    sourceCollectionPlanId: row.sourceCollectionPlanId ?? undefined,
-    sourceCollectionPlanSourceKey: row.sourceCollectionPlanSourceKey ?? undefined,
-    sourceCollectionPlanVersion: row.sourceCollectionPlanVersion ?? undefined,
-    providerVersion: row.providerVersion ?? undefined,
-    requestBudget: row.requestBudget ?? undefined,
-    startedAt: normalizeTimestamp(row.startedAt),
-    finishedAt: row.finishedAt ? normalizeTimestamp(row.finishedAt) : undefined,
-    terminationReason: row.terminationReason ?? undefined,
-    failureCategory: row.failureCategory ?? undefined });
 }
 
 function normalizeTimestamp(value: string | Date) {

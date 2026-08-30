@@ -35,7 +35,8 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
     await migrateWorkbenchDatabase(databaseUrl!);
     db = createWorkbenchDb(databaseUrl!);
     taskId = `task-request-admission-${randomUUID()}`;
-    const gateKey = `public.web-resource@1.0.0:${randomUUID()}`;
+    const providerVersion = `test-${randomUUID()}`;
+    const gateKey = `public.web-resource@${providerVersion}:${randomUUID()}`;
     const at = "2026-08-21T00:00:00.000Z";
     await insertConfirmedTaskAndPlan(db, taskId, at);
     const module = createSourceDatasetModule(db, {
@@ -43,7 +44,7 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
       assetStore: { async put() { throw new Error("不应写附件"); }, open() { return Readable.from([]); } },
     });
     const run = await module.startRun({ taskId, planId: "plan-request-admission", planVersion: 1,
-      sourceKey: "brand", providerKey: "public.web-resource", providerVersion: "1.0.0", requestBudget: 2,
+      sourceKey: "brand", providerKey: "public.web-resource", providerVersion, requestBudget: 2,
       accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 1,
         minimumIntervalMs: 60_000, jitterMs: { min: 0, max: 0 }, batchSize: 1,
         batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product-detail"] });
@@ -52,7 +53,7 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
       workKey: "product:model-1", captureUnit: "exact_page", expectedUnitCount: 1 });
     await module.startCaptureWorkItem({ runId: run.id, workKey: "product:model-1" });
     const request = { runId: run.id, targetKey: "product-detail", workKey: "product:model-1",
-      gateKey, providerKey: "public.web-resource", providerVersion: "1.0.0", policyVersion: "fixture",
+      gateKey, providerKey: "public.web-resource", providerVersion, policyVersion: "fixture",
       requestedUrl: "https://brand.example/products/model-1", minimumIntervalMs: 60_000,
       maxRequestsPerMinute: 1 };
 
@@ -88,7 +89,7 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
       status: "failed", terminationReason: "rate_limited" });
     await restarted.finishRun({ runId: run.id, status: "failed", terminationReason: "rate_limited" });
     const resumed = await restarted.startRun({ taskId, planId: "plan-request-admission", planVersion: 1,
-      sourceKey: "brand", providerKey: "public.web-resource", providerVersion: "1.0.0", requestBudget: 2,
+      sourceKey: "brand", providerKey: "public.web-resource", providerVersion, requestBudget: 2,
       accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 1,
         minimumIntervalMs: 60_000, jitterMs: { min: 0, max: 0 }, batchSize: 1,
         batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product-detail"],
@@ -122,14 +123,15 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
     await migrateWorkbenchDatabase(databaseUrl!);
     db = createWorkbenchDb(databaseUrl!);
     taskId = `task-policy-upgrade-${randomUUID()}`;
+    const providerVersion = `test-${randomUUID()}`;
     let now = new Date("2026-08-21T00:00:00.000Z");
     await insertConfirmedTaskAndPlan(db, taskId, now.toISOString());
     const module = createSourceDatasetModule(db, { now: () => now,
       assetStore: { async put() { throw new Error("不应写附件"); }, open() { return Readable.from([]); } },
     });
-    const gateKey = `public.web-resource@1.0.0:${randomUUID()}`;
-    const first = await startAdmissionRun(module, taskId, "policy-v1", 60_000, "first");
-    const firstRequest = admissionRequest(first.id, gateKey, "policy-v1", 60_000, "first");
+    const gateKey = `public.web-resource@${providerVersion}:${randomUUID()}`;
+    const first = await startAdmissionRun(module, taskId, providerVersion, "policy-v1", 60_000, "first");
+    const firstRequest = admissionRequest(first.id, gateKey, providerVersion, "policy-v1", 60_000, "first");
     const admitted = await module.reserveRequest(firstRequest);
     expect(admitted.status).toBe("admitted");
     if (admitted.status !== "admitted") throw new Error("首个请求未获准");
@@ -138,13 +140,13 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
     await module.finishCaptureWorkItem({ runId: first.id, workKey: "work-first",
       status: "completed", observedUnitCount: 1 });
     await module.finishTarget({ runId: first.id, targetKey: "product-detail",
-      status: "completed", terminationReason: "target_scope_completed" });
+      status: "completed", observedUnitCount: 1, terminationReason: "target_scope_completed" });
     await module.finishRun({ runId: first.id, status: "completed",
       terminationReason: "plan_scope_completed" });
 
     now = new Date("2026-08-21T00:01:30.000Z");
-    const second = await startAdmissionRun(module, taskId, "policy-v2", 120_000, "second");
-    const secondRequest = admissionRequest(second.id, gateKey, "policy-v2", 120_000, "second");
+    const second = await startAdmissionRun(module, taskId, providerVersion, "policy-v2", 120_000, "second");
+    const secondRequest = admissionRequest(second.id, gateKey, providerVersion, "policy-v2", 120_000, "second");
     await expect(module.reserveRequest(secondRequest)).resolves.toMatchObject({
       status: "deferred", retryAt: "2026-08-21T00:02:00.000Z",
     });
@@ -153,17 +155,55 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
     now = new Date("2026-08-21T00:02:01.000Z");
     await expect(module.reserveRequest(secondRequest)).resolves.toMatchObject({ status: "admitted" });
   });
+
+  it("图片使用独立策略，但图片限制会共享熔断到 HTML 通道", async () => {
+    await migrateWorkbenchDatabase(databaseUrl!);
+    db = createWorkbenchDb(databaseUrl!);
+    taskId = `task-lane-${randomUUID()}`;
+    const providerVersion = `test-${randomUUID()}`;
+    const at = "2026-08-21T00:00:00.000Z";
+    await insertConfirmedTaskAndPlan(db, taskId, at);
+    const module = createSourceDatasetModule(db, { now: () => new Date(at),
+      assetStore: { async put() { throw new Error("不应写附件"); }, open() { return Readable.from([]); } } });
+    const run = await module.startRun({ taskId, planId: "plan-request-admission", planVersion: 1,
+      sourceKey: "zol", providerKey: "zol.catalog-gallery", providerVersion, requestBudget: 10,
+      accessPolicy: { kind: "paced_http", version: "zol-v11", maxRequestsPerMinute: 12,
+        minimumIntervalMs: 5_000, jitterMs: { min: 0, max: 0 }, batchSize: 1,
+        batchCooldownMs: 5_000, maximumRunMs: 120_000,
+        assetPolicy: { maxRequestsPerMinute: 30, minimumIntervalMs: 2_000,
+          concurrency: 2, queueCapacity: 10 } }, targetKeys: ["models"] });
+    await module.startTarget({ runId: run.id, targetKey: "models" });
+    for (const workKey of ["asset:1", "page:1"]) {
+      await module.ensureCaptureWorkItem({ runId: run.id, targetKey: "models", workKey,
+        captureUnit: "fixture", expectedUnitCount: 1 });
+      await module.startCaptureWorkItem({ runId: run.id, workKey });
+    }
+    const common = { runId: run.id, targetKey: "models", providerKey: "zol.catalog-gallery",
+      providerVersion, policyVersion: "zol-v11" };
+    const asset = await module.reserveRequest({ ...common, workKey: "asset:1", requestLane: "asset",
+      gateKey: `zol.catalog-gallery@${providerVersion}:asset:https://img.example`,
+      requestedUrl: "https://img.example/1.jpg", minimumIntervalMs: 2_000, maxRequestsPerMinute: 30 });
+    expect(asset.status).toBe("admitted");
+    if (asset.status !== "admitted") throw new Error("图片请求未获准");
+    await module.finishRequest({ attemptId: asset.attempt.id, state: "restricted", httpStatus: 429,
+      restrictionReason: "rate_limited" });
+    await expect(module.reserveRequest({ ...common, workKey: "page:1",
+      gateKey: `zol.catalog-gallery@${providerVersion}:https://detail.example`,
+      requestedUrl: "https://detail.example/1.html", minimumIntervalMs: 5_000,
+      maxRequestsPerMinute: 12 })).resolves.toMatchObject({ status: "blocked", reason: "rate_limited" });
+  });
 });
 
 async function startAdmissionRun(
   module: ReturnType<typeof createSourceDatasetModule>,
   taskId: string,
+  providerVersion: string,
   policyVersion: string,
   minimumIntervalMs: number,
   suffix: string,
 ) {
   const run = await module.startRun({ taskId, planId: "plan-request-admission", planVersion: 1,
-    sourceKey: `brand-${suffix}`, providerKey: "public.web-resource", providerVersion: "1.0.0",
+    sourceKey: `brand-${suffix}`, providerKey: "public.web-resource", providerVersion,
     requestBudget: 1, accessPolicy: { kind: "paced_http", version: policyVersion,
       maxRequestsPerMinute: 1, minimumIntervalMs, jitterMs: { min: 0, max: 0 }, batchSize: 1,
       batchCooldownMs: 60_000, maximumRunMs: 180_000 }, targetKeys: ["product-detail"] });
@@ -177,12 +217,13 @@ async function startAdmissionRun(
 function admissionRequest(
   runId: string,
   gateKey: string,
+  providerVersion: string,
   policyVersion: string,
   minimumIntervalMs: number,
   suffix: string,
 ) {
   return { runId, targetKey: "product-detail", workKey: `work-${suffix}`, gateKey,
-    providerKey: "public.web-resource", providerVersion: "1.0.0", policyVersion,
+    providerKey: "public.web-resource", providerVersion, policyVersion,
     requestedUrl: `https://brand.example/products/${suffix}`,
     minimumIntervalMs, maxRequestsPerMinute: 1 };
 }

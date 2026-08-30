@@ -12,12 +12,24 @@ import {
   assertPublicAddress,
   assertPublicHttpsUrl,
   createPublicWebResourceProvider,
+  normalizePublicRedirectUrl,
   preflightPublicResourceEnvironment,
   readBoundedBody,
   resolvePublicTarget,
 } from "../src";
 
 describe("公共原始资源 Provider", () => {
+  it("只把同主机的 HTTP canonical Location 规范化回 HTTPS", () => {
+    const from = new URL("https://detail.zol.com.cn/2115/2100766/param.shtml");
+    expect(normalizePublicRedirectUrl(
+      from,
+      new URL("http://detail.zol.com.cn/2101/2100766/param.shtml"),
+    ).href).toBe("https://detail.zol.com.cn/2101/2100766/param.shtml");
+
+    const crossOrigin = new URL("http://other.example/2101/2100766/param.shtml");
+    expect(normalizePublicRedirectUrl(from, crossOrigin)).toBe(crossOrigin);
+  });
+
   it("瞬时传输失败只在持久准入与冻结预算内自动重试一次", async () => {
     vi.useFakeTimers();
     try {
@@ -56,6 +68,52 @@ describe("公共原始资源 Provider", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("代理返回的 502 Gateway 错误按 transient transport 重新准入并只重试一次", async () => {
+    vi.useFakeTimers();
+    try {
+      const admission = fakeAdmission();
+      let pageRequests = 0;
+      const provider = createPublicWebResourceProvider({ request: async (url) => {
+        if (url.pathname === "/robots.txt") return response(200, "User-agent: *\nAllow: /");
+        pageRequests += 1;
+        if (pageRequests === 1) throw new Error("502 - Internal Server Error: Bad Gateway");
+        return response(200, `<html><body>${"official manual content ".repeat(20)}</body></html>`,
+          "text/html; charset=utf-8");
+      } });
+
+      const collected = collect(provider.collect(singleManualSource(), "run-gateway", admission));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(collected).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "target.completed", targetKey: "official.manual" }),
+      ]));
+      expect(pageRequests).toBe(2);
+      expect(admission.reserveRequest).toHaveBeenCalledTimes(3);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("DoH SERVFAIL 按 transient transport 重新准入并只重试一次", async () => {
+    vi.useFakeTimers();
+    try {
+      const admission = fakeAdmission();
+      let pageRequests = 0;
+      const provider = createPublicWebResourceProvider({ request: async (url) => {
+        if (url.pathname === "/robots.txt") return response(200, "User-agent: *\nAllow: /");
+        pageRequests += 1;
+        if (pageRequests === 1) throw new Error("可信 DoH 查询失败：DNS status 2");
+        return response(200, `<html><body>${"official manual content ".repeat(20)}</body></html>`,
+          "text/html; charset=utf-8");
+      } });
+
+      const collected = collect(provider.collect(singleManualSource(), "run-doh-servfail", admission));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(collected).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "target.completed", targetKey: "official.manual" }),
+      ]));
+      expect(pageRequests).toBe(2);
+      expect(admission.reserveRequest).toHaveBeenCalledTimes(3);
+    } finally { vi.useRealTimers(); }
   });
 
   it("批次环境预检在 Fake-IP 且缺少 HTTPS 代理时于来源访问前失败", async () => {

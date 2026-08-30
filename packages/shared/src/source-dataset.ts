@@ -4,6 +4,15 @@ const idSchema = z.string().min(1).max(240);
 const isoDateSchema = z.string().datetime({ offset: true });
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
+const sourceAssetAccessPolicySchema = z.object({
+  maxRequestsPerMinute: z.number().int().positive(),
+  minimumIntervalMs: z.number().int().positive(),
+  concurrency: z.number().int().positive().max(32),
+  queueCapacity: z.number().int().positive().max(10_000),
+}).strict().refine((policy) => policy.queueCapacity >= policy.concurrency, {
+  message: "附件队列容量不能小于并发数", path: ["queueCapacity"],
+});
+
 export const sourceExecutionFailureCategorySchema = z.enum([
   "system_configuration",
   "transient_transport",
@@ -34,6 +43,7 @@ export const sourceAccessPolicySchema = z.discriminatedUnion("kind", [
     batchSize: z.number().int().positive(),
     batchCooldownMs: z.number().int().positive(),
     maximumRunMs: z.number().int().positive(),
+    assetPolicy: sourceAssetAccessPolicySchema.optional(),
   }).strict(),
 ]).superRefine((policy, context) => {
   if (policy.kind === "paced_http" && policy.jitterMs.max < policy.jitterMs.min) {
@@ -128,6 +138,8 @@ export const sourceCollectionBatchSchema = z.object({
 export const sourceCollectionRunSchema = z.object({
   id: idSchema,
   taskId: idSchema,
+  // WHY：后台 Resume 命令与新 Run 必须精确关联，进程恢复才能只释放已确认终止的 Graphile 锁。
+  executionCommandId: idSchema.optional(),
   // WHY：批次是一次“开始抓取”的事实；历史行没有该关系，只能显式归为无批次记录。
   executionBatchId: idSchema.optional(),
   // WHY：显式恢复产生新运行；前序运行保持不可变，并由关系字段形成可审计链路。
@@ -155,6 +167,7 @@ export const sourceProviderCollectionContextSchema = z.object({
   queueRunId: idSchema,
   resumedFromRunId: idSchema.optional(),
   accessPolicy: sourceAccessPolicySchema,
+  completedWorkKeys: z.array(idSchema).max(10_000).optional(),
 }).strict();
 
 export const sourceCollectionTargetRunSchema = z.object({
@@ -166,6 +179,7 @@ export const sourceCollectionTargetRunSchema = z.object({
   accessibleCount: z.number().int().nonnegative(),
   failedCount: z.number().int().nonnegative(),
   assetCount: z.number().int().nonnegative(),
+  observedUnitCount: z.number().int().nonnegative().optional(),
   startedAt: isoDateSchema.optional(),
   finishedAt: isoDateSchema.optional(),
   terminationReason: z.string().min(1).max(2000).optional(),
@@ -319,7 +333,8 @@ export const sourceProviderEventSchema = z.discriminatedUnion("type", [
     assets: z.array(sourceProviderAssetSchema).max(20).default([]),
     resourceReferences: z.array(sourceProviderResourceReferenceSchema).default([]),
   }).strict(),
-  z.object({ type: z.literal("target.completed"), targetKey: idSchema }).strict(),
+  z.object({ type: z.literal("target.completed"), targetKey: idSchema,
+    observedUnitCount: z.number().int().nonnegative().optional() }).strict(),
 ]).superRefine((event, context) => {
   if (event.type === "capture" && event.snapshot.observation.state === "accessible"
     && !event.snapshot.payload) {
@@ -513,7 +528,7 @@ export interface SourceRequestAdmissionPort {
     terminationReason?: string }): Promise<SourceCaptureWorkItem>;
   reserveRequest(input: { runId: string; targetKey: string; workKey: string; gateKey: string;
     providerKey: string; providerVersion: string; policyVersion: string; requestedUrl: string;
-    redirectParentAttemptId?: string; minimumIntervalMs: number;
+      requestLane?: "asset"; redirectParentAttemptId?: string; minimumIntervalMs: number;
     maxRequestsPerMinute: number }): Promise<SourceRequestAdmission>;
   finishRequest(input: { attemptId: string; state: Exclude<SourceRequestAttempt["state"], "started">;
     finalUrl?: string; httpStatus?: number; bytes?: number; restrictionReason?: string }): Promise<SourceRequestAttempt>;

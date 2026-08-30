@@ -17,6 +17,7 @@ import {
   CategoryInterviewTimeline,
 } from "./CategoryInterviewTimeline";
 import { CaptureTaskContentView } from "./CaptureTaskContentView";
+import { CrawlPlanningPanel } from "./CrawlPlanningPanel";
 import { SourceDatasetPanel } from "./SourceDatasetPanel";
 
 type WorkspaceMode = "tasks" | "new";
@@ -414,7 +415,8 @@ function TaskScope({
   revisionError?: string;
 }) {
   return (
-    <article className="rounded-xl border border-line bg-surface p-5 sm:p-7">
+    <>
+      <article className="rounded-xl border border-line bg-surface p-5 sm:p-7">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-5">
         <div>
           <p className="text-sm font-semibold">当前确认版本 v{task.revision}</p>
@@ -426,7 +428,9 @@ function TaskScope({
         {revisionError && <p className="w-full text-sm text-danger" role="alert">{revisionError}</p>}
       </div>
       <CaptureTaskContentView content={task.content} />
-    </article>
+      </article>
+      <CrawlPlanningPanel task={task} />
+    </>
   );
 }
 

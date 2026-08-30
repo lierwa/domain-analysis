@@ -87,6 +87,10 @@ function legacyTaskContent(row: typeof captureTasks.$inferSelect): CaptureTaskCo
     originalRequest: row.originalRequest,
     category: { code: "legacy", label: row.name },
     marketScope: row.marketScope,
+    brandSelectionPolicy: { mode: "all_available_brands" },
+    executionCadencePolicy: { mode: "unspecified" },
+    // WHY：历史记录没有采访结论；保持原有全量语义并要求重新采访，不伪造一个数值上限。
+    modelCoveragePolicy: { mode: "all_available_per_brand" },
     generalTopics: ["保留历史抓取数据；重新确认前不启动新抓取"],
     categoryTopics: [],
     sourceCandidates: [],

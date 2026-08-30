@@ -7,6 +7,23 @@ export function CaptureTaskContentView({ content }: { content: CaptureTaskConten
         <p className="font-medium">{content.category.label}</p>
         <p className="mt-2 text-sm leading-6 text-muted">{content.marketScope}</p>
       </Block>
+      <Block title="品牌覆盖">
+        <p className="text-sm">{content.brandSelectionPolicy.mode === "source_brand_ranking"
+          ? `来源品牌排行榜综合评分大于 ${content.brandSelectionPolicy.minimumScoreExclusive}，按榜单顺序最多 ${content.brandSelectionPolicy.maxBrands} 个品牌`
+          : "覆盖来源中全部可确认品牌（历史任务策略）"}</p>
+      </Block>
+      <Block title="执行批次">
+        <p className="text-sm">{content.executionCadencePolicy.mode === "fixed"
+          ? `每批 ${content.executionCadencePolicy.brandBatchSize} 个品牌；每品牌每轮 ${content.executionCadencePolicy.modelsPerBrandPerRound} 个型号`
+          : "尚未确认品牌批次与每轮型号量"}</p>
+      </Block>
+      <Block title="每品牌型号覆盖">
+        <p className="text-sm">
+          {content.modelCoveragePolicy.mode === "max_models_per_brand"
+            ? `每个品牌最多 ${content.modelCoveragePolicy.maxModelsPerBrand} 个不同型号`
+            : "每个品牌覆盖全部可确认型号"}
+        </p>
+      </Block>
       <TopicList title="通用抓取内容" items={content.generalTopics} />
       <TopicList title="品类补充内容" items={content.categoryTopics} empty="暂无补充项" />
       <Block title={`候选来源（${content.sourceCandidates.length}）`} wide>

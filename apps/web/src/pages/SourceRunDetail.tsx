@@ -28,11 +28,47 @@ export function SourceRunDetail({ taskId, view, selectedSnapshotId, onClose }: {
         </button>}
       </div>
     </header>
+    <RunImageGallery taskId={taskId} view={view} />
     {record ? <RecordInspector taskId={taskId} view={view} record={record} />
       : <p className="p-6 text-sm text-muted">该来源运行已经记账，但尚未保存原始快照。运行状态与失败原因仍可在下方审计信息中查看。</p>}
     <RunAudit view={view} />
   </article>;
 }
+
+function RunImageGallery({ taskId, view }: { taskId: string; view: SourceDatasetRunView }) {
+  const references = new Map(view.records.flatMap((record) => record.resourceReferences)
+    .map((reference) => [reference.sourceUrl, reference]));
+  const images = view.records.flatMap((record) => record.assets.map((asset) => ({
+    asset,
+    reference: references.get(asset.sourceUrl),
+    parentUrl: record.snapshot.lineage?.parentUrl,
+  }))).filter(({ asset }) => safeInlineImageTypes.has(asset.mediaType));
+  if (images.length === 0) return null;
+  return <section className="border-b border-line bg-panel px-5 py-4" aria-labelledby="run-gallery-title">
+    <div className="flex items-baseline justify-between gap-3">
+      <h4 id="run-gallery-title" className="text-sm font-semibold">型号图片画廊</h4>
+      <span className="text-xs text-muted">{images.length} 张来源原图</span>
+    </div>
+    <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+      {images.map(({ asset, reference, parentUrl }) => <figure key={asset.id}
+        className="min-w-0 overflow-hidden rounded-lg border border-line bg-surface">
+        <a href={sourceAssetUrl(taskId, view.run.id, asset.id)} title="下载原始图片">
+          <img className="aspect-[4/3] w-full bg-white object-contain" loading="lazy"
+            src={sourceAssetUrl(taskId, view.run.id, asset.id, "inline")}
+            alt={reference?.observedValue ?? asset.filename} />
+        </a>
+        <figcaption className="space-y-1 p-2 text-[11px] leading-4">
+          <p className="truncate font-medium">{reference?.observedValue ?? asset.filename}</p>
+          <p className="truncate text-muted">{reference ? `${reference.role} · #${reference.ordinal + 1}` : parentUrl ?? "来源图片"}</p>
+        </figcaption>
+      </figure>)}
+    </div>
+  </section>;
+}
+
+const safeInlineImageTypes = new Set([
+  "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif",
+]);
 
 function RecordInspector({ taskId, view, record }: {
   taskId: string;

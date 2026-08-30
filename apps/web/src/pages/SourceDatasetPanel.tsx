@@ -4,14 +4,16 @@ import type {
   SourceDatasetRecordSummary,
   SourceDatasetTaskView,
 } from "@domain-analysis/shared";
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, FileText, ListTree, Map as MapIcon, RefreshCw, Search, Spline, Waypoints, X } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, FileText, ListTree, Map as MapIcon, Play, RefreshCw, Search, Spline, Waypoints, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import {
   fetchSourceCollectionRun,
   fetchSourceCollectionRuns,
+  prepareSourcePlan,
+  startSourcePlan,
 } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { SourceDatasetMapInspector } from "./SourceDatasetMapInspector";
@@ -56,8 +58,14 @@ function LoadedSourceDatasetPanel({ task, view }: { task: DatasetTask; view: Sou
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previousOverflow; };
   }, [inspectorOpen]);
-  if (state.graph.stats.sourceCount === 0 && view.batches.length === 0 && view.runs.length === 0) return <EmptyPanel />;
+  if (state.graph.stats.sourceCount === 0 && view.batches.length === 0 && view.runs.length === 0) {
+    return <div className="flex h-full min-h-0 flex-col gap-3">
+      <SourceExecutionControls task={task} view={view} />
+      <EmptyPanel />
+    </div>;
+  }
   return <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-surface">
+    <SourceExecutionControls task={task} view={view} />
     <DatasetHeader graph={state.graph} />
     <MapToolbar mode={state.mode} query={state.query} visibleNodeCount={state.visibleGraph.nodes.length}
       onMode={state.changeMode} onQuery={state.setQuery} />
@@ -81,6 +89,114 @@ function LoadedSourceDatasetPanel({ task, view }: { task: DatasetTask; view: Sou
     <MapLegend lineageCount={state.graph.stats.lineageCount} recordCount={state.graph.stats.recordCount} />
     <BatchHistory view={view} selectedRunId={state.selectedRunId} onSelectRun={state.selectRun} />
   </section>;
+}
+
+function SourceExecutionControls({ task, view }: { task: DatasetTask; view: SourceDatasetTaskView }) {
+  const queryClient = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string>();
+  const [error, setError] = useState<string>();
+  // WHY：控制区只启动当前 ZOL 榜单品牌计划，门类由 source key 表达，不能再绑定冰箱固定 key。
+  const currentPlan = [...view.sources].filter((source) => source.planStatus === "confirmed"
+    && source.sourceKey.startsWith("zol.") && source.sourceKey.endsWith(".ranked-brands"))
+    .sort((left, right) => right.planVersion - left.planVersion)[0];
+  const polling = shouldPollSourceDataset(view);
+  const latestRun = currentPlan ? latestRunForPlan(view, currentPlan.planId, currentPlan.planVersion,
+    currentPlan.sourceKey) : undefined;
+  const activeRun = latestRun?.status === "running" ? latestRun : undefined;
+  const currentBatch = currentPlan ? view.batches.find((batch) => batch.sourceCollectionPlanId === currentPlan.planId
+    && batch.sourceCollectionPlanVersion === currentPlan.planVersion) : undefined;
+  const recoveryPending = currentBatch?.recoveryState === "pending";
+  const now = useLiveNow(Boolean(activeRun));
+  const elapsedAt = latestRun?.status === "running" ? now : Date.parse(latestRun?.finishedAt ?? "");
+
+  async function startPlan() {
+    if (!currentPlan) return;
+    setBusy(true); setError(undefined); setMessage(undefined);
+    try {
+      const prepared = await prepareSourcePlan(task.id, currentPlan.planId, task.revision, currentPlan.planVersion);
+      if (prepared.status === "action_required") {
+        setMessage(prepared.message);
+        return;
+      }
+      const accepted = await startSourcePlan(task.id, currentPlan.planId, task.revision, currentPlan.planVersion);
+      setMessage(`后台任务已接受：${accepted.commandId}`);
+      await queryClient.invalidateQueries({ queryKey: ["source-runs", task.id] });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "来源执行启动失败");
+    } finally { setBusy(false); }
+  }
+
+  return <section className="shrink-0 rounded-xl border border-line bg-surface px-4 py-3 sm:px-5">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div><p className="text-sm font-semibold">{currentPlan?.name ?? "ZOL 品牌参数与完整图集"}</p>
+        <p className="mt-1 text-xs text-muted">{currentPlan
+          ? `已确认 Crawl Plan v${currentPlan.planVersion}；Prepare 通过后由后台执行。`
+          : "请先在抓取范围中完成 Planning Run 并确认 Crawl Plan。"}</p></div>
+      {polling ? <div className={`source-run-status ${recoveryPending ? "source-run-status--warning" : ""}`} role="status">
+        <span className="source-run-status-dot" aria-hidden="true" />
+        {activeRun ? "后台执行中" : recoveryPending ? "等待后台恢复" : "后台恢复中"}
+      </div> : currentPlan ? <button type="button" className="button-primary" disabled={busy}
+        onClick={() => void startPlan()}><Play className="h-4 w-4" aria-hidden="true" />
+        {busy ? "正在检查…" : `启动计划 v${currentPlan.planVersion}`}</button>
+        : <span className="rounded-full border border-line bg-panel px-3 py-1.5 text-xs font-medium text-muted">
+          等待计划确认
+        </span>}
+    </div>
+    {latestRun && <div className="source-run-progress" aria-label="当前后台抓取进度">
+      <RunProgressMetric label={activeRun ? "已运行" : "本次运行"}
+        value={formatRunElapsed(latestRun.startedAt, elapsedAt)}
+        title={`开始于 ${formatDateTime(latestRun.startedAt)}`} />
+      <RunProgressMetric label="原始快照" value={latestRun.snapshotCount} />
+      <RunProgressMetric label="图片资产" value={latestRun.assetCount} />
+      <RunProgressMetric label="内容失败" value={latestRun.failedCount} attention={latestRun.failedCount > 0} />
+      <p>{recoveryPending ? "上次进程已中断；已保存数据未丢失，当前等待后台恢复。"
+        : "数据每 2 秒刷新；关闭此页面不影响后台抓取。"}</p>
+    </div>}
+    {message && <p className="mt-2 text-xs text-muted" role="status">{message}</p>}
+    {error && <p className="mt-2 text-xs text-danger" role="alert">{error}</p>}
+  </section>;
+}
+
+function RunProgressMetric({ label, value, title, attention = false }: {
+  label: string; value: string | number; title?: string; attention?: boolean;
+}) {
+  return <dl className="source-run-progress-metric" title={title}>
+    <dt>{label}</dt><dd className={attention ? "text-danger" : undefined}>{value}</dd>
+  </dl>;
+}
+
+function useLiveNow(active: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
+export function formatRunElapsed(startedAt: string, now = Date.now()) {
+  const started = Date.parse(startedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(now)) return "—";
+  const totalSeconds = Math.max(0, Math.floor((now - started) / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0 ? `${hours} 小时 ${String(minutes).padStart(2, "0")} 分`
+    : `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒`;
+}
+
+export function latestRunForPlan(view: SourceDatasetTaskView, planId: string,
+  planVersion: number, sourceKey: string) {
+  const execution = view.executions.find((item) => item.sourceCollectionPlanId === planId
+    && item.sourceCollectionPlanVersion === planVersion);
+  if (execution) return execution.latestRuns.find((run) => run.sourceCollectionPlanSourceKey === sourceKey);
+  const batch = view.batches.find((item) => item.sourceCollectionPlanId === planId
+    && item.sourceCollectionPlanVersion === planVersion);
+  return batch ? view.runs.find((run) => run.executionBatchId === batch.id
+    && run.sourceCollectionPlanSourceKey === sourceKey) : undefined;
 }
 
 function useDatasetMapController(task: DatasetTask, view: SourceDatasetTaskView) {

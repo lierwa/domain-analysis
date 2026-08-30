@@ -1,31 +1,47 @@
 # 数据抓取平台开发文档
 
 状态：当前开发入口
-更新日期：2026-08-28
+更新日期：2026-08-30
 
 ## 权威阅读顺序
 
-1. 根目录 `AGENTS.md`
-2. 根目录 `CONTEXT.md`
-3. `ARCHITECTURE.md`
-4. `ZOL-CATEGORY-COLLECTION.md`
-5. `RESEARCH.md`
-6. `ROADMAP.md`
-7. `PROGRESS.md`
+1. 根目录 `AGENTS.md` 的 Output Priority、授权边界和架构协议
+2. `AGENT-SCORECARD.md` 的当前积分与最近记录
+3. 根目录 `CONTEXT.md`
+4. `ARCHITECTURE.md`
+5. `ZOL-CATEGORY-COLLECTION.md`
+6. `RESEARCH.md`
+7. `ROADMAP.md`
+8. `PROGRESS.md`
 
 ## 文档职责
 
 | 文档 | 唯一职责 |
 | --- | --- |
-| `CONTEXT.md` | 产品目标、阶段边界和领域术语 |
-| `ARCHITECTURE.md` | 模块职责、事实源、依赖方向和访问边界 |
-| `ZOL-CATEGORY-COLLECTION.md` | ZOL 门类到品牌、型号、参数的技术设计与验证门 |
-| `RESEARCH.md` | 外部调研、候选方案、采用结论和退出条件 |
-| `ROADMAP.md` | 开发验证的阶段顺序和停止门 |
-| `PROGRESS.md` | 当前完成度、证据、阻塞和下一步 |
+| `AGENT-SCORECARD.md` | 用户积分反馈与当前积分的追加账本 |
+| `CONTEXT.md` | 当前领域语言 |
+| `ARCHITECTURE.md` | 模块职责、事实源、依赖方向和通过门 |
+| `ZOL-CATEGORY-COLLECTION.md` | ZOL 品牌目录、型号参数和完整图集的来源设计 |
+| `ZOL-REFRIGERATOR-CAPTURE-REPORT.md` | 本次正式冰箱抓取的终态、覆盖结果和 Source Dataset 对账 |
+| `RESEARCH.md` | 当前采用的技术结论、证据和退出条件 |
+| `ROADMAP.md` | 后续阶段顺序和停止门 |
+| `PROGRESS.md` | 当前完成度、验证证据、阻塞和下一步 |
 
 ## 当前开发入口
 
-当前只开发和验证 ZOL 单来源链路：门类品牌发现、品牌优先级、第一优先级品牌的型号与参数捕获，以及同源控频下的多品牌调度。
+当前产品链以 Workbench Chat Timeline 中的采集请求为起点：
 
-实现从 `PROGRESS.md` 的下一步开始。任何真实批量抓取都必须先通过 `ZOL-CATEGORY-COLLECTION.md` 定义的 V0 与 V1 验证门。
+```text
+采集请求
+  -> 品类采访
+  -> 采访范围草案确认
+  -> Capture Task
+  -> Planning Run
+  -> Crawl Plan Draft 确认
+  -> Prepare / Start
+  -> Source Dataset
+```
+
+品牌目录执行基础已经在正式 Workbench/API/Graphile Worker 链路完成 20 个型号和 502 张图片的真实验证。当前开发入口是正式门类流程：采访确认“榜单综合评分大于 0、最多 20 个品牌；每批 3 个；每品牌每轮 10 个；每品牌最多 20 个”，Planning Run 核验 ZOL 门类品牌榜和入选品牌目录后生成计划；没有可验证榜单时保持在计划确认门。
+
+运行数据、浏览器状态、代理配置、数据库和原始资产只存在本机；跨电脑接续只依赖已提交并推送的代码与权威文档。
