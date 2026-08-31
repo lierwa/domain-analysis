@@ -274,7 +274,8 @@ async function* collectGallery(context: ZolCollectionContext, _brand: BrandState
   try { sections = parseZolGallerySections(response, model.id); } catch (error) {
     yield captureEvent(context.source, context.targetKey, galleryUrl, response, context.now(),
       rejected("gallery_images", bounded(error)), galleryLineage(parameterUrl, model));
-    throw structuralFailure(`型号 ${model.id} 图集无法识别：${bounded(error)}`);
+    // WHY：图集 HTML 只属于当前型号；无法枚举图片时保留拒绝快照并隔离该型号，不能阻断后续品牌。
+    throw contentFailure(`型号 ${model.id} 图集无法识别：${bounded(error)}`);
   }
   yield captureEvent(context.source, context.targetKey, galleryUrl, response, context.now(),
     accepted("model_gallery", `型号 ${model.name} 图集枚举 ${sections.length} 个大图分区`),
@@ -316,7 +317,7 @@ AsyncGenerator<SourceProviderEvent, number> {
   } catch (error) {
     yield captureEvent(context.source, context.targetKey, detailUrl, response, context.now(),
       rejected("picture_set_images", bounded(error)), pictureSetLineage(galleryUrl, model, section.ordinal));
-    throw structuralFailure(`型号 ${model.id} 大图分区无法识别：${bounded(error)}`);
+    throw contentFailure(`型号 ${model.id} 大图分区无法识别：${bounded(error)}`);
   }
   for (const image of images) seenImages.add(image.url);
   const sectionEvent = captureEvent(context.source, context.targetKey, detailUrl, response, context.now(),

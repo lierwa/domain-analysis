@@ -234,6 +234,38 @@ describe("ZOL 品牌目录批次参数与图集 Provider", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it("型号图集局部结构异常只结束当前型号并继续后续型号", async () => {
+    vi.useFakeTimers();
+    try {
+      const baseRequest = fixtureRequest();
+      const admission = createAdmission();
+      const provider = createZolCatalogGalleryProvider({ request: async (url) => {
+        if (url.pathname === "/2115/2114001/pic.shtml") {
+          return response(url.href, "<html>当前型号没有图集分区</html>");
+        }
+        if (url.pathname === "/picture_index_1/index211401101_0_p2114011.shtml") {
+          return response(url.href, "<html>当前型号大图详情没有 picList</html>");
+        }
+        return baseRequest(url);
+      } });
+      const events: SourceProviderEvent[] = [];
+      const collection = (async () => {
+        for await (const event of provider.collect(source(), "run-gallery-model-failure", admission)) events.push(event);
+      })();
+
+      await vi.runAllTimersAsync();
+      await collection;
+
+      expect(admission.failedModelWorkKeys).toEqual([
+        "model:haier:2114001", "model:midea:2114011",
+      ]);
+      expect(admission.completedModelWorkKeys).toHaveLength(2);
+      expect(events.at(-1)).toMatchObject({ type: "target.completed", observedUnitCount: 4 });
+      expect(admission.attempts.some((attempt) =>
+        attempt.requestedUrl.endsWith("/2115/2114012/param.shtml"))).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("型号页面结构无法绑定时停止当前来源运行", async () => {
     const baseRequest = fixtureRequest();
     const admission = createAdmission();
