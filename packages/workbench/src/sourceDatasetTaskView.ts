@@ -1,6 +1,7 @@
 import type { WorkbenchDb } from "@domain-analysis/db";
 import {
   sourceAssets,
+  sourceCaptureWorkItems,
   sourceCollectionBatches,
   sourceCollectionPlans,
   sourceCollectionRuns,
@@ -21,6 +22,7 @@ import {
   type SourceDatasetPlanSource,
   type SourceDatasetRecordGroupKey,
   type SourceDatasetResourceFormat,
+  type SourceCaptureWorkItem,
 } from "@domain-analysis/shared";
 import { and, desc, eq, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -31,9 +33,15 @@ import {
   normalizeSnapshot,
   sourceSnapshotOutcome,
 } from "./sourceDatasetNormalization";
+import { loadCapturedSubjectProjection } from "./sourceDatasetCapturedSubjects";
 
 type RecordGroupSummary = z.infer<typeof sourceDatasetRecordGroupSummarySchema>;
 type SnapshotRow = typeof sourceSnapshots.$inferSelect;
+type ResourceKind = NonNullable<SourceCaptureWorkItem["resourceKind"]>;
+export type SourceDatasetRecordPageInput = { taskId: string; cursor?: string; limit: number } & (
+  | { sourceKey: string; targetKey: string; groupKey: SourceDatasetRecordGroupKey }
+  | { subjectId: string; resourceKind: ResourceKind }
+);
 type AggregatedRecordRow = {
   planId: string | null;
   planVersion: number | null;
@@ -60,6 +68,7 @@ export async function loadSourceDatasetTaskView(db: WorkbenchDb, taskId: string)
   const runs = runRows.map(normalizeRun);
   const batches = batchRows.map(normalizeBatch);
   const groups = aggregateRecordGroups(recordGroupRows);
+  const captured = await loadCapturedSubjectProjection(db, batches, runs);
   return sourceDatasetTaskViewSchema.parse({
     batches,
     runs,
@@ -67,6 +76,7 @@ export async function loadSourceDatasetTaskView(db: WorkbenchDb, taskId: string)
     // WHY：首屏只返回来源结构和聚合计数；单条快照由记录组展开动作分页读取。
     sources: planRows.flatMap((plan) => projectPlanSources(plan, groups)),
     brands: planRows.flatMap(projectPlanBrands),
+    ...captured,
   });
 }
 
@@ -115,14 +125,8 @@ function projectedExecutionStatus(
   return storedStatus;
 }
 
-export async function loadSourceDatasetRecordPage(db: WorkbenchDb, input: {
-  taskId: string;
-  sourceKey: string;
-  targetKey: string;
-  groupKey: SourceDatasetRecordGroupKey;
-  cursor?: string;
-  limit: number;
-}) {
+export async function loadSourceDatasetRecordPage(db: WorkbenchDb, input: SourceDatasetRecordPageInput) {
+  if ("subjectId" in input) return loadSubjectRecordPage(db, input);
   const [plan] = await db.select().from(sourceCollectionPlans).where(and(
     eq(sourceCollectionPlans.taskId, input.taskId), eq(sourceCollectionPlans.status, "confirmed"),
   )).orderBy(desc(sourceCollectionPlans.version)).limit(1);
@@ -169,12 +173,45 @@ export async function loadSourceDatasetRecordPage(db: WorkbenchDb, input: {
   });
 }
 
+async function loadSubjectRecordPage(db: WorkbenchDb, input: Extract<SourceDatasetRecordPageInput,
+  { subjectId: string }>) {
+  const cursor = input.cursor ? decodeCursor(input.cursor) : undefined;
+  const baseConditions = [
+    eq(sourceCollectionRuns.taskId, input.taskId),
+    eq(sourceCaptureWorkItems.subjectId, input.subjectId),
+    eq(sourceCaptureWorkItems.resourceKind, input.resourceKind),
+  ];
+  const pageConditions = [...baseConditions];
+  if (cursor) pageConditions.push(or(
+    lt(sourceSnapshots.createdAt, cursor.createdAt),
+    and(eq(sourceSnapshots.createdAt, cursor.createdAt), lt(sourceSnapshots.id, cursor.id)),
+  )!);
+  const [rows, totalRows] = await Promise.all([
+    db.select({ snapshot: sourceSnapshots }).from(sourceSnapshots)
+      .innerJoin(sourceCaptureWorkItems, eq(sourceCaptureWorkItems.id, sourceSnapshots.captureWorkItemId))
+      .innerJoin(sourceCollectionRuns, eq(sourceCollectionRuns.id, sourceSnapshots.runId))
+      .where(and(...pageConditions)).orderBy(desc(sourceSnapshots.createdAt), desc(sourceSnapshots.id))
+      .limit(input.limit + 1),
+    db.select({ count: sql<number>`count(*)::int` }).from(sourceSnapshots)
+      .innerJoin(sourceCaptureWorkItems, eq(sourceCaptureWorkItems.id, sourceSnapshots.captureWorkItemId))
+      .innerJoin(sourceCollectionRuns, eq(sourceCollectionRuns.id, sourceSnapshots.runId))
+      .where(and(...baseConditions)),
+  ]);
+  const pageRows = rows.slice(0, input.limit).map((row) => row.snapshot);
+  const last = pageRows.at(-1);
+  return sourceDatasetRecordPageSchema.parse({
+    items: await summarizeRecords(db, pageRows),
+    totalCount: Number(totalRows[0]?.count ?? 0),
+    ...(rows.length > input.limit && last ? { nextCursor: encodeCursor(last) } : {}),
+  });
+}
+
 async function loadAggregatedRecordRows(db: WorkbenchDb, taskId: string): Promise<AggregatedRecordRow[]> {
   const groupKey = sql<string>`case when ${sourceSnapshots.lineage} is null then 'unrecorded'
     else (${sourceSnapshots.lineage}->>'discoveryKind') || ':' || (${sourceSnapshots.lineage}->>'depth') end`;
   const outcome = sql<string>`case
-    when coalesce(${sourceSnapshots.observation}->>'state', '') <> 'accessible'
-      or ${sourceSnapshots.observation}#>>'{contentAssessment,status}' = 'rejected' then 'failed'
+    when coalesce(${sourceSnapshots.observation}->>'state', '') <> 'accessible' then 'failed'
+    when ${sourceSnapshots.observation}#>>'{contentAssessment,status}' = 'rejected' then 'rejected'
     when ${sourceSnapshots.observation}#>>'{contentAssessment,status}' = 'supporting' then 'supporting'
     else 'accepted' end`;
   const format = sql<string>`case
@@ -240,28 +277,45 @@ function aggregateRecordGroups(rows: AggregatedRecordRow[]) {
 async function summarizeRecords(db: WorkbenchDb, rows: SnapshotRow[]) {
   const objectIds = [...new Set(rows.map((row) => row.objectId))];
   const snapshotIds = rows.map((row) => row.id);
-  const [objectRows, assetRows, referenceRows] = await Promise.all([
+  const workItemIds = [...new Set(rows.flatMap((row) => row.captureWorkItemId ? [row.captureWorkItemId] : []))];
+  const [objectRows, assetRows, referenceRows, workItems] = await Promise.all([
     objectIds.length > 0 ? db.select().from(sourceObjects).where(inArray(sourceObjects.id, objectIds)) : [],
-    snapshotIds.length > 0 ? db.select({ snapshotId: sourceAssets.snapshotId }).from(sourceAssets)
+    snapshotIds.length > 0 ? db.select().from(sourceAssets)
       .where(inArray(sourceAssets.snapshotId, snapshotIds)) : [],
     snapshotIds.length > 0 ? db.select({ snapshotId: sourceResourceReferences.snapshotId })
       .from(sourceResourceReferences).where(inArray(sourceResourceReferences.snapshotId, snapshotIds)) : [],
+    workItemIds.length > 0 ? db.select().from(sourceCaptureWorkItems)
+      .where(inArray(sourceCaptureWorkItems.id, workItemIds)) : [],
   ]);
   const objectsById = new Map(objectRows.map((row) => [row.id, row]));
+  const workById = new Map(workItems.map((row) => [row.id, row]));
+  const assetsBySnapshot = groupRowsBySnapshot(assetRows);
   const assetCounts = countBySnapshot(assetRows);
   const referenceCounts = countBySnapshot(referenceRows);
   return rows.flatMap((row) => {
     const object = objectsById.get(row.objectId);
     if (!object) return [];
     const snapshot = normalizeSnapshot(row);
+    const work = snapshot.captureWorkItemId ? workById.get(snapshot.captureWorkItemId) : undefined;
     return [sourceDatasetRecordSummarySchema.parse({ snapshotId: snapshot.id, runId: snapshot.runId,
       targetKey: snapshot.targetKey, sourceIdentity: object.sourceIdentity, objectKind: object.kind,
       externalKey: object.externalKey, observation: snapshot.observation,
       outcome: sourceSnapshotOutcome(snapshot.observation), lineage: snapshot.lineage,
+      captureSubjectId: work?.subjectId ?? undefined, resourceKind: work?.resourceKind ?? undefined,
+      resourceSection: work?.resourceSection ?? undefined,
+      resourceOrdinal: work?.resourceOrdinal ?? undefined,
       payload: summarizePayload(snapshot.payload), resourceFormat: resourceFormatFor(snapshot.payload),
+      assets: (assetsBySnapshot.get(snapshot.id) ?? []).map((asset) => ({ id: asset.id,
+        filename: asset.filename, sourceUrl: asset.sourceUrl, mediaType: asset.mediaType, bytes: asset.bytes })),
       assetCount: assetCounts.get(snapshot.id) ?? 0,
       resourceReferenceCount: referenceCounts.get(snapshot.id) ?? 0 })];
   });
+}
+
+function groupRowsBySnapshot<T extends { snapshotId: string }>(rows: T[]) {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) grouped.set(row.snapshotId, [...(grouped.get(row.snapshotId) ?? []), row]);
+  return grouped;
 }
 
 function projectPlanBrands(plan: typeof sourceCollectionPlans.$inferSelect): SourceDatasetPlanBrand[] {

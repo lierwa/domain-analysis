@@ -10,16 +10,15 @@ import { SourceDatasetResourceTag } from "./SourceDatasetResourceTag";
 
 export function SourceDatasetRecordList({ taskId, entity, onSelect }: {
   taskId: string;
-  entity: Extract<SourceDataMapEntity, { kind: "group" }>;
+  entity: Extract<SourceDataMapEntity, { kind: "resource" }>;
   onSelect: (record: SourceDatasetRecordSummary) => void;
 }) {
   const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined]);
   const cursor = cursorStack.at(-1);
   const page = useQuery({
-    queryKey: ["source-map-records", taskId, entity.source.sourceKey, entity.target.targetKey,
-      entity.group.groupKey, cursor],
-    queryFn: () => fetchSourceDatasetRecords(taskId, { sourceKey: entity.source.sourceKey,
-      targetKey: entity.target.targetKey, groupKey: entity.group.groupKey, cursor, limit: 30 }),
+    queryKey: ["source-map-records", taskId, entity.model.subjectId, entity.resourceKind, cursor],
+    queryFn: () => fetchSourceDatasetRecords(taskId, { subjectId: entity.model.subjectId,
+      resourceKind: entity.resourceKind, cursor, limit: 30 }),
     staleTime: 30_000,
   });
   if (page.isLoading) return <div className="source-map-record-loading"><LoaderCircle className="h-4 w-4 animate-spin" />正在读取这一组数据</div>;
@@ -43,7 +42,7 @@ export function SourceDatasetRecordList({ taskId, entity, onSelect }: {
     })}</ol>
     {records.length === 0 && <p className="px-3 py-5 text-center text-[11px] text-muted">这一组没有可读取的记录。</p>}
     <footer className="source-map-record-pager">
-      <span>第 {cursorStack.length} 页 · 共 {page.data?.totalCount ?? entity.group.totalCount} 条</span>
+      <span>第 {cursorStack.length} 页 · 共 {page.data?.totalCount ?? entity.count} 条</span>
       <span className="flex items-center gap-1">
         <button type="button" disabled={cursorStack.length === 1} aria-label="上一页"
           onClick={(event) => { event.stopPropagation(); setCursorStack((current) => current.slice(0, -1)); }}>

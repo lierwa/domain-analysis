@@ -20,6 +20,7 @@ import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 import { SourceDatasetError } from "./sourceDatasetError";
 import { acquireSourceExecutionLease } from "./sourceExecutionLease";
 import { normalizeRun } from "./sourceDatasetNormalization";
+import { ensureCaptureSubjectId, findCaptureSubjectId } from "./sourceCaptureSubjects";
 
 type WorkbenchTransaction = Parameters<Parameters<WorkbenchDb["transaction"]>[0]>[0];
 
@@ -151,21 +152,37 @@ async function ensureCaptureWorkItem(
   input: Parameters<SourceRequestAdmissionPort["ensureCaptureWorkItem"]>[0],
 ) {
   return db.transaction(async (transaction) => {
-    await requireRunningTarget(transaction, input.runId, input.targetKey);
-    await transaction.insert(sourceCaptureWorkItems).values({
+    const run = await requireRunningTarget(transaction, input.runId, input.targetKey);
+    const existing = await transaction.query.sourceCaptureWorkItems.findFirst({ where: and(
+      eq(sourceCaptureWorkItems.runId, input.runId), eq(sourceCaptureWorkItems.workKey, input.workKey),
+    ) });
+    const subjectId = input.subject
+      ? existing
+        ? await findCaptureSubjectId(transaction, run, input.subject)
+        : await ensureCaptureSubjectId(transaction, run, input.subject)
+      : undefined;
+    if (!existing) await transaction.insert(sourceCaptureWorkItems).values({
       id: `source-work-${randomUUID()}`,
       runId: input.runId,
+      subjectId,
       targetKey: input.targetKey,
       workKey: input.workKey,
       parentObjectKey: input.parentObjectKey,
       captureUnit: input.captureUnit,
+      resourceKind: input.resourceKind,
+      resourceSection: input.resourceSection,
+      resourceOrdinal: input.resourceOrdinal,
       expectedUnitCount: input.expectedUnitCount,
       status: "pending",
     }).onConflictDoNothing();
-    const row = await transaction.query.sourceCaptureWorkItems.findFirst({ where: and(
+    const row = existing ?? await transaction.query.sourceCaptureWorkItems.findFirst({ where: and(
       eq(sourceCaptureWorkItems.runId, input.runId), eq(sourceCaptureWorkItems.workKey, input.workKey),
     ) });
     if (!row || row.targetKey !== input.targetKey || row.captureUnit !== input.captureUnit
+      || (row.subjectId ?? undefined) !== subjectId
+      || (row.resourceKind ?? undefined) !== input.resourceKind
+      || (row.resourceSection ?? undefined) !== input.resourceSection
+      || (row.resourceOrdinal ?? undefined) !== input.resourceOrdinal
       || (row.parentObjectKey ?? undefined) !== input.parentObjectKey
       || (row.expectedUnitCount ?? undefined) !== input.expectedUnitCount) {
       throw new SourceDatasetError("invalid_state", `捕获工作项定义冲突：${input.workKey}`);
@@ -411,6 +428,10 @@ async function lockProvider(transaction: WorkbenchTransaction, providerKey: stri
 
 function normalizeWorkItem(row: typeof sourceCaptureWorkItems.$inferSelect) {
   return sourceCaptureWorkItemSchema.parse({ ...row,
+    subjectId: row.subjectId ?? undefined,
+    resourceKind: row.resourceKind ?? undefined,
+    resourceSection: row.resourceSection ?? undefined,
+    resourceOrdinal: row.resourceOrdinal ?? undefined,
     parentObjectKey: row.parentObjectKey ?? undefined,
     expectedUnitCount: row.expectedUnitCount ?? undefined,
     createdAt: normalizeTimestamp(row.createdAt),

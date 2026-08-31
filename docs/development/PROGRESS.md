@@ -1,7 +1,7 @@
 # 数据抓取平台开发进度
 
 更新日期：2026-08-31
-当前阶段：ZOL 微波炉真实抓取终态对账
+当前阶段：ZOL 微波炉 Source Dataset 数据地图验收完成
 
 ## 简单说明
 
@@ -11,12 +11,15 @@
 
 本轮已补齐瞬时 DNS/传输失败后的持久自动 Resume：Worker 完成命令后、API 启动时和 Graphile cron 扫描都会从 Source Dataset 查找可安全恢复的 Batch；自动恢复先验证当前 Confirmed Crawl Plan 仍可执行，历史旧计划回到人工规划门。型号图集或大图分区的局部结构异常按当前型号隔离，不阻断后续品牌；Target 在全部工作项进入完成或失败终态后正常收口。微波炉任务已完成终态对账。
 
+Source Dataset 现在直接按品牌、型号和资源展示已抓到的数据，并把执行历史放在独立的运行审计视角。负责人可以从 19 个品牌逐级查看 247 个型号、单条原始记录和图片；唯一需要关注的型号会显示真实原因、出现次数和涉及 Run。该工作服务 `ROADMAP.md` 的品牌执行验收，以及 `ARCHITECTURE.md` 的 Source Dataset 对账通过门。
+
 ## Git 与运行环境
 
 - 主工作区：`/Users/guojunxi/Desktop/work/domain-analysis`，branch `master`
-- 当前服务执行工作区：`/Users/guojunxi/.codex/worktrees/fcb1/domain-analysis`，与本地 `master` 使用同一份实现
-- 当前实现、测试与权威文档合入本地 `master`；本轮未推送远端
-- PostgreSQL 保留运行数据；API、Web 与 Graphile Worker 由独立 `launchctl` 服务运行，分别监听 `4000` 与 `6173`
+- 当前 Source Dataset 修复保留在主工作区未提交增量中；本轮未提交、未推送
+- 常驻 `launchctl` API/Web 均从主工作区运行并监听 `4000`/`6173`；进程工作目录已核对为主工作区 `apps/api` 与 `apps/web`
+- fcb1 worktree 已从 Git 登记和文件系统删除；其中 5,472 个正式内容寻址资产先按 checksum 无损合并到主工作区，原有 2 个文件保留
+- PostgreSQL 与正式 Source Asset 保留在主工作区本地运行边界
 - 数据库、浏览器状态、原始页面与图片资产只保留在本机，不进入 Git
 
 ## 产品链状态
@@ -29,7 +32,7 @@
 | 品类调查与抓取规划 | 已接通 | Planning Run |
 | 排行榜审计、计划草稿与人工确认 | 已接通 | Crawl Plan |
 | Prepare / Start / Resume | 已接通 | Source Execution |
-| 原始页面、图片、血缘与导出 | 已接通 | Source Dataset |
+| 原始页面、图片、血缘与导出 | 已接通并通过微波炉数据地图验收 | Source Dataset |
 | 新正式冰箱门类纵向验收 | 已形成终态报告 | Capture Task / Crawl Plan / Source Dataset |
 | 瞬时传输失败无人值守恢复 | 已接通并通过回归测试 | Source Execution / Graphile Worker |
 | 微波炉门类纵向验收 | Capture Task v2、Crawl Plan v2 已确认，Source Batch 已完成并完成终态对账 | Source Dataset |
@@ -59,15 +62,21 @@
 - 自动 Resume 候选生成前必须通过当前 Confirmed Crawl Plan 的可执行性校验；旧规划协议不会反复自动入队。
 - Workbench 已展示排行榜证据、执行品牌、批次与型号边界；存在 blocker、无有效排行榜审计或旧检查清单的计划不能确认。
 - 冰箱专用固定品牌验收 API 已删除；正式链路只有 Planning Run 生成 Crawl Plan 一个计划入口。
+- Source Dataset 新增 Batch 内 typed Capture Subject，品牌和来源型号身份由 Provider 随 Work Item 提交；Workbench 隐藏幂等、父子关系、冲突和历史回填，Web 不解析 URL 或工作键。
+- 商品数据投影聚合当前 Batch 的 19 个品牌、247 个型号、资源数、完成度和去重问题；运行审计投影只返回来源、Batch、Run、记录组和访问恢复摘要，不携带整批图片画廊。
+- 单条资源列表按 `subjectId + resourceKind` 分页读取，图片 bytes 只在打开记录时通过 Asset 路由加载；地图展开保持一次一条记录请求和一次一项资源请求。
+- Source Execution 汇总当前 Batch 的全部 Run；活动 Batch 再次启动返回既有 `already_running` 结果，完成态重新执行先显示页面内确认框。
+- 商品地图的活动展开行、详情选择和 Run 审计分别建模；详情关闭后焦点返回首次地图触发器，键盘路径与画布/大纲行为一致。
+- API 支持用 `SOURCE_ASSET_CACHE_PATH` 显式复用正式抓取所在 checkout 的内容寻址资产；默认仍使用当前仓库 `data/source-assets`，不复制附件或改写血缘。
 
 ## 当前验证
 
 2026-08-31 当前工作区：
 
 - `npm run typecheck`：shared、db、workbench、worker、api、web 六个 workspace 全部通过。
-- `npm test`：43 个测试文件通过、2 个跳过；200 个测试通过、7 个跳过。
+- `npm test`：44 个测试文件通过、2 个跳过；203 个测试通过、7 个跳过。
 - 本轮自动恢复回归：2 个文件、16 个测试通过，覆盖瞬时失败候选、旧计划保护、启动扫描、完成回调、确定性 job key 与重复 Resume 幂等。
-- `npm run build`：通过；Web 完成 2483 个模块构建。只有 Vite 大分块提示，不是 Node 异常退出或 OOM。
+- `npm run build`：通过；Web 完成 2486 个模块构建。只有 Vite 大分块提示，不是 Node 异常退出或 OOM。
 - 两个项目 Skill 的 `quick_validate.py` 校验通过。
 - `git diff --check`：通过，仅有 Git 行尾转换提示。
 - 最新 ZOL 排行榜 adapter、规划组装、自动恢复和确认门回归均通过；随后六个 workspace 全量类型检查、全量测试和生产构建再次通过。
@@ -77,6 +86,12 @@
 - Worker 全量测试：8 个文件通过、2 个跳过；56 个测试通过、7 个跳过；Worker 类型检查通过。
 - Source Dataset 终态收口集成回归：9 个测试通过，验证未结束工作项仍阻止完成、已失败工作项允许 Target 完成；Workbench 全量测试 15 个文件、66 个测试通过，类型检查通过。
 - 微波炉真实 Batch 终态对账：无 `started` 请求或 `running` 工作项；19 个计划品牌均为完成、来源穷尽或隔离失败终态。
+- `npm run backfill:zol-subjects -- --task capture-task-f3db0719-1fdf-45e7-814a-e74c8b946f51` 连续执行两次结果一致：19 个品牌、247 个型号、3,799 个 Snapshot 关联，证明回填幂等且不改写原始数据。
+- 主工作区真实页面验收：完成态显示 19 个品牌、246/247 个型号、3,799 个快照、2,918 个附件、1 个唯一问题和 4 个 Run；默认商品地图只展示品牌摘要，运行审计不渲染图片画廊。
+- 真实请求验收：展开一个资源只请求一次带 `subjectId/resourceKind` 的记录页；打开一张图片只请求一次对应 Asset；打开 Run 审计只请求一次轻量 Run 详情，没有加载完整 Run 图片集合。
+- 正式资产验收：常驻主工作区 API 直接读取本地正式内容寻址存储，单图记录与 Asset 均返回 HTTP 200；`6173` 浏览器图片加载完成，天然尺寸为 600×450。
+- 常驻交付面验收：`6173` 显示完成 Batch、19 个品牌、246/247 个型号、3,799 个快照、2,918 个附件、1 个唯一问题和 4 个 Run；商品地图、问题详情与独立运行审计均来自主工作区当前实现。
+- 键盘验收与回归测试均通过：Esc 关闭由记录组进入的 Run 审计后，焦点返回原始记录组按钮。
 
 ## 当前正式运行
 
@@ -106,6 +121,11 @@
 - 型号图集和大图分区的局部解析错误改为复用现有 Work Item 隔离语义；没有新增协议、恢复入口或第二事实源，本次架构影响为 `澄清`。
 - Target 完成核对从“全部完成”澄清为“全部终态”，与既有 Work Item 失败隔离语义一致；没有改变 Source Dataset 的事实源、模块职责或公共 contract。
 - 微波炉 Batch 进入终态不改变架构基线。
+- Source Dataset 公共 contract 新增 Capture Subject、商品投影、轻量 Run 审计投影和按 Subject/Resource 分页的记录摘要；Source Dataset 仍是原始内容与来源身份事实源，Web 只投影。
+- Workbench 新增 Capture Subject 写入/回填边界与 Run View 组装边界；这是现有 Source Dataset seam 的职责分离，没有新增第二事实源或通用插件层。
+- API 新增可选本地资产根目录配置，解决多个 checkout 共享数据库时的附件读取位置；公共 HTTP、Asset ID、哈希和 Source Dataset 事实源不变。
+- Web 的商品地图与运行审计采用两个明确投影，活动行与详情选择保持分离；详情焦点恢复只属于交互状态，不改变领域 contract。
+- 本轮架构影响记录为 `改变`，接受决定见 `docs/adr/001-source-capture-subject.md`；`docs/development/RESEARCH.md` 的 R-010 保持本次候选与验证依据。
 
 ## 后续入口
 
@@ -113,4 +133,4 @@
 
 ## 交付状态
 
-本轮代码合入本地 `master`；未推送远端，提交不包含数据库、原始页面、图片或本机秘密。
+本轮实现、测试和权威文档作为同一交付进入 `master`；跨电脑接续点以本地 `HEAD`、tracking ref 与远端 `master` SHA 一致且 ahead/behind 为 `0/0` 为完成门。数据库、原始页面、图片和本机秘密只保留在本地，不进入 Git。

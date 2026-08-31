@@ -40,6 +40,21 @@ import {
 } from "./zolGalleryParsing";
 import { createZolImageDownloadQueue } from "./zolImageDownloadQueue";
 import {
+  zolBrandLineage as brandLineage,
+  zolBrandSubject as brandSubject,
+  zolBrandCatalogWorkKey,
+  zolGalleryWorkKey,
+  zolGalleryLineage as galleryLineage,
+  zolImageLineage as imageLineage,
+  zolImageWorkKey,
+  zolModelSubject as modelSubject,
+  zolModelWorkKey as modelWorkKey,
+  zolParameterLineage as parameterLineage,
+  zolParameterWorkKey,
+  zolPictureSetLineage as pictureSetLineage,
+  zolPictureSetWorkKey,
+} from "./zolCaptureWorkKeys";
+import {
   validateZolCatalogGallerySource as validateSource,
   zolBrandKey as brandKey,
   zolCatalogGalleryConfiguration as providerConfiguration,
@@ -189,8 +204,10 @@ AsyncGenerator<SourceProviderEvent, BrandState | undefined> {
       yield inaccessible(context.targetKey, url, context.now(), "access_denied", "robots.txt 不允许品牌目录");
       return undefined;
     }
-    const response = await requestPersistently({ ...context, workKey: `page:brand:${key}:${page}`,
+    const response = await requestPersistently({ ...context, workKey: zolBrandCatalogWorkKey(key, page),
       captureUnit: "zol_brand_catalog_page", url,
+      subject: brandSubject(key),
+      resourceKind: "brand_catalog",
       maximumBytes: context.configuration.maximumHtmlBytes });
     const statusFailure = pageStatusFailure(response, `品牌 ${key} 目录第 ${page} 页`, "source");
     if (statusFailure) {
@@ -225,14 +242,16 @@ AsyncGenerator<SourceProviderEvent> {
   const workKey = modelWorkKey(brand, model);
   if (context.completedWorkKeys.has(workKey)) return;
   await context.admission.ensureCaptureWorkItem({ runId: context.runId, targetKey: context.targetKey,
-    workKey, parentObjectKey: model.id, captureUnit: "zol_model_bundle", expectedUnitCount: 1 });
+    workKey, parentObjectKey: model.id, captureUnit: "zol_model_bundle", expectedUnitCount: 1,
+    subject: modelSubject(brand, model), resourceKind: "model_bundle" });
   await context.admission.startCaptureWorkItem({ runId: context.runId, workKey });
   context.pendingModels.set(workKey, { pendingImages: 0, sealed: false });
   const parameterUrl = assertPublicHttpsUrl(
     `https://detail.zol.com.cn/${zolProductGroupId(model.id)}/${model.id}/param.shtml`,
   );
-  const parameterResponse = await requestPersistently({ ...context, workKey: `page:param:${model.id}`,
-    captureUnit: "zol_model_parameters", url: parameterUrl,
+  const parameterResponse = await requestPersistently({ ...context, workKey: zolParameterWorkKey(model.id),
+    captureUnit: "zol_model_parameters", resourceKind: "parameters",
+    url: parameterUrl, subject: modelSubject(brand, model),
     maximumBytes: context.configuration.maximumHtmlBytes });
   const statusFailure = pageStatusFailure(parameterResponse, `型号 ${model.id} 参数页`, "model");
   if (statusFailure) {
@@ -258,10 +277,11 @@ AsyncGenerator<SourceProviderEvent> {
   await finishSettledModel(context, workKey);
 }
 
-async function* collectGallery(context: ZolCollectionContext, _brand: BrandState, model: ZolModelEntry,
+async function* collectGallery(context: ZolCollectionContext, brand: BrandState, model: ZolModelEntry,
   parameterUrl: URL, galleryUrl: URL, workKey: string): AsyncGenerator<SourceProviderEvent> {
-  const response = await requestPersistently({ ...context, workKey: `page:gallery:${model.id}`,
-    captureUnit: "zol_model_gallery", url: galleryUrl,
+  const response = await requestPersistently({ ...context, workKey: zolGalleryWorkKey(model.id),
+    captureUnit: "zol_model_gallery", resourceKind: "gallery",
+    url: galleryUrl, subject: modelSubject(brand, model),
     maximumBytes: context.configuration.maximumHtmlBytes });
   const statusFailure = pageStatusFailure(response, `型号 ${model.id} 图集页`, "model");
   if (statusFailure) {
@@ -283,18 +303,22 @@ async function* collectGallery(context: ZolCollectionContext, _brand: BrandState
   const seenImages = new Set<string>();
   let imageOrdinal = 0;
   for (const section of sections) {
-    imageOrdinal = yield* collectGallerySection(context, model, galleryUrl, section, sections,
+    imageOrdinal = yield* collectGallerySection(context, brand, model, galleryUrl, section, sections,
       seenImages, imageOrdinal, workKey);
   }
 }
 
-async function* collectGallerySection(context: ZolCollectionContext, model: ZolModelEntry, galleryUrl: URL,
+async function* collectGallerySection(context: ZolCollectionContext, brand: BrandState,
+  model: ZolModelEntry, galleryUrl: URL,
   section: ReturnType<typeof parseZolGallerySections>[number], sections: ReturnType<typeof parseZolGallerySections>,
   seenImages: Set<string>, imageOrdinal: number, workKey: string):
 AsyncGenerator<SourceProviderEvent, number> {
   const detailUrl = assertPublicHttpsUrl(section.detailUrl);
-  const response = await requestPersistently({ ...context, workKey: `page:image-set:${model.id}:${section.ordinal}`,
+  const response = await requestPersistently({ ...context,
+    workKey: zolPictureSetWorkKey(model.id, section.ordinal),
     captureUnit: "zol_model_picture_set", url: detailUrl,
+    subject: modelSubject(brand, model), resourceKind: "picture_set",
+    resourceSection: section.title, resourceOrdinal: section.ordinal,
     maximumBytes: context.configuration.maximumHtmlBytes });
   const statusFailure = pageStatusFailure(response, `型号 ${model.id} 大图分区`, "model");
   if (statusFailure) {
@@ -338,14 +362,15 @@ AsyncGenerator<SourceProviderEvent, number> {
     pending.pendingImages += 1;
     // WHY：队列任务稍后才执行；必须在入队时冻结 ordinal，不能闭包读取继续递增的循环变量。
     const completed = await context.imageQueue.enqueue(
-      (imageSignal) => downloadImage(context, model, detailUrl, image, sourceOrdinal, workKey, imageSignal));
+      (imageSignal) => downloadImage(context, brand, model, detailUrl, image, sourceOrdinal, workKey, imageSignal));
     yield* emitQueuedImages(context, completed);
     imageOrdinal += 1;
   }
   return imageOrdinal;
 }
 
-async function downloadImage(context: ZolCollectionContext, model: ZolModelEntry, detailUrl: URL,
+async function downloadImage(context: ZolCollectionContext, brand: BrandState,
+  model: ZolModelEntry, detailUrl: URL,
   image: ZolGalleryImage, imageOrdinal: number, modelWorkKeyValue: string,
   signal: AbortSignal): Promise<QueuedImage> {
   const imageUrl = assertZolImageUrl(image.url);
@@ -353,8 +378,10 @@ async function downloadImage(context: ZolCollectionContext, model: ZolModelEntry
     if (!isAllowed(context.robots, imageUrl)) {
       throw new SourceProviderFailure("source_restricted", "robots.txt 不允许图片资源");
     }
-    const response = await requestPersistently({ ...context, workKey: `asset:image:${model.id}:${imageOrdinal}`,
+    const response = await requestPersistently({ ...context, workKey: zolImageWorkKey(model.id, imageOrdinal),
       captureUnit: "zol_model_gallery_image", url: imageUrl,
+      subject: modelSubject(brand, model), resourceKind: "image",
+      resourceSection: image.section, resourceOrdinal: imageOrdinal,
       maximumBytes: context.configuration.maximumImageBytes, requestLane: "asset", signal });
     if ([401, 403, 429].includes(response.statusCode)) {
       throw new SourceProviderFailure("source_restricted", `图片资源返回 HTTP ${response.statusCode}`);
@@ -419,10 +446,6 @@ async function finishSettledModel(context: ZolCollectionContext, workKey: string
   context.pendingModels.delete(workKey);
 }
 
-function modelWorkKey(brand: BrandState, model: ZolModelEntry) {
-  return `model:${brand.key}:${model.id}`;
-}
-
 function requestRobots(input: { source: CrawlPlanSource; runId: string; admission: SourceRequestAdmissionPort;
   targetKey: string; origin: string; maximumBytes: number; request: PublicResourceRequest;
   requestLane?: "asset"; signal?: AbortSignal }) {
@@ -474,27 +497,4 @@ function accepted(signal: string, reason: string) {
 }
 function rejected(signal: string, reason: string) {
   return { status: "rejected" as const, ruleVersion: "zol-catalog-gallery-v2", matchedSignals: [signal], reason };
-}
-function brandLineage(catalogUrl: URL, key: string, page: number) {
-  return page === 1
-    ? { workKey: `page:brand:${key}:${page}`, discoveryKind: "planned_entry" as const, depth: 0 as const }
-    : { workKey: `page:brand:${key}:${page}`, discoveryKind: "html_link" as const,
-      depth: 1 as const, parentUrl: catalogUrl.href };
-}
-function parameterLineage(brand: BrandState, model: ZolModelEntry) {
-  return { workKey: `page:param:${model.id}`, discoveryKind: "html_link" as const,
-    depth: 1 as const, parentUrl: brand.catalogUrl.href };
-}
-function galleryLineage(parameterUrl: URL, model: ZolModelEntry) {
-  // WHY：共享 lineage contract 只允许 0-3 层；图集与参数同属型号层，图片再占第 3 层。
-  return { workKey: `page:gallery:${model.id}`, discoveryKind: "html_link" as const,
-    depth: 2 as const, parentUrl: parameterUrl.href };
-}
-function pictureSetLineage(galleryUrl: URL, model: ZolModelEntry, ordinal: number) {
-  return { workKey: `page:image-set:${model.id}:${ordinal}`, discoveryKind: "html_link" as const,
-    depth: 2 as const, parentUrl: galleryUrl.href };
-}
-function imageLineage(detailUrl: URL, model: ZolModelEntry, ordinal: number) {
-  return { workKey: `asset:image:${model.id}:${ordinal}`, discoveryKind: "html_link" as const,
-    depth: 3 as const, parentUrl: detailUrl.href };
 }

@@ -6,6 +6,7 @@ const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
 export const sourceKinds = [
   "brand_official",
+  "market_directory",
   "retailer",
   "regulator",
   "standards_body",

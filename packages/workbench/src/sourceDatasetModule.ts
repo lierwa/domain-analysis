@@ -12,11 +12,9 @@ import {
   sourceCollectionTargetRuns,
   sourceObjects,
   sourceResourceReferences,
-  sourceRequestAttempts,
   sourceSnapshots,
 } from "@domain-analysis/db";
 import {
-  sourceDatasetRunViewSchema,
   sourceObjectSchema,
   sourceProviderAssetSchema,
   sourceProviderResourceReferenceSchema,
@@ -28,6 +26,7 @@ import {
   type SourceCollectionTargetRun,
   type SourceExecutionFailureCategory,
   type SourceDatasetRunView,
+  type SourceDatasetRunAuditView,
   type SourceDatasetRecordGroupKey,
   type SourceDatasetRecordPage,
   type SourceDatasetTaskView,
@@ -40,26 +39,22 @@ import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 
 import { contentHash } from "./contentHash";
 import { createCacacheSourceAssetStore, type SourceAssetStore } from "./sourceAssetStore";
-import { serializeSourceDataset } from "./sourceDatasetExport";
 import { SourceDatasetError } from "./sourceDatasetError";
 import {
   normalizeAsset,
   normalizeBatch,
-  normalizeResourceReference,
   normalizeRun,
-  normalizeSnapshot,
   normalizeTarget,
   normalizeTimestamp,
   sourceSnapshotOutcome,
 } from "./sourceDatasetNormalization";
-import { loadSourceDatasetRecordPage, loadSourceDatasetTaskView } from "./sourceDatasetTaskView";
+import { loadSourceDatasetRecordPage, loadSourceDatasetTaskView,
+  type SourceDatasetRecordPageInput } from "./sourceDatasetTaskView";
+import { exportSourceDatasetRun, loadSourceDatasetRun,
+  loadSourceDatasetRunAudit } from "./sourceDatasetRunViews";
 import { acquireSourceBatchLease, recoverInterruptedSourceBatches } from "./sourceExecutionRecovery";
-import {
-  acquireSourceRunLease,
-  createSourceRequestAdmission,
-  loadSourceRequestState,
-  prepareSourceRunForResume,
-} from "./sourceRequestAdmission";
+import { acquireSourceRunLease, createSourceRequestAdmission,
+  prepareSourceRunForResume } from "./sourceRequestAdmission";
 
 type SnapshotWrite = SourceSnapshotCommit & {
   assets?: SourceProviderAsset[];
@@ -69,9 +64,9 @@ type WorkbenchTransaction = Parameters<Parameters<WorkbenchDb["transaction"]>[0]
 
 export interface SourceDatasetModule extends SourceRequestAdmissionPort {
   listTask(taskId: string): Promise<SourceDatasetTaskView>;
-  listTaskRecords(input: { taskId: string; sourceKey: string; targetKey: string;
-    groupKey: SourceDatasetRecordGroupKey; cursor?: string; limit: number }): Promise<SourceDatasetRecordPage>;
+  listTaskRecords(input: SourceDatasetRecordPageInput): Promise<SourceDatasetRecordPage>;
   getRun(runId: string): Promise<SourceDatasetRunView | null>;
+  getRunAudit(runId: string): Promise<SourceDatasetRunAuditView | null>;
   exportRun(input: { runId: string; format: "jsonl" | "csv" }): AsyncIterable<string>;
   openAsset(input: { runId: string; assetId: string }): Promise<{ asset: SourceAsset; content: Readable }>;
   acquireRunLease(runId: string): Promise<{ release(): Promise<void> }>;
@@ -82,6 +77,7 @@ export interface SourceDatasetModule extends SourceRequestAdmissionPort {
   setBatchRecoveryState(batchId: string, state: "pending" | "running" | "completed"):
     Promise<SourceCollectionBatch>;
   getBatch(batchId: string): Promise<SourceCollectionBatch | null>;
+  getActiveBatchForTask(taskId: string): Promise<SourceCollectionBatch | null>;
   getBatchByCommandId(commandId: string): Promise<SourceCollectionBatch | null>;
   getRunByExecutionCommandId(commandId: string): Promise<SourceCollectionRun | null>;
   listBatchRuns(batchId: string): Promise<SourceCollectionRun[]>;
@@ -116,8 +112,9 @@ export function createSourceDatasetModule(
     ...admission,
     listTask: (taskId) => loadSourceDatasetTaskView(db, taskId),
     listTaskRecords: (input) => loadSourceDatasetRecordPage(db, input),
-    getRun: (runId) => loadRun(db, runId),
-    exportRun: (input) => exportRun(db, input),
+    getRun: (runId) => loadSourceDatasetRun(db, runId),
+    getRunAudit: (runId) => loadSourceDatasetRunAudit(db, runId),
+    exportRun: (input) => exportSourceDatasetRun(db, input),
     openAsset: (input) => openAsset(db, store, input),
     acquireRunLease: (runId) => acquireSourceRunLease(db, runId),
     acquireBatchLease: (batchId) => acquireSourceBatchLease(db, batchId),
@@ -133,6 +130,14 @@ export function createSourceDatasetModule(
       const row = await db.query.sourceCollectionBatches.findFirst({
         where: eq(sourceCollectionBatches.id, batchId),
       });
+      return row ? normalizeBatch(row) : null;
+    },
+    getActiveBatchForTask: async (taskId) => {
+      const row = await db.query.sourceCollectionBatches.findFirst({ where: and(
+        eq(sourceCollectionBatches.taskId, taskId),
+        sql<boolean>`(${sourceCollectionBatches.status} = 'running'
+          or ${sourceCollectionBatches.recoveryState} in ('pending', 'running'))`,
+      ) });
       return row ? normalizeBatch(row) : null;
     },
     getBatchByCommandId: async (commandId) => {
@@ -164,6 +169,12 @@ export function createSourceDatasetModule(
 }
 
 async function startBatch(db: WorkbenchDb, input: Parameters<SourceDatasetModule["startBatch"]>[0]) {
+  const active = await db.query.sourceCollectionBatches.findFirst({ where: and(
+    eq(sourceCollectionBatches.taskId, input.taskId),
+    sql<boolean>`(${sourceCollectionBatches.status} = 'running'
+      or ${sourceCollectionBatches.recoveryState} in ('pending', 'running'))`,
+  ) });
+  if (active) throw new SourceDatasetError("invalid_state", `任务已有活动抓取批次：${active.id}`);
   const row = { id: `source-batch-${randomUUID()}`, taskId: input.taskId,
     commandId: input.commandId ?? null,
     sourceCollectionPlanId: input.planId, sourceCollectionPlanVersion: input.planVersion,
@@ -375,6 +386,7 @@ async function commitSnapshot(db: WorkbenchDb, store: SourceAssetStore, raw: Sna
     if (!run || run.status !== "running" || !target || target.status !== "running") {
       throw new SourceDatasetError("invalid_state", "来源运行或 target 不存在，或已经结束");
     }
+    let captureWorkItemId: string | undefined;
     if (input.lineage) {
       const work = await transaction.query.sourceCaptureWorkItems.findFirst({ where: and(
         eq(sourceCaptureWorkItems.runId, input.runId),
@@ -382,13 +394,15 @@ async function commitSnapshot(db: WorkbenchDb, store: SourceAssetStore, raw: Sna
         eq(sourceCaptureWorkItems.workKey, input.lineage.workKey),
       ) });
       if (!work) throw new SourceDatasetError("invalid_state", "Snapshot 血缘引用了不存在的捕获工作");
+      captureWorkItemId = work.id;
     }
     const objectId = await upsertObject(transaction, run.taskId, input);
     const hash = contentHash({ observation: input.observation, payload: input.payload,
       resourceReferences, lineage: input.lineage });
     const snapshotId = `source-snapshot-${randomUUID()}`;
     const inserted = await transaction.insert(sourceSnapshots).values({ id: snapshotId,
-      runId: run.id, targetKey: input.targetKey, objectId, idempotencyKey: input.idempotencyKey,
+      runId: run.id, captureWorkItemId, targetKey: input.targetKey,
+      objectId, idempotencyKey: input.idempotencyKey,
       lineage: input.lineage, observation: input.observation, payload: input.payload, contentHash: hash })
       .onConflictDoNothing().returning({ id: sourceSnapshots.id });
     if (inserted.length === 0) {
@@ -459,53 +473,19 @@ async function assertIdempotentReplay(transaction: WorkbenchTransaction, runId: 
 }
 
 async function incrementCounters(transaction: WorkbenchTransaction, runId: string, targetId: string,
-  outcome: "accepted" | "supporting" | "failed", assetCount: number) {
+  outcome: "accepted" | "supporting" | "rejected" | "failed", assetCount: number) {
+  const failed = outcome === "failed" || outcome === "rejected";
   const runUpdate = { snapshotCount: sql`${sourceCollectionRuns.snapshotCount} + 1`,
     accessibleCount: outcome === "accepted" ? sql`${sourceCollectionRuns.accessibleCount} + 1` : sourceCollectionRuns.accessibleCount,
-    failedCount: outcome === "failed" ? sql`${sourceCollectionRuns.failedCount} + 1` : sourceCollectionRuns.failedCount,
+    failedCount: failed ? sql`${sourceCollectionRuns.failedCount} + 1` : sourceCollectionRuns.failedCount,
     assetCount: assetCount > 0 ? sql`${sourceCollectionRuns.assetCount} + ${assetCount}` : sourceCollectionRuns.assetCount };
   await transaction.update(sourceCollectionRuns).set(runUpdate).where(eq(sourceCollectionRuns.id, runId));
   await transaction.update(sourceCollectionTargetRuns).set({
     snapshotCount: sql`${sourceCollectionTargetRuns.snapshotCount} + 1`,
     accessibleCount: outcome === "accepted" ? sql`${sourceCollectionTargetRuns.accessibleCount} + 1` : sourceCollectionTargetRuns.accessibleCount,
-    failedCount: outcome === "failed" ? sql`${sourceCollectionTargetRuns.failedCount} + 1` : sourceCollectionTargetRuns.failedCount,
+    failedCount: failed ? sql`${sourceCollectionTargetRuns.failedCount} + 1` : sourceCollectionTargetRuns.failedCount,
     assetCount: assetCount > 0 ? sql`${sourceCollectionTargetRuns.assetCount} + ${assetCount}` : sourceCollectionTargetRuns.assetCount,
   }).where(eq(sourceCollectionTargetRuns.id, targetId));
-}
-
-async function loadRun(db: WorkbenchDb, runId: string): Promise<SourceDatasetRunView | null> {
-  const runRow = await db.query.sourceCollectionRuns.findFirst({ where: eq(sourceCollectionRuns.id, runId) });
-  if (!runRow) return null;
-  const [targetRows, snapshotRows, requestState] = await Promise.all([
-    db.select().from(sourceCollectionTargetRuns).where(eq(sourceCollectionTargetRuns.runId, runId))
-      .orderBy(asc(sourceCollectionTargetRuns.targetKey)),
-    db.select().from(sourceSnapshots).where(eq(sourceSnapshots.runId, runId)).orderBy(asc(sourceSnapshots.createdAt)),
-    loadSourceRequestState(db, runId),
-  ]);
-  const objectIds = [...new Set(snapshotRows.map((item) => item.objectId))];
-  const snapshotIds = snapshotRows.map((item) => item.id);
-  const [objectRows, assetRows, referenceRows] = await Promise.all([
-    objectIds.length > 0 ? db.select().from(sourceObjects).where(inArray(sourceObjects.id, objectIds)) : [],
-    snapshotIds.length > 0 ? db.select().from(sourceAssets).where(inArray(sourceAssets.snapshotId, snapshotIds)) : [],
-    snapshotIds.length > 0 ? db.select().from(sourceResourceReferences)
-      .where(inArray(sourceResourceReferences.snapshotId, snapshotIds))
-      .orderBy(asc(sourceResourceReferences.ordinal)) : [],
-  ]);
-  const objectsById = new Map(objectRows.map((item) => [item.id, item]));
-  const assetsBySnapshot = new Map<string, typeof assetRows>();
-  for (const asset of assetRows) assetsBySnapshot.set(asset.snapshotId,
-    [...(assetsBySnapshot.get(asset.snapshotId) ?? []), asset]);
-  const referencesBySnapshot = new Map<string, typeof referenceRows>();
-  for (const reference of referenceRows) referencesBySnapshot.set(reference.snapshotId,
-    [...(referencesBySnapshot.get(reference.snapshotId) ?? []), reference]);
-  const records = snapshotRows.flatMap((row) => {
-    const object = objectsById.get(row.objectId);
-    return object ? [{ object: sourceObjectSchema.parse({ ...object, createdAt: normalizeTimestamp(object.createdAt) }),
-      snapshot: normalizeSnapshot(row), assets: (assetsBySnapshot.get(row.id) ?? []).map(normalizeAsset),
-      resourceReferences: (referencesBySnapshot.get(row.id) ?? []).map(normalizeResourceReference) }] : [];
-  });
-  return sourceDatasetRunViewSchema.parse({ run: normalizeRun(runRow),
-    targets: targetRows.map(normalizeTarget), ...requestState, records });
 }
 
 async function openAsset(db: WorkbenchDb, store: SourceAssetStore,
@@ -516,10 +496,4 @@ async function openAsset(db: WorkbenchDb, store: SourceAssetStore,
   if (!rows[0]) throw new SourceDatasetError("asset_not_found", `来源附件不存在：${input.assetId}`);
   const asset = normalizeAsset(rows[0].asset);
   return { asset, content: store.open(asset.casIntegrity) };
-}
-
-async function* exportRun(db: WorkbenchDb, input: { runId: string; format: "jsonl" | "csv" }) {
-  const view = await loadRun(db, input.runId);
-  if (!view) throw new SourceDatasetError("run_not_found", `来源运行不存在：${input.runId}`);
-  yield* serializeSourceDataset(view, input.format);
 }

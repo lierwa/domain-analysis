@@ -141,7 +141,7 @@ function LineageCard({ data }: NodeProps<CanvasNode>) {
         <ChevronRight className={`h-4 w-4 transition-transform ${data.expanded ? "rotate-90" : ""}`} aria-hidden="true" />
       </button>}
     </header>
-    {node.recordsVisible && node.entity.kind === "group"
+    {node.recordsVisible && node.entity.kind === "resource"
       && <SourceDatasetRecordList taskId={data.taskId} entity={node.entity} onSelect={data.onRecord} />}
     {node.inlineChildren && <InlineChildrenList children={node.inlineChildren}
       activeRowId={data.activeRowId} expanded={data.expandedIds} onSelect={data.onSelect}
@@ -265,7 +265,8 @@ function RoutedLineEdge({ id, data, style, markerEnd, interactionWidth,
 }
 
 function StatusGlyph({ status }: { status: SourceDataMapStatus }) {
-  if (status === "attention") return <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-danger" aria-label="含失败或内容不合格记录" />;
+  if (status === "attention") return <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-danger" role="img"
+    aria-label="这个型号有内容未通过验收" />;
   if (status === "unresolved") return <CircleHelp className="h-3.5 w-3.5 shrink-0 text-warning" aria-label="信息待解决" />;
   return null;
 }

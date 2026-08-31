@@ -62,6 +62,7 @@ export function normalizeSnapshot(row: typeof sourceSnapshots.$inferSelect) {
   const parsedPayload = rawSourcePayloadSchema.safeParse(row.payload);
   const parsedLineage = sourceSnapshotLineageSchema.safeParse(row.lineage);
   return sourceSnapshotSchema.parse({ id: row.id, runId: row.runId, targetKey: row.targetKey ?? undefined,
+    captureWorkItemId: row.captureWorkItemId ?? undefined,
     objectId: row.objectId, idempotencyKey: row.idempotencyKey,
     lineage: parsedLineage.success ? parsedLineage.data : undefined, observation,
     payload: row.payload == null ? undefined : parsedPayload.success ? parsedPayload.data
@@ -80,9 +81,8 @@ export function normalizeResourceReference(row: typeof sourceResourceReferences.
 }
 
 export function sourceSnapshotOutcome(observation: RawSourceObservation) {
-  if (observation.state !== "accessible" || observation.contentAssessment?.status === "rejected") {
-    return "failed" as const;
-  }
+  if (observation.state !== "accessible") return "failed" as const;
+  if (observation.contentAssessment?.status === "rejected") return "rejected" as const;
   return observation.contentAssessment?.status === "supporting" ? "supporting" as const : "accepted" as const;
 }
 

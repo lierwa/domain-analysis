@@ -27,6 +27,7 @@
     "check:runtime": "check-node-version --package",
     "db:start-local": "npm run check:runtime --silent && node --env-file=.env.example --env-file-if-exists=.env.local scripts/start-local-postgresql.mjs",
     "db:ensure-local": "npm run check:runtime --silent && npm --workspace @domain-analysis/db run ensure:local",
+    "backfill:zol-subjects": "npm run check:runtime --silent && node --env-file=.env.example --env-file-if-exists=.env.local --import=tsx scripts/backfill-zol-capture-subjects.ts",
     "dev": "npm run check:runtime --silent && npm run db:start-local && npm run db:ensure-local && node scripts/start-dev-servers.mjs",
     "dev:stop": "node --env-file=.env.example --env-file-if-exists=.env.local scripts/stop-dev-servers.mjs",
     "dev:api": "npm run check:runtime --silent && npm --workspace @domain-analysis/api run dev",

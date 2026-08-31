@@ -16,4 +16,9 @@ describe("API 安全配置", () => {
       interviewModelId: "gpt-5.6-sol", interviewReasoningEffort: "high",
     });
   });
+
+  it("允许多个本地 checkout 显式复用同一份 Source Asset 存储", () => {
+    expect(loadConfig({ SOURCE_ASSET_CACHE_PATH: "/var/local/domain-analysis/source-assets" }))
+      .toMatchObject({ sourceAssetCachePath: "/var/local/domain-analysis/source-assets" });
+  });
 });

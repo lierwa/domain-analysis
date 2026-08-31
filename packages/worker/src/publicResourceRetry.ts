@@ -3,6 +3,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   SourceProviderFailure,
   type CrawlPlanSource,
+  type SourceCaptureSubjectInput,
+  type SourceCaptureWorkItem,
   type SourceRequestAdmissionPort,
 } from "@domain-analysis/shared";
 import pRetry from "p-retry";
@@ -19,6 +21,10 @@ export async function requestPublicResourcePersistently(input: {
   targetKey: string;
   workKey: string;
   captureUnit: string;
+  subject?: SourceCaptureSubjectInput;
+  resourceKind?: SourceCaptureWorkItem["resourceKind"];
+  resourceSection?: string;
+  resourceOrdinal?: number;
   url: URL;
   maximumBytes: number;
   request: PublicResourceRequest;
@@ -28,7 +34,11 @@ export async function requestPublicResourcePersistently(input: {
 }) {
   const { source, runId, admission, targetKey, workKey } = input;
   await admission.ensureCaptureWorkItem({ runId, targetKey, workKey,
-    captureUnit: input.captureUnit, expectedUnitCount: 1 });
+    captureUnit: input.captureUnit, expectedUnitCount: 1,
+    ...(input.subject ? { subject: input.subject } : {}),
+    ...(input.resourceKind ? { resourceKind: input.resourceKind } : {}),
+    ...(input.resourceSection ? { resourceSection: input.resourceSection } : {}),
+    ...(input.resourceOrdinal === undefined ? {} : { resourceOrdinal: input.resourceOrdinal }) });
   await admission.startCaptureWorkItem({ runId, workKey });
   try {
     // WHY：每次重试仍重新进入持久 admission，共享计划预算、频控与取消，不让库级 retry 绕开业务账本。

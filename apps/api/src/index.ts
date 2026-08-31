@@ -17,6 +17,10 @@ import { createSourceExecutionQueue } from "./sourceExecutionQueue";
 
 const config = loadConfig();
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
+// WHY：数据库可由多个本地 checkout 读取，但内容寻址资产仍只保留一份；显式路径避免复制原始附件。
+const assetCachePath = config.sourceAssetCachePath
+  ? path.resolve(config.sourceAssetCachePath)
+  : path.join(repositoryRoot, "data", "source-assets");
 const zolProvider = createZolCatalogGalleryProvider();
 const zolBrandRankingReader = createZolBrandRankingReader();
 const sourceProviders = new Map([[zolProvider.key, zolProvider]]);
@@ -30,7 +34,7 @@ const workbench = await openDataCollectionWorkbench({
   crawlPlanningRuntime: createZolCategoryPlanningRuntime({
     rankingReader: zolBrandRankingReader,
   }),
-  sourceDatasetModule: { assetCachePath: path.join(repositoryRoot, "data", "source-assets") },
+  sourceDatasetModule: { assetCachePath },
   sourceProviders,
 });
 if (!workbench.sourceExecution) throw new Error("Source Execution 未完成装配");

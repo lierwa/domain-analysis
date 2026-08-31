@@ -8,7 +8,7 @@ import {
   interviewTurnRequestSchema,
   sourceDatasetTaskViewSchema,
   sourceDatasetRecordPageSchema,
-  sourceDatasetRunViewSchema,
+  sourceDatasetRunAuditViewSchema,
   sourceExecutionAcceptanceSchema,
   sourcePreparationSchema,
   taskModelSelectionSchema,
@@ -21,7 +21,8 @@ import {
   type SourceDatasetTaskView,
   type SourceDatasetRecordGroupKey,
   type SourceDatasetRecordPage,
-  type SourceDatasetRunView,
+  type SourceDatasetRunAuditView,
+  type SourceCaptureWorkItem,
   type TaskModelSelection,
 } from "@domain-analysis/shared";
 import { createParser } from "eventsource-parser";
@@ -142,15 +143,20 @@ export async function fetchSourceCollectionRuns(taskId: string): Promise<SourceD
   return sourceDatasetTaskViewSchema.parse(data.item);
 }
 
-export async function fetchSourceDatasetRecords(taskId: string, input: {
-  sourceKey: string;
-  targetKey: string;
-  groupKey: SourceDatasetRecordGroupKey;
-  cursor?: string;
-  limit?: number;
-}): Promise<SourceDatasetRecordPage> {
-  const query = new URLSearchParams({ sourceKey: input.sourceKey, targetKey: input.targetKey,
-    groupKey: input.groupKey, limit: String(input.limit ?? 30) });
+export async function fetchSourceDatasetRecords(taskId: string, input: ({
+  sourceKey: string; targetKey: string; groupKey: SourceDatasetRecordGroupKey;
+} | {
+  subjectId: string; resourceKind: NonNullable<SourceCaptureWorkItem["resourceKind"]>;
+}) & { cursor?: string; limit?: number }): Promise<SourceDatasetRecordPage> {
+  const query = new URLSearchParams({ limit: String(input.limit ?? 30) });
+  if ("subjectId" in input) {
+    query.set("subjectId", input.subjectId);
+    query.set("resourceKind", input.resourceKind);
+  } else {
+    query.set("sourceKey", input.sourceKey);
+    query.set("targetKey", input.targetKey);
+    query.set("groupKey", input.groupKey);
+  }
   if (input.cursor) query.set("cursor", input.cursor);
   const data = await request<{ item: unknown }>(
     `/api/capture-tasks/${encodeURIComponent(taskId)}/source-map/records?${query.toString()}`,
@@ -158,11 +164,11 @@ export async function fetchSourceDatasetRecords(taskId: string, input: {
   return sourceDatasetRecordPageSchema.parse(data.item);
 }
 
-export async function fetchSourceCollectionRun(taskId: string, runId: string): Promise<SourceDatasetRunView> {
+export async function fetchSourceCollectionRun(taskId: string, runId: string): Promise<SourceDatasetRunAuditView> {
   const data = await request<{ item: unknown }>(
     `/api/capture-tasks/${encodeURIComponent(taskId)}/source-runs/${encodeURIComponent(runId)}`,
   );
-  return sourceDatasetRunViewSchema.parse(data.item);
+  return sourceDatasetRunAuditViewSchema.parse(data.item);
 }
 
 export function sourceRunExportUrl(taskId: string, runId: string, format: "jsonl" | "csv") {

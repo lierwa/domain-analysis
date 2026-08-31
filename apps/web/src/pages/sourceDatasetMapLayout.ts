@@ -69,14 +69,14 @@ export async function layoutSourceDataMap(graph: VisibleSourceDataMapGraph,
 
 export function sourceDataMapNodeSize(node: MapNode) {
   if (node.kind === "task") return { width: 232, height: 82 };
-  if (node.recordsVisible && node.entity.kind === "group") {
-    const rows = Math.max(1, Math.min(node.entity.group.totalCount, 6));
+  if (node.recordsVisible && node.entity.kind === "resource") {
+    const rows = Math.max(1, Math.min(node.entity.count, 6));
     return { width: 360, height: HEADER_HEIGHT + rows * RECORD_ROW_HEIGHT + 48 + NODE_FRAME_HEIGHT };
   }
   if (node.inlineChildren) return { width: 350,
     height: HEADER_HEIGHT + node.inlineChildren.length * INLINE_ROW_HEIGHT + NODE_FRAME_HEIGHT };
-  if (node.kind === "group") return { width: 292, height: 86 };
-  if (node.kind === "target") return { width: 276, height: 82 };
+  if (node.kind === "resource" || node.kind === "audit_group") return { width: 292, height: 86 };
+  if (node.kind === "model" || node.kind === "run") return { width: 276, height: 82 };
   return { width: 236, height: 78 };
 }
 

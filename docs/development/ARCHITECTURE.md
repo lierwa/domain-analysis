@@ -41,8 +41,8 @@ Workbench Chat Timeline
 | Source Access Gate | 持久准入 HTML 与图片请求，执行节奏、预算和访问限制熔断 | 选择品牌或型号 |
 | ZOL Catalog + Gallery Provider | 按计划识别品牌目录、型号、参数页、图集和图片关系 | 扩大计划范围或清洗商品参数 |
 | Public Resource Transport | 固定公网地址、限制重定向、执行字节上限并返回原始响应 | 控频、业务重试或范围选择 |
-| Source Dataset | 保存请求、原始响应、图片资产、引用、血缘、型号完成数和终态 | 标准化或覆盖原始内容 |
-| Web | 投影采访、计划、运行进度和 Source Dataset | 推导新的领域状态或直连来源资产 |
+| Source Dataset | 保存请求、原始响应、图片资产、引用、血缘、Capture Subject、型号完成数和终态 | 标准化商品或覆盖原始内容 |
+| Web | 读取 typed 商品投影与运行审计投影，渐进展示 Source Dataset | 从 URL、工作键、错误文案推导领域状态，或直连来源资产 |
 
 ## 单一事实源
 
@@ -56,8 +56,18 @@ Workbench Chat Timeline
 | 实际工作项与执行终态 | Source Execution |
 | 请求准入、节奏、冷却和熔断 | Source Access Gate |
 | 实际请求和响应 | Source Request Attempt / Raw Snapshot |
+| 批次内品牌、来源型号身份及父子关系 | Source Dataset Capture Subject |
 | 页面与资源发现关系 | Source Dataset lineage |
 | 图片 bytes、MIME、哈希和来源关系 | Source Asset / Resource Reference |
+
+## Source Dataset 投影与读取边界
+
+- Capture Subject 是 Source Dataset 内的批次级来源身份，当前只表达品牌和来源型号；它保存源站实体 ID、显示名称和父子关系，不承担跨来源标准化。Provider 通过现有 Work Item seam 提交身份，幂等、外键和冲突处理由 Workbench 隐藏。
+- 商品投影按当前 Batch 聚合品牌、型号、资源数、完成度和去重后的逻辑问题；运行审计投影按来源、Batch、Run 与记录组表达执行血缘。两种投影共享 Source Dataset 事实，但不互相推导。
+- 单条资源读取必须同时携带 `subjectId` 与 `resourceKind` 并分页；图片 bytes 只通过受控 Asset 路由按需读取。展开一条资源不能加载整个 Run，也不能把整批图片送入审计详情。
+- Web 只保存展示交互状态：活动展开行与当前详情选择分别建模。抽屉关闭后焦点返回首次地图触发器；这些状态不参与领域完成度、问题归属或执行生命周期判断。
+- 历史 ZOL Subject 回填由 ZOL adapter 解释自身工作键，只新增 Snapshot、Work Item 与 Subject 的派生关联，不改写原始快照、哈希、Run 或已确认计划。
+- API 默认从当前仓库的 `data/source-assets` 读取内容寻址资产；多个本地 checkout 共用数据库时，可通过 `SOURCE_ASSET_CACHE_PATH` 显式指向实际资产根目录。该配置只改变本地 bytes 的读取位置，不改变 Asset ID、哈希、血缘或 HTTP contract。
 
 ## 规划与确认门
 

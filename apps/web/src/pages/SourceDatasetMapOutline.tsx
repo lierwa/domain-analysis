@@ -61,7 +61,7 @@ function OutlineNodeBranch({ node, depth, relations, actions, path }: {
       {children.map((child) => <OutlineNodeBranch key={`${node.id}:${child.id}`} node={child} depth={depth + 1}
         relations={relations} actions={actions} path={nextPath} />)}
     </ol>}
-    {node.recordsVisible && node.entity.kind === "group" && <div className="border-t border-line bg-panel/30 p-3 sm:pl-16">
+    {node.recordsVisible && node.entity.kind === "resource" && <div className="border-t border-line bg-panel/30 p-3 sm:pl-16">
       <SourceDatasetRecordList taskId={actions.taskId} entity={node.entity}
         onSelect={actions.onSelectRecord} />
     </div>}

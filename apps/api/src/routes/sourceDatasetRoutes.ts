@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 
-import { sourceDatasetRecordGroupKeySchema } from "@domain-analysis/shared";
+import { sourceCaptureResourceKindSchema, sourceDatasetRecordGroupKeySchema } from "@domain-analysis/shared";
 import type { SourceDatasetModule } from "@domain-analysis/workbench";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -10,13 +10,20 @@ const runParamsSchema = taskParamsSchema.extend({ runId: z.string().min(1) }).st
 const assetParamsSchema = runParamsSchema.extend({ assetId: z.string().min(1) }).strict();
 const assetQuerySchema = z.object({ disposition: z.enum(["inline", "attachment"]).default("attachment") }).strict();
 const exportQuerySchema = z.object({ format: z.enum(["jsonl", "csv"]).default("jsonl") }).strict();
-const recordPageQuerySchema = z.object({
+const lineageRecordPageQuerySchema = z.object({
   sourceKey: z.string().min(1).max(240),
   targetKey: z.string().min(1).max(240),
   groupKey: sourceDatasetRecordGroupKeySchema,
   cursor: z.string().min(1).max(2_000).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(30),
 }).strict();
+const subjectRecordPageQuerySchema = z.object({
+  subjectId: z.string().min(1).max(240),
+  resourceKind: sourceCaptureResourceKindSchema,
+  cursor: z.string().min(1).max(2_000).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(30),
+}).strict();
+const recordPageQuerySchema = z.union([lineageRecordPageQuerySchema, subjectRecordPageQuerySchema]);
 
 export async function registerSourceDatasetRoutes(app: FastifyInstance, datasets: SourceDatasetModule) {
   app.get("/api/capture-tasks/:taskId/source-runs", async (request) => {
@@ -30,7 +37,7 @@ export async function registerSourceDatasetRoutes(app: FastifyInstance, datasets
   });
   app.get("/api/capture-tasks/:taskId/source-runs/:runId", async (request, reply) => {
     const { taskId, runId } = runParamsSchema.parse(request.params);
-    const item = await datasets.getRun(runId);
+    const item = await datasets.getRunAudit(runId);
     if (!item || item.run.taskId !== taskId) {
       return reply.status(404).send({ error: "run_not_found", message: "原始数据运行不存在" });
     }

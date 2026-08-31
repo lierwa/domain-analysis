@@ -23,6 +23,36 @@ describe("原始来源附件路由", () => {
     await app.close();
   });
 
+  it("按型号与资源类型分页，不解析 workKey 或 URL", async () => {
+    const listTaskRecords = vi.fn().mockResolvedValue({ items: [], totalCount: 0 });
+    const datasets = { listTaskRecords } as unknown as SourceDatasetModule;
+    const app = Fastify({ logger: false });
+    await registerSourceDatasetRoutes(app, datasets);
+
+    const response = await app.inject({ method: "GET",
+      url: "/api/capture-tasks/task-1/source-map/records?subjectId=source-subject-1&resourceKind=image&limit=30" });
+
+    expect(response.statusCode).toBe(200);
+    expect(listTaskRecords).toHaveBeenCalledWith({ taskId: "task-1", subjectId: "source-subject-1",
+      resourceKind: "image", limit: 30 });
+    await app.close();
+  });
+
+  it("Run 详情返回轻量审计，不读取全量 records", async () => {
+    const getRunAudit = vi.fn().mockResolvedValue({ run: { taskId: "task-1" }, targets: [],
+      workItems: [], requestAttempts: [], accessGates: [], recordGroups: [] });
+    const datasets = { getRunAudit } as unknown as SourceDatasetModule;
+    const app = Fastify({ logger: false });
+    await registerSourceDatasetRoutes(app, datasets);
+
+    const response = await app.inject({ method: "GET", url: "/api/capture-tasks/task-1/source-runs/run-1" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().item).not.toHaveProperty("records");
+    expect(getRunAudit).toHaveBeenCalledWith("run-1");
+    await app.close();
+  });
+
   it("校验 task/run 归属后从本地资产存储下载原文", async () => {
     const openAsset = vi.fn().mockResolvedValue({
       asset: { filename: "国家标准 原文.pdf", mediaType: "application/pdf", bytes: 9 },

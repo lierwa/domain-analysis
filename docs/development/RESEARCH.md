@@ -159,3 +159,30 @@ Planning Runtime、PostgreSQL Planning Run、Crawl Plan Draft、独立确认 API
 ### 验证与退出
 
 ZOL adapter 先校验 Capture Task 排行榜候选、榜单品牌目录中的唯一门类 slug、门类页排行入口、排行聚合页品牌榜入口、GBK 页面标题、名次、综合评分和目录 URL；typed contract 再校验评分阈值、品牌上限和执行品牌集合。ZOL 改版后若任一链路、综合评分或唯一品牌映射不可验证，Planning Run 进入 `rankingStatus=unavailable`，不进入执行。
+
+## R-010 Source Capture Subject 与数据地图投影
+
+### 问题与候选
+
+当前 Source Dataset 只保存 URL 资源、Run、work item 和发现深度；ZOL Provider 已经识别品牌与型号，但这两个来源事实没有通过 typed contract 持久化。Web 因而只能按 Run/深度展示，或解析 `workKey`、URL 和文案猜测业务归属。后者会把来源协议泄漏到通用 UI，不能采用。
+
+| 候选 | 本地与离线 | 类型/安全边界 | 处置 |
+| --- | --- | --- | --- |
+| Web 解析 `workKey`、URL 或错误文案 | 可用 | 来源协议泄漏，形成第二事实源 | 不采用 |
+| 每个 Snapshot 重复保存品牌/型号 JSON | 可用 | typed，但在数千资源上重复身份 | 不采用 |
+| Provider 通过现有 `ensureCaptureWorkItem` 写入规范化 Capture Subject | 可用 | 来源 adapter 写事实，Source Dataset 校验和幂等，Web 只读 | 采用 |
+| 引入新的图数据库或状态管理库 | 增加部署与升级成本 | 与当前 PostgreSQL/React Query 能力重复 | 不采用 |
+
+### 采用结论
+
+- Source Dataset 新增批次内唯一的 `brand` / `product_model` Capture Subject；它只表达源站身份和显示名称，不是阶段 2 的跨来源商品标准化实体。
+- `ensureCaptureWorkItem` 保持为 Provider 唯一写入 seam；Source Dataset 在接口内部完成 subject 幂等、父品牌关联、工作项关联和冲突校验。
+- Snapshot 保存真实 Capture Work Item 外键；原有 typed lineage 继续保存来源发现路径。历史数据只增加可审计关联，不改写原始内容、哈希或已确认计划。
+- Workbench 统一投影 Batch 汇总、品牌型号完成度和逻辑问题；Web 不重复计算领域状态。
+- 继续复用 Drizzle 0.45.2 的 PostgreSQL 外键、索引和 `onConflict`，React Flow 12 的可见子树，TanStack Query 5 的游标分页，以及 Radix Alert Dialog 的键盘和焦点管理；不增加依赖。官方依据：[Drizzle insert/upsert](https://orm.drizzle.team/docs/insert)、[React Flow expand/collapse](https://reactflow.dev/examples/layout/expand-collapse)、[TanStack Query pagination](https://tanstack.com/query/latest/docs/framework/react/guides/paginated-queries)、[Radix Alert Dialog](https://www.radix-ui.com/primitives/docs/components/alert-dialog)。
+
+### 最小原型与退出条件
+
+最小原型必须用当前微波炉 Batch 证明：19 个品牌、247 个型号、246 个完成、1 个需关注；3,799 个快照和 2,918 个图片附件按全部 4 个 Run 汇总；同一内容拒绝在 3 个 Run 出现时只投影为 1 个问题；单张图片详情不得加载整个 Run。
+
+如果 Provider 无法从已保存的来源目录事实确定品牌或型号，记录保持在“未归类原始记录”，不得由通用模块猜测。若真实数据无法满足上述关联门，停止 UI 切换并保留现有运行审计入口。

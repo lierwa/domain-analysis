@@ -1,0 +1,1 @@
+ALTER TABLE "workbench"."source_capture_work_items" ADD COLUMN "resource_kind" text;

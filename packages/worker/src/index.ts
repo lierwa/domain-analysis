@@ -7,5 +7,6 @@ export * from "./publicResourceTransport";
 export * from "./publicWebResourceProvider";
 export * from "./zolCatalogGalleryProvider";
 export * from "./zolCatalogParsing";
+export * from "./zolCaptureWorkKeys";
 export * from "./zolBrandRankingReader";
 export * from "./zolGalleryParsing";

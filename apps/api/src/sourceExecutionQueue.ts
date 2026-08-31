@@ -40,7 +40,7 @@ export interface SourceExecutionQueue {
 export async function createSourceExecutionQueue(input: {
   connectionString: string;
   execution: SourceExecutionModule;
-  datasets?: Pick<SourceDatasetModule, "listUnfinishedBatches">;
+  datasets?: Pick<SourceDatasetModule, "listUnfinishedBatches" | "getActiveBatchForTask">;
   pgPool?: Pool;
 }): Promise<SourceExecutionQueue> {
   const ownsPool = !input.pgPool;
@@ -102,6 +102,9 @@ export async function createSourceExecutionQueue(input: {
       });
       // WHY：202 之前先重读 confirmed plan 和 Provider readiness，避免明显无效命令只留在后台日志。
       await input.execution.prepare({ taskId: raw.taskId, planId: raw.planId, ...request });
+      const active = await input.datasets?.getActiveBatchForTask(raw.taskId);
+      if (active) return sourceExecutionAcceptanceSchema.parse({ status: "already_running",
+        commandId: active.commandId ?? active.id, batchId: active.id });
       return enqueue(commandSchema.parse({ kind: "start", commandId: createCommandId(), ...raw }));
     },
     enqueueResume: async (raw) => enqueue(commandSchema.parse({

@@ -7,6 +7,7 @@ import type {
   SourceAccessPolicy,
   SourceAccessGateState,
   SourceCaptureWorkItem,
+  SourceCaptureSubject,
   SourceCollectionTargetRun,
   SourceCollectionPlanContent,
   SourceExecutionFailureCategory,
@@ -171,6 +172,9 @@ export const sourceCollectionBatches = workbenchSchema.table("source_collection_
 }, (table) => [
   uniqueIndex("source_collection_batch_command_uq").on(table.commandId)
     .where(sql`${table.commandId} is not null`),
+  // WHY：同一任务同一时刻只能有一个活动 Batch；UI 预检查改善提示，数据库约束负责并发竞态。
+  uniqueIndex("source_collection_batch_active_task_uq").on(table.taskId)
+    .where(sql`${table.status} = 'running' or ${table.recoveryState} in ('pending', 'running')`),
   index("source_collection_batch_task_time_idx").on(table.taskId, table.startedAt),
   index("source_collection_batch_plan_idx").on(table.sourceCollectionPlanId, table.sourceCollectionPlanVersion),
 ]);
@@ -226,13 +230,37 @@ export const sourceCollectionTargetRuns = workbenchSchema.table("source_collecti
   index("source_target_run_status_idx").on(table.runId, table.status),
 ]);
 
+export const sourceCaptureSubjects = workbenchSchema.table("source_capture_subjects", {
+  id: text("id").primaryKey(),
+  executionBatchId: text("execution_batch_id").notNull()
+    .references(() => sourceCollectionBatches.id, { onDelete: "cascade" }),
+  sourceKey: text("source_key").notNull(),
+  kind: text("kind", { enum: ["brand", "product_model"] })
+    .$type<SourceCaptureSubject["kind"]>().notNull(),
+  sourceEntityId: text("source_entity_id").notNull(),
+  displayName: text("display_name").notNull(),
+  parentSubjectId: text("parent_subject_id")
+    .references((): AnyPgColumn => sourceCaptureSubjects.id),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("source_capture_subject_identity_uq")
+    .on(table.executionBatchId, table.sourceKey, table.kind, table.sourceEntityId),
+  index("source_capture_subject_parent_idx").on(table.parentSubjectId),
+  index("source_capture_subject_batch_idx").on(table.executionBatchId, table.sourceKey),
+]);
+
 export const sourceCaptureWorkItems = workbenchSchema.table("source_capture_work_items", {
   id: text("id").primaryKey(),
   runId: text("run_id").notNull().references(() => sourceCollectionRuns.id, { onDelete: "cascade" }),
+  subjectId: text("subject_id").references(() => sourceCaptureSubjects.id),
   targetKey: text("target_key").notNull(),
   workKey: text("work_key").notNull(),
   parentObjectKey: text("parent_object_key"),
   captureUnit: text("capture_unit").notNull(),
+  resourceKind: text("resource_kind", { enum: ["brand_catalog", "model_bundle", "parameters",
+    "gallery", "picture_set", "image"] }).$type<SourceCaptureWorkItem["resourceKind"]>(),
+  resourceSection: text("resource_section"),
+  resourceOrdinal: integer("resource_ordinal"),
   expectedUnitCount: integer("expected_unit_count"),
   observedUnitCount: integer("observed_unit_count").notNull().default(0),
   status: text("status", { enum: ["pending", "running", "completed", "failed", "stopped"] })
@@ -244,6 +272,7 @@ export const sourceCaptureWorkItems = workbenchSchema.table("source_capture_work
 }, (table) => [
   uniqueIndex("source_capture_work_run_key_uq").on(table.runId, table.workKey),
   index("source_capture_work_status_idx").on(table.runId, table.status),
+  index("source_capture_work_subject_idx").on(table.subjectId),
 ]);
 
 export const sourceAccessGateStates = workbenchSchema.table("source_access_gate_states", {
@@ -299,6 +328,7 @@ export const sourceObjects = workbenchSchema.table("source_objects", {
 export const sourceSnapshots = workbenchSchema.table("source_snapshots", {
   id: text("id").primaryKey(),
   runId: text("run_id").notNull().references(() => sourceCollectionRuns.id),
+  captureWorkItemId: text("capture_work_item_id").references(() => sourceCaptureWorkItems.id),
   targetKey: text("target_key"),
   objectId: text("object_id").notNull().references(() => sourceObjects.id),
   idempotencyKey: text("idempotency_key").notNull(),
@@ -310,6 +340,7 @@ export const sourceSnapshots = workbenchSchema.table("source_snapshots", {
 }, (table) => [
   uniqueIndex("source_snapshot_run_idempotency_uq").on(table.runId, table.idempotencyKey),
   index("source_snapshot_run_time_idx").on(table.runId, table.createdAt),
+  index("source_snapshot_capture_work_idx").on(table.captureWorkItemId),
 ]);
 
 export const sourceAssets = workbenchSchema.table("source_assets", {

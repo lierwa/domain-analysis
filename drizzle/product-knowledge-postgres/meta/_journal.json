@@ -204,6 +204,27 @@
       "when": 1788028312951,
       "tag": "0029_zippy_charles_xavier",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788161545473,
+      "tag": "0030_sudden_stone_men",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1788161715774,
+      "tag": "0031_white_sprite",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1788164957376,
+      "tag": "0032_hard_microchip",
+      "breakpoints": true
     }
   ]
 }

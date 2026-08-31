@@ -1,28 +1,35 @@
 import type {
+  SourceCaptureWorkItem,
+  SourceCollectionBatch,
   SourceCollectionRun,
-  SourceDatasetPlanBrand,
+  SourceDatasetBrandSummary,
+  SourceDatasetIssueSummary,
+  SourceDatasetModelSummary,
   SourceDatasetPlanSource,
+  SourceDatasetTaskView,
 } from "@domain-analysis/shared";
 
-import { normalizeMapText as normalize, recordGroupLabel, resourceFormatLabel,
-  sourceGroupDefinition, sourceKindGroup } from "./sourceDatasetMapLabels";
+import { normalizeMapText as normalize } from "./sourceDatasetMapLabels";
 
-export type SourceDataMapMode = "brand" | "source" | "content";
+export type SourceDataMapMode = "product" | "audit";
 export type SourceDataMapLineMode = "polyline" | "curve";
-export type SourceDataMapNodeKind = "task" | "collection" | "brand" | "shared" | "topic" | "source" | "target" | "group";
+export type SourceDataMapNodeKind = "task" | "collection" | "brand" | "model" | "resource"
+  | "source" | "batch" | "run" | "audit_group";
 export type SourceDataMapStatus = "neutral" | "attention" | "unknown" | "unresolved";
-export type SourceDataMapTarget = SourceDatasetPlanSource["targets"][number];
-export type SourceDataMapRecordGroup = SourceDataMapTarget["recordGroups"][number];
+type ResourceKind = NonNullable<SourceCaptureWorkItem["resourceKind"]>;
 
 export type SourceDataMapEntity =
   | { kind: "task"; taskId: string; taskName: string; category?: string }
   | { kind: "collection"; title: string; description: string; itemCount: number }
-  | { kind: "brand"; brand: SourceDatasetPlanBrand }
-  | { kind: "shared"; sourceCount: number }
-  | { kind: "topic"; topic: string; sourceCount: number }
-  | { kind: "source"; source: SourceDatasetPlanSource; runs: SourceCollectionRun[]; recordCount: number }
-  | { kind: "target"; source: SourceDatasetPlanSource; target: SourceDataMapTarget }
-  | { kind: "group"; source: SourceDatasetPlanSource; target: SourceDataMapTarget; group: SourceDataMapRecordGroup };
+  | { kind: "brand"; brand: SourceDatasetBrandSummary }
+  | { kind: "model"; brand: SourceDatasetBrandSummary; model: SourceDatasetModelSummary;
+    issues: SourceDatasetIssueSummary[] }
+  | { kind: "resource"; brand: SourceDatasetBrandSummary; model: SourceDatasetModelSummary;
+    resourceKind: ResourceKind; count: number }
+  | { kind: "source"; source: SourceDatasetPlanSource; runCount: number }
+  | { kind: "batch"; batch: SourceCollectionBatch; runs: SourceCollectionRun[] }
+  | { kind: "run"; run: SourceCollectionRun }
+  | { kind: "audit_group"; run: SourceCollectionRun; title: string; count: number };
 
 export type SourceDataMapNode = {
   id: string;
@@ -37,70 +44,128 @@ export type SourceDataMapNode = {
   entity: SourceDataMapEntity;
 };
 
-export type SourceDataMapEdge = {
-  id: string;
-  source: string;
-  target: string;
-  sourceHandle?: string;
-};
+export type SourceDataMapEdge = { id: string; source: string; target: string; sourceHandle?: string };
 export type SourceDataMapGraph = {
   rootId: string;
   nodes: SourceDataMapNode[];
   edges: SourceDataMapEdge[];
   planId?: string;
   planVersion?: number;
-  stats: {
-    sourceCount: number;
-    recordCount: number;
-    acceptedCount: number;
-    attentionCount: number;
-    lineageCount: number;
-    unresolvedBrandCount: number;
-    historicalRecordCount: number;
-  };
+  stats: { sourceCount: number; recordCount: number; acceptedCount: number; attentionCount: number;
+    lineageCount: number; unresolvedBrandCount: number; historicalRecordCount: number };
 };
-export type VisibleSourceDataMapGraph = {
-  nodes: Array<SourceDataMapNode & {
-    searchMatched?: boolean;
-    inlineChildren?: SourceDataMapNode[];
-    recordsVisible?: boolean;
-  }>;
-  edges: SourceDataMapEdge[];
-};
+export type VisibleSourceDataMapGraph = { nodes: Array<SourceDataMapNode & {
+  searchMatched?: boolean; inlineChildren?: SourceDataMapNode[]; recordsVisible?: boolean;
+}>; edges: SourceDataMapEdge[] };
 
-type BuildContext = {
-  graph: SourceDataMapGraph;
-  sources: SourceDatasetPlanSource[];
-  runsBySource: Map<string, SourceCollectionRun[]>;
-};
-
-export function buildSourceDataGraph(view: {
-  sources: SourceDatasetPlanSource[];
-  brands: SourceDatasetPlanBrand[];
-  runs: SourceCollectionRun[];
-}, task: { id: string; name: string; category?: string }, mode: SourceDataMapMode): SourceDataMapGraph {
-  const plan = currentConfirmedPlan(view);
-  const sources = plan ? view.sources.filter((source) => source.planId === plan.id
-    && source.planVersion === plan.version && source.planStatus === "confirmed") : [];
-  const brands = plan ? view.brands.filter((brand) => brand.planId === plan.id
-    && brand.planVersion === plan.version && brand.planStatus === "confirmed") : [];
-  const currentRuns = plan ? view.runs.filter((run) => run.sourceCollectionPlanId === plan.id
-    && run.sourceCollectionPlanVersion === plan.version) : [];
-  const stats = graphStats(sources, brands, view.runs, currentRuns);
+export function buildSourceDataGraph(view: SourceDatasetTaskView,
+  task: { id: string; name: string; category?: string }, mode: SourceDataMapMode): SourceDataMapGraph {
   const rootId = `task:${task.id}`;
-  const graph: SourceDataMapGraph = { rootId, nodes: [], edges: [], planId: plan?.id,
-    planVersion: plan?.version, stats };
-  addNode(graph, { id: rootId, kind: "task", title: task.name, eyebrow: "采集任务",
-    description: task.category, meta: plan ? `当前确认计划 v${plan.version}` : "尚无确认计划",
-    status: plan ? "neutral" : "attention", expandable: false,
-    searchText: [task.name, task.category, plan?.version].join(" "),
+  const current = view.currentExecution;
+  const graph: SourceDataMapGraph = { rootId, nodes: [], edges: [],
+    planVersion: current?.planVersion,
+    stats: { sourceCount: mode === "product" ? view.capturedBrands.length : view.sources.length,
+      recordCount: current?.snapshotCount ?? 0, acceptedCount: current?.completedModelCount ?? 0,
+      attentionCount: current?.issueCount ?? 0, lineageCount: current?.snapshotCount ?? 0,
+      unresolvedBrandCount: 0,
+      historicalRecordCount: view.batches.slice(1).reduce((sum, batch) => sum
+        + view.runs.filter((run) => run.executionBatchId === batch.id)
+          .reduce((count, run) => count + run.snapshotCount, 0), 0) } };
+  addNode(graph, { id: rootId, kind: "task", title: task.name, eyebrow: mode === "product" ? "采集任务" : "运行审计",
+    description: task.category,
+    meta: current ? mode === "product"
+      ? `${current.brandCount} 个品牌 · ${current.modelCount} 个型号 · ${current.needsAttentionModelCount} 个型号需关注`
+      : `${view.batches.length} 个 Batch · ${view.runs.length} 个 Run` : "尚无 Source Batch",
+    status: "neutral", expandable: false, searchText: normalize([task.name, task.category].join(" ")),
     entity: { kind: "task", taskId: task.id, taskName: task.name, category: task.category } });
-  const context: BuildContext = { graph, sources, runsBySource: groupRunsBySource(sources, currentRuns) };
-  if (mode === "brand") addBrandPerspective(context, brands, rootId);
-  if (mode === "source") addSourcePerspective(context, rootId);
-  if (mode === "content") addContentPerspective(context, rootId);
-  addSourceDetails(context);
+  if (mode === "product") addProductTree(graph, view, rootId);
+  else addAuditTree(graph, view, rootId);
   return graph;
+}
+
+function addProductTree(graph: SourceDataMapGraph, view: SourceDatasetTaskView, rootId: string) {
+  for (const brand of view.capturedBrands) {
+    const id = `brand:${brand.subjectId}`;
+    addNode(graph, { id, kind: "brand", title: brand.displayName, eyebrow: "品牌",
+      meta: `${brand.counts.completed}/${brand.counts.total} 个型号完成${brand.counts.needsAttention > 0
+        ? ` · ${brand.counts.needsAttention} 个需关注` : ""}`,
+      status: "neutral", expandable: brand.models.length > 0,
+      searchText: normalize(`${brand.displayName} ${brand.sourceEntityId}`), entity: { kind: "brand", brand } });
+    addEdge(graph, rootId, id);
+    for (const model of brand.models) addModelBranch(graph, view, brand, model, id);
+  }
+}
+
+function addModelBranch(graph: SourceDataMapGraph, view: SourceDatasetTaskView,
+  brand: SourceDatasetBrandSummary, model: SourceDatasetModelSummary, brandId: string) {
+  const id = `model:${model.subjectId}`;
+  const issues = view.issues.filter((issue) => issue.subjectId === model.subjectId);
+  addNode(graph, { id, kind: "model", title: model.displayName, eyebrow: "型号",
+    description: `源站型号 ${model.sourceEntityId}`,
+    meta: `${resourceTotal(model)} 条资源${model.issueCount > 0 ? ` · ${model.issueCount} 个问题` : ""}`,
+    status: model.status === "needs_attention" ? "attention" : "neutral", expandable: resourceTotal(model) > 0,
+    searchText: normalize(`${brand.displayName} ${model.displayName} ${model.sourceEntityId}`),
+    entity: { kind: "model", brand, model, issues } });
+  addEdge(graph, brandId, id);
+  for (const [kind, count] of resourceEntries(model)) {
+    if (count === 0) continue;
+    const resourceId = `${id}:resource:${kind}`;
+    addNode(graph, { id: resourceId, kind: "resource", title: resourceKindLabel(kind), eyebrow: "原始资源",
+      description: "展开后按页读取不可变原始记录", meta: `${count} 条`, status: "neutral",
+      expandable: true, searchText: normalize(`${model.displayName} ${resourceKindLabel(kind)} ${kind}`),
+      entity: { kind: "resource", brand, model, resourceKind: kind, count } });
+    addEdge(graph, id, resourceId);
+  }
+}
+
+function addAuditTree(graph: SourceDataMapGraph, view: SourceDatasetTaskView, rootId: string) {
+  const sources = view.sources.filter((source) => source.planStatus === "confirmed");
+  for (const source of sources) {
+    const id = `source:${source.planId}:${source.planVersion}:${source.sourceKey}`;
+    const batches = view.batches.filter((batch) => batch.sourceCollectionPlanId === source.planId
+      && batch.sourceCollectionPlanVersion === source.planVersion);
+    const runs = view.runs.filter((run) => run.sourceCollectionPlanId === source.planId
+      && run.sourceCollectionPlanVersion === source.planVersion
+      && run.sourceCollectionPlanSourceKey === source.sourceKey);
+    addNode(graph, { id, kind: "source", title: source.name, eyebrow: "计划来源", description: source.role,
+      meta: `${batches.length} 个 Batch · ${runs.length} 个 Run`, status: "neutral", expandable: batches.length > 0,
+      searchText: normalize(`${source.name} ${source.sourceKey} ${source.role ?? ""}`),
+      entity: { kind: "source", source, runCount: runs.length } });
+    addEdge(graph, rootId, id);
+    for (const batch of batches) addBatchBranch(graph, batch,
+      runs.filter((run) => run.executionBatchId === batch.id), id);
+  }
+}
+
+function addBatchBranch(graph: SourceDataMapGraph, batch: SourceCollectionBatch,
+  runs: SourceCollectionRun[], sourceId: string) {
+  const id = `batch:${batch.id}`;
+  addNode(graph, { id, kind: "batch", title: `Batch · ${shortId(batch.id)}`, eyebrow: "执行批次",
+    description: `计划 v${batch.sourceCollectionPlanVersion}`, meta: `${runs.length} 个 Run · ${batch.status}`,
+    status: batch.status === "failed" || batch.status === "partial" ? "attention" : "neutral",
+    expandable: runs.length > 0, searchText: normalize(`${batch.id} ${batch.status}`),
+    entity: { kind: "batch", batch, runs } });
+  addEdge(graph, sourceId, id);
+  for (const run of runs) {
+    const runId = `run:${run.id}`;
+    addNode(graph, { id: runId, kind: "run", title: `Run · ${shortId(run.id)}`, eyebrow: "来源运行",
+      meta: `${run.snapshotCount} 快照 · ${run.assetCount} 图片`,
+      status: run.status === "failed" ? "attention" : "neutral", expandable: run.snapshotCount > 0,
+      searchText: normalize(`${run.id} ${run.status}`), entity: { kind: "run", run } });
+    addEdge(graph, id, runId);
+    addAuditGroup(graph, run, runId, "原始快照", run.snapshotCount);
+    addAuditGroup(graph, run, runId, "图片附件", run.assetCount);
+  }
+}
+
+function addAuditGroup(graph: SourceDataMapGraph, run: SourceCollectionRun,
+  runId: string, title: string, count: number) {
+  if (count === 0) return;
+  const id = `${runId}:audit:${title}`;
+  addNode(graph, { id, kind: "audit_group", title, eyebrow: "原始记录组", meta: `${count} 条`,
+    status: "neutral", expandable: false, searchText: normalize(`${title} ${run.id}`),
+    entity: { kind: "audit_group", run, title, count } });
+  addEdge(graph, runId, id);
 }
 
 export function visibleSourceDataGraph(graph: SourceDataMapGraph, expanded: ReadonlySet<string>, rawQuery: string) {
@@ -112,10 +177,8 @@ export function visibleSourceDataGraph(graph: SourceDataMapGraph, expanded: Read
   const queue = [...visibleIds];
   while (queue.length > 0) {
     const id = queue.shift()!;
-    for (const edge of incoming.get(id) ?? []) {
-      if (visibleIds.has(edge.source)) continue;
-      visibleIds.add(edge.source);
-      queue.push(edge.source);
+    for (const edge of incoming.get(id) ?? []) if (!visibleIds.has(edge.source)) {
+      visibleIds.add(edge.source); queue.push(edge.source);
     }
   }
   visibleIds.add(graph.rootId);
@@ -125,9 +188,17 @@ export function visibleSourceDataGraph(graph: SourceDataMapGraph, expanded: Read
   edges: graph.edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)) };
 }
 
-export function initialSourceDataMapExpansion(graph: SourceDataMapGraph) {
-  // WHY：地图默认承担全局审阅，来源、目标与记录组一次展开；每个记录组仍只读取首批摘要行，单条正文按选择读取。
-  return new Set(graph.nodes.filter((node) => node.expandable).map((node) => node.id));
+export function initialSourceDataMapExpansion(_graph: SourceDataMapGraph) {
+  // WHY：品牌摘要已经提供全局完成度；详情必须由负责人主动展开，避免 247 个型号首屏同时进入布局。
+  return new Set<string>();
+}
+
+export function sourceDataMapExpansionPath(graph: SourceDataMapGraph, nodeId: string) {
+  const incoming = new Map(graph.edges.map((edge) => [edge.target, edge.source]));
+  const path = new Set<string>();
+  let current: string | undefined = nodeId;
+  while (current && current !== graph.rootId) { path.add(current); current = incoming.get(current); }
+  return path;
 }
 
 function visibleExpandedGraph(graph: SourceDataMapGraph, expanded: ReadonlySet<string>) {
@@ -142,307 +213,98 @@ function visibleExpandedGraph(graph: SourceDataMapGraph, expanded: ReadonlySet<s
   for (const edge of outgoing.get(root.id) ?? []) {
     const child = nodeById.get(edge.target);
     if (!child) continue;
-    addVisibleEdge(context, edge);
-    addVisibleNode(context, child);
-    revealVisibleChildren(context, child);
+    addVisibleEdge(context, edge); addVisibleNode(context, child); revealVisibleChildren(context, child);
   }
   return { nodes: [...visibleNodes.values()], edges: [...visibleEdges.values()] };
 }
 
-type VisibleBuildContext = {
-  expanded: ReadonlySet<string>;
-  nodeById: Map<string, SourceDataMapNode>;
-  outgoing: Map<string, SourceDataMapEdge[]>;
-  visibleNodes: Map<string, VisibleSourceDataMapGraph["nodes"][number]>;
-  visibleEdges: Map<string, SourceDataMapEdge>;
-};
+type VisibleContext = { expanded: ReadonlySet<string>; nodeById: Map<string, SourceDataMapNode>;
+  outgoing: Map<string, SourceDataMapEdge[]>; visibleNodes: Map<string, VisibleSourceDataMapGraph["nodes"][number]>;
+  visibleEdges: Map<string, SourceDataMapEdge> };
 
-function revealVisibleChildren(context: VisibleBuildContext, node: SourceDataMapNode) {
+function revealVisibleChildren(context: VisibleContext, node: SourceDataMapNode) {
   if (!context.expanded.has(node.id)) return;
-  if (node.kind === "group") {
-    context.visibleNodes.set(node.id, { ...node, recordsVisible: true });
-    return;
+  if (node.kind === "resource") {
+    context.visibleNodes.set(node.id, { ...node, recordsVisible: true }); return;
   }
   const children = childNodes(context, node.id);
   if (children.length === 0) return;
-  // WHY：根来源组本身就是可见列表容器；其余层级始终向右新增列表节点，避免点击后原卡变形。
-  if (node.kind === "collection" || node.kind === "shared") {
-    context.visibleNodes.set(node.id, { ...node, inlineChildren: children });
-    for (const child of children) revealFromListRow(context, node.id, child);
+  if (children.length === 1) {
+    const child = children[0]!;
+    addVisibleNode(context, child);
+    addVisibleEdge(context, { id: `${node.id}->${child.id}`, source: node.id, target: child.id });
+    revealVisibleChildren(context, child);
     return;
   }
-  revealNextLevel(context, node.id, undefined, node, children);
+  const list = childListNode(node, children);
+  context.visibleNodes.set(list.id, list);
+  addVisibleEdge(context, { id: `${node.id}->${list.id}`, source: node.id, target: list.id });
+  for (const child of children) revealFromListRow(context, list.id, child);
 }
 
-function revealFromListRow(context: VisibleBuildContext, listNodeId: string, row: SourceDataMapNode) {
+function revealFromListRow(context: VisibleContext, listId: string, row: SourceDataMapNode) {
   if (!context.expanded.has(row.id)) return;
-  if (row.kind === "group") {
-    const recordsNode = recordListNode(row);
-    context.visibleNodes.set(recordsNode.id, recordsNode);
-    addVisibleEdge(context, { id: `${listNodeId}::${row.id}->${recordsNode.id}`,
-      source: listNodeId, sourceHandle: row.id, target: recordsNode.id });
-    return;
-  }
-  if (row.kind === "source") {
-    revealSourceComposite(context, listNodeId, row.id, row);
+  if (row.kind === "resource") {
+    const records = { ...row, id: `records:${row.id}`, recordsVisible: true, expandable: false };
+    context.visibleNodes.set(records.id, records);
+    addVisibleEdge(context, { id: `${listId}::${row.id}->${records.id}`,
+      source: listId, sourceHandle: row.id, target: records.id });
     return;
   }
   const children = childNodes(context, row.id);
   if (children.length === 0) return;
-  revealNextLevel(context, listNodeId, row.id, row, children);
-}
-
-function revealNextLevel(context: VisibleBuildContext, originId: string, sourceHandle: string | undefined,
-  owner: SourceDataMapNode, children: SourceDataMapNode[]) {
-  if (children.length === 1) {
-    const child = children[0]!;
-    if (child.kind === "source") {
-      revealSourceComposite(context, originId, sourceHandle, child);
-      return;
-    }
-    addVisibleNode(context, child);
-    addVisibleEdge(context, { id: `${originId}::${sourceHandle ?? owner.id}->${child.id}`,
-      source: originId, ...(sourceHandle ? { sourceHandle } : {}), target: child.id });
-    revealVisibleChildren(context, child);
-    return;
-  }
-  const list = childListNode(owner, children);
+  const list = childListNode(row, children);
   context.visibleNodes.set(list.id, list);
-  addVisibleEdge(context, { id: `${originId}::${sourceHandle ?? owner.id}->${list.id}`,
-    source: originId, ...(sourceHandle ? { sourceHandle } : {}), target: list.id });
+  addVisibleEdge(context, { id: `${listId}::${row.id}->${list.id}`,
+    source: listId, sourceHandle: row.id, target: list.id });
   for (const child of children) revealFromListRow(context, list.id, child);
 }
 
-function revealSourceComposite(context: VisibleBuildContext, originId: string,
-  sourceHandle: string | undefined, source: SourceDataMapNode) {
-  const targets = childNodes(context, source.id);
-  // WHY：Source 与 Target 仍是两层事实，但阅读表面把一个来源的执行目标收进同一张卡，避免同名中转节点。
-  context.visibleNodes.set(source.id, { ...source, expandable: false,
-    ...(targets.length > 0 ? { inlineChildren: targets } : {}) });
-  addVisibleEdge(context, { id: `${originId}::${sourceHandle ?? source.id}->${source.id}`,
-    source: originId, ...(sourceHandle ? { sourceHandle } : {}), target: source.id });
-  for (const target of targets) revealFromListRow(context, source.id, target);
-}
-
 function childListNode(owner: SourceDataMapNode, children: SourceDataMapNode[]) {
-  const title = owner.title;
   const description = `${children[0]?.eyebrow ?? "下一级"}列表`;
-  return { id: `list:${owner.id}`, kind: "collection" as const, title, eyebrow: description,
+  return { id: `list:${owner.id}`, kind: "collection" as const, title: owner.title, eyebrow: description,
     description, meta: `${children.length} 项`, status: aggregateStatus(children), expandable: false,
     searchText: [owner.searchText, ...children.map((child) => child.searchText)].join(" "),
-    entity: { kind: "collection" as const, title, description, itemCount: children.length },
+    entity: { kind: "collection" as const, title: owner.title, description, itemCount: children.length },
     inlineChildren: children };
 }
 
-function recordListNode(group: SourceDataMapNode) {
-  return { ...group, id: `records:${group.id}`, recordsVisible: true, expandable: false };
-}
-
-function childNodes(context: VisibleBuildContext, id: string) {
+function childNodes(context: VisibleContext, id: string) {
   return (context.outgoing.get(id) ?? []).flatMap((edge) => {
-    const child = context.nodeById.get(edge.target);
-    return child ? [child] : [];
+    const child = context.nodeById.get(edge.target); return child ? [child] : [];
   });
 }
 
-function addVisibleNode(context: VisibleBuildContext,
-  node: VisibleSourceDataMapGraph["nodes"][number]) {
+function addVisibleNode(context: VisibleContext, node: VisibleSourceDataMapGraph["nodes"][number]) {
   context.visibleNodes.set(node.id, node);
 }
-
-function addVisibleEdge(context: VisibleBuildContext, edge: SourceDataMapEdge) {
-  context.visibleEdges.set(edge.id, edge);
-}
-
+function addVisibleEdge(context: VisibleContext, edge: SourceDataMapEdge) { context.visibleEdges.set(edge.id, edge); }
 function aggregateStatus(nodes: SourceDataMapNode[]): SourceDataMapStatus {
-  if (nodes.some((node) => node.status === "attention")) return "attention";
-  if (nodes.some((node) => node.status === "unresolved")) return "unresolved";
-  if (nodes.some((node) => node.status === "unknown")) return "unknown";
-  return "neutral";
+  return nodes.some((node) => node.status === "attention") ? "attention" : "neutral";
 }
-
-function addBrandPerspective(context: BuildContext, brands: SourceDatasetPlanBrand[], rootId: string) {
-  const officialKeys = new Set(brands.flatMap((brand) => brand.officialSourceKeys));
-  for (const status of ["planned", "unresolved"] as const) {
-    const members = brands.filter((brand) => brand.status === status);
-    if (members.length === 0) continue;
-    const collectionId = `collection:brand:${status}`;
-    addCollectionNode(context.graph, collectionId, status === "planned" ? "官网来源已规划" : "来源待解决",
-      status === "planned" ? "已关联品牌官网来源" : "尚未关联可用官网来源", members.length,
-      status === "planned" ? "neutral" : "unresolved");
-    addEdge(context.graph, rootId, collectionId);
-    for (const brand of members) addBrandNode(context, brand, collectionId);
-  }
-  const sharedSources = context.sources.filter((source) => !officialKeys.has(source.sourceKey));
-  if (sharedSources.length === 0) return;
-  const id = "shared:cross-brand";
-  addNode(context.graph, { id, kind: "shared", title: "跨品牌与专业资料", eyebrow: "公共来源组",
-    description: "市场目录、标准、监管与技术资料", meta: `${sharedSources.length} 个来源`,
-    status: "neutral", expandable: true, searchText: "跨品牌 专业资料 市场目录 标准 监管 技术",
-    entity: { kind: "shared", sourceCount: sharedSources.length } });
-  addEdge(context.graph, rootId, id);
-  for (const source of sharedSources) addEdge(context.graph, id, sourceId(source));
-}
-
-function addBrandNode(context: BuildContext, brand: SourceDatasetPlanBrand, parentId: string) {
-  const id = `brand:${encodeURIComponent(brand.name)}`;
-  const linkedSources = context.sources.filter((source) => brand.officialSourceKeys.includes(source.sourceKey));
-  addNode(context.graph, { id, kind: "brand", title: brand.name, eyebrow: "品牌",
-    description: brand.aliases.length > 0 ? `别名：${brand.aliases.join("、")}` : undefined,
-    meta: brand.status === "unresolved" ? "来源待解决" : `${linkedSources.length} 个官网来源`,
-    status: brand.status === "unresolved" ? "unresolved" : "neutral", expandable: linkedSources.length > 0,
-    searchText: [brand.name, ...brand.aliases, brand.status].map(normalize).join(" "), entity: { kind: "brand", brand } });
-  addEdge(context.graph, parentId, id);
-  for (const source of linkedSources) addEdge(context.graph, id, sourceId(source));
-}
-
-function addSourcePerspective(context: BuildContext, rootId: string) {
-  const groups = new Map<string, SourceDatasetPlanSource[]>();
-  for (const source of context.sources) {
-    const key = sourceKindGroup(source.sourceKind);
-    groups.set(key, [...(groups.get(key) ?? []), source]);
-  }
-  for (const [key, sources] of groups) {
-    const definition = sourceGroupDefinition(key);
-    const id = `collection:source-kind:${key}`;
-    addCollectionNode(context.graph, id, definition.title, definition.description, sources.length, "neutral");
-    addEdge(context.graph, rootId, id);
-    for (const source of sources) addEdge(context.graph, id, sourceId(source));
-  }
-}
-
-function addContentPerspective(context: BuildContext, rootId: string) {
-  const topics = new Map<string, Set<string>>();
-  for (const source of context.sources) for (const target of source.targets) {
-    for (const topic of target.taskTopics.length > 0 ? target.taskTopics : ["未标注内容主题"]) {
-      const sourceKeys = topics.get(topic) ?? new Set<string>();
-      sourceKeys.add(source.sourceKey); topics.set(topic, sourceKeys);
-    }
-  }
-  if (topics.size === 0) return;
-  const collectionId = "collection:content-topics";
-  addCollectionNode(context.graph, collectionId, "计划内容主题", "来源计划中持久化的任务主题", topics.size, "neutral");
-  addEdge(context.graph, rootId, collectionId);
-  for (const [topic, sourceKeys] of topics) {
-    const id = `topic:${encodeURIComponent(topic)}`;
-    addNode(context.graph, { id, kind: "topic", title: topic, eyebrow: "内容主题", meta: `${sourceKeys.size} 个来源`,
-      status: topic === "未标注内容主题" ? "unknown" : "neutral", expandable: sourceKeys.size > 0,
-      searchText: normalize(topic), entity: { kind: "topic", topic, sourceCount: sourceKeys.size } });
-    addEdge(context.graph, collectionId, id);
-    for (const source of context.sources.filter((item) => sourceKeys.has(item.sourceKey))) {
-      addEdge(context.graph, id, sourceId(source));
-    }
-  }
-}
-
-function addSourceDetails(context: BuildContext) {
-  for (const source of context.sources) {
-    const runs = context.runsBySource.get(source.sourceKey) ?? [];
-    const summaries = source.targets.flatMap((target) => target.recordGroups);
-    const recordCount = summaries.reduce((sum, group) => sum + group.totalCount, 0);
-    const attention = summaries.reduce((sum, group) => sum + group.outcomes.failed + group.outcomes.rejected, 0);
-    addNode(context.graph, { id: sourceId(source), kind: "source", title: source.name,
-      eyebrow: source.sourceKind ?? "计划来源", description: source.role,
-      meta: `${recordCount} 条 · ${runs.length} 次运行`, status: attention > 0 ? "attention" : "neutral",
-      expandable: source.targets.length > 0,
-      searchText: [source.name, source.publisher, source.sourceKey, source.role].map(normalize).join(" "),
-      entity: { kind: "source", source, runs, recordCount } });
-    for (const target of source.targets) addTarget(context.graph, source, target);
-  }
-}
-
-function addTarget(graph: SourceDataMapGraph, source: SourceDatasetPlanSource, target: SourceDataMapTarget) {
-  const id = targetId(source, target.targetKey);
-  const count = target.recordGroups.reduce((sum, group) => sum + group.totalCount, 0);
-  const attention = target.recordGroups.reduce((sum, group) => sum + group.outcomes.failed + group.outcomes.rejected, 0);
-  addNode(graph, { id, kind: "target", title: target.name, eyebrow: "捕获目标", description: target.captureUnit,
-    meta: `${count} 条 · ${target.recordGroups.length} 个记录组`, status: attention > 0 ? "attention" : "neutral",
-    expandable: target.recordGroups.length > 0,
-    searchText: [target.name, target.targetKey, target.captureUnit, ...target.taskTopics].map(normalize).join(" "),
-    entity: { kind: "target", source, target } });
-  addEdge(graph, sourceId(source), id);
-  for (const group of target.recordGroups) addRecordGroup(graph, source, target, group, id);
-}
-
-function addRecordGroup(graph: SourceDataMapGraph, source: SourceDatasetPlanSource, target: SourceDataMapTarget,
-  group: SourceDataMapRecordGroup, parentId: string) {
-  const title = recordGroupLabel(group.groupKey);
-  const attention = group.outcomes.failed + group.outcomes.rejected;
-  const id = `${parentId}:group:${group.groupKey}`;
-  addNode(graph, { id, kind: "group", title, eyebrow: "原始记录组",
-    description: "展开后按页读取单条不可变快照",
-    meta: `${group.totalCount} 条 · ${group.formats.map((item) => `${resourceFormatLabel(item.format)} ${item.count}`).join(" · ")}`,
-    status: group.groupKey === "unrecorded" ? "unknown" : attention > 0 ? "attention" : "neutral",
-    expandable: group.totalCount > 0,
-    searchText: [title, ...group.formats.map((item) => resourceFormatLabel(item.format))].map(normalize).join(" "),
-    entity: { kind: "group", source, target, group } });
-  addEdge(graph, parentId, id);
-}
-
-function graphStats(sources: SourceDatasetPlanSource[], brands: SourceDatasetPlanBrand[],
-  allRuns: SourceCollectionRun[], currentRuns: SourceCollectionRun[]) {
-  const groups = sources.flatMap((source) => source.targets.flatMap((target) => target.recordGroups));
-  const currentRunIds = new Set(currentRuns.map((run) => run.id));
-  return { sourceCount: sources.length,
-    recordCount: groups.reduce((sum, group) => sum + group.totalCount, 0),
-    acceptedCount: groups.reduce((sum, group) => sum + group.outcomes.accepted, 0),
-    attentionCount: groups.reduce((sum, group) => sum + group.outcomes.rejected + group.outcomes.failed, 0),
-    lineageCount: groups.filter((group) => group.groupKey !== "unrecorded")
-      .reduce((sum, group) => sum + group.totalCount, 0),
-    unresolvedBrandCount: brands.filter((brand) => brand.status === "unresolved").length,
-    historicalRecordCount: allRuns.filter((run) => !currentRunIds.has(run.id))
-      .reduce((sum, run) => sum + run.snapshotCount, 0) };
-}
-
-function addCollectionNode(graph: SourceDataMapGraph, id: string, title: string, description: string,
-  itemCount: number, status: SourceDataMapStatus) {
-  addNode(graph, { id, kind: "collection", title, eyebrow: "节点组", description, meta: `${itemCount} 项`, status,
-    expandable: itemCount > 0, searchText: [title, description].map(normalize).join(" "),
-    entity: { kind: "collection", title, description, itemCount } });
-}
-
-function groupRunsBySource(sources: SourceDatasetPlanSource[], runs: SourceCollectionRun[]) {
-  const grouped = new Map(sources.map((source) => [source.sourceKey, [] as SourceCollectionRun[]]));
-  for (const run of runs) {
-    const sourceKey = run.sourceCollectionPlanSourceKey;
-    if (sourceKey && grouped.has(sourceKey)) grouped.get(sourceKey)!.push(run);
-  }
-  return grouped;
-}
-
-function currentConfirmedPlan(view: { sources: SourceDatasetPlanSource[]; brands: SourceDatasetPlanBrand[] }) {
-  const plans = new Map<string, { id: string; version: number }>();
-  for (const item of [...view.sources, ...view.brands]) if (item.planStatus === "confirmed") {
-    plans.set(`${item.planId}:${item.planVersion}`, { id: item.planId, version: item.planVersion });
-  }
-  return [...plans.values()].sort((left, right) => right.version - left.version)[0];
-}
-
-function addNode(graph: SourceDataMapGraph, node: SourceDataMapNode) {
-  if (!graph.nodes.some((item) => item.id === node.id)) graph.nodes.push(node);
-}
-
+function addNode(graph: SourceDataMapGraph, node: SourceDataMapNode) { graph.nodes.push(node); }
 function addEdge(graph: SourceDataMapGraph, source: string, target: string) {
-  const id = `${source}->${target}`;
-  if (!graph.edges.some((edge) => edge.id === id)) graph.edges.push({ id, source, target });
+  graph.edges.push({ id: `${source}->${target}`, source, target });
 }
-
 function groupIncomingEdges(edges: SourceDataMapEdge[]) {
   const grouped = new Map<string, SourceDataMapEdge[]>();
   for (const edge of edges) grouped.set(edge.target, [...(grouped.get(edge.target) ?? []), edge]);
   return grouped;
 }
-
 function groupOutgoingEdges(edges: SourceDataMapEdge[]) {
   const grouped = new Map<string, SourceDataMapEdge[]>();
   for (const edge of edges) grouped.set(edge.source, [...(grouped.get(edge.source) ?? []), edge]);
   return grouped;
 }
-
-function sourceId(source: SourceDatasetPlanSource) {
-  return `source:${source.planId}:${source.planVersion}:${source.sourceKey}`;
+function resourceTotal(model: SourceDatasetModelSummary) {
+  return Object.values(model.resources).reduce((sum, count) => sum + count, 0);
 }
-
-function targetId(source: SourceDatasetPlanSource, targetKey: string) {
-  return `${sourceId(source)}:target:${targetKey}`;
+function resourceEntries(model: SourceDatasetModelSummary): Array<[ResourceKind, number]> {
+  return [["parameters", model.resources.parameterPages], ["gallery", model.resources.galleryPages],
+    ["picture_set", model.resources.pictureSets], ["image", model.resources.images]];
 }
+export function resourceKindLabel(kind: ResourceKind) {
+  return ({ brand_catalog: "品牌目录", model_bundle: "型号入口", parameters: "参数页",
+    gallery: "图集页", picture_set: "图片分组", image: "图片" } as const)[kind];
+}
+function shortId(value: string) { return value.slice(-8); }

@@ -73,6 +73,26 @@ describe("来源执行后台任务", () => {
     await queue.close();
   });
 
+  it("同一任务已有活动 Batch 时返回类型化 already_running 且不重复入队", async () => {
+    const addJob = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(makeWorkerUtils).mockResolvedValue({ migrate: vi.fn(), addJob,
+      release: vi.fn(), forceUnlockWorkers: vi.fn() } as never);
+    vi.mocked(run).mockResolvedValue({ stop: vi.fn() } as never);
+    const prepare = vi.fn().mockResolvedValue({ status: "ready", message: "ready" });
+    const execution = { prepare } as unknown as SourceExecutionModule;
+    const datasets = { listUnfinishedBatches: vi.fn().mockResolvedValue([]),
+      getActiveBatchForTask: vi.fn().mockResolvedValue({ id: "batch-running" }) } as never;
+    const queue = await createSourceExecutionQueue({ connectionString: "postgresql://fixture", execution,
+      datasets, pgPool: fakePool([]) });
+
+    await expect(queue.enqueueStart({ taskId: "task-1", planId: "plan-1",
+      expectedTaskRevision: 2, expectedPlanVersion: 3 })).resolves.toMatchObject({
+      status: "already_running", batchId: "batch-running",
+    });
+    expect(addJob).not.toHaveBeenCalled();
+    await queue.close();
+  });
+
   it("启动时只用官方接口释放已终态 Batch 或 Run 精确关联的崩溃 Worker 锁", async () => {
     const forceUnlockWorkers = vi.fn().mockResolvedValue(undefined);
     vi.mocked(makeWorkerUtils).mockResolvedValue({ migrate: vi.fn(), addJob: vi.fn(),

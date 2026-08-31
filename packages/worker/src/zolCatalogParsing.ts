@@ -38,7 +38,8 @@ export function parseZolCatalogPage(
     const href = link.attr("href");
     const id = modelId(href, categorySlug);
     const modelUrl = href ? safeZolUrl(href, url.href) : undefined;
-    const name = cleanText($(element).find("h3 a").first().text() || $(element).find("img").first().attr("alt"));
+    const heading = $(element).find("h3 a").first();
+    const name = cleanText(heading.attr("title") || $(element).find("img").first().attr("alt") || heading.text());
     if (id && modelUrl && name && !models.has(id)) models.set(id, { id, name, url: modelUrl.href });
   });
   if (models.size === 0) throw contentFailure(`品牌目录第 ${page} 页没有可识别的型号 ID`);

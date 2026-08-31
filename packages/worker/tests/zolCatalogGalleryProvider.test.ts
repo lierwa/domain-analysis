@@ -141,6 +141,11 @@ describe("ZOL 品牌目录批次参数与图集 Provider", () => {
     expect(facts.models).toEqual([{ id: "1101178", name: "乐视超3 X43",
       url: "https://detail.zol.com.cn/digital_tv/index1101178.shtml" }]);
 
+    const titled = '<ul class="pic-mode-box"><li><h3><a href="/digital_tv/index1228243.shtml" title="方太W25800K-01AG">方太W25800K-01AG 产品容量 25L</a></h3></li></ul>';
+    expect(parseZolCatalogPage(response("https://detail.zol.com.cn/digital_tv/fotile/", titled),
+      new URL("https://detail.zol.com.cn/digital_tv/fotile/"), 1, "digital_tv").models[0]?.name)
+      .toBe("方太W25800K-01AG");
+
     const television = source();
     const urls = ["https://detail.zol.com.cn/digital_tv/hisense/"];
     television.entryUrls = urls;
