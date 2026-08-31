@@ -243,10 +243,12 @@ describeWithPostgres("Source Dataset 资源引用", () => {
     await datasets.ensureCaptureWorkItem({ runId: resumed.id, targetKey: "product-detail",
       workKey: "product:model-2", captureUnit: "exact_page", expectedUnitCount: 1 });
     await datasets.startCaptureWorkItem({ runId: resumed.id, workKey: "product:model-2" });
-    await datasets.finishTarget({ runId: resumed.id, targetKey: "product-detail", status: "failed",
-      terminationReason: "fixture_failure" });
+    await datasets.finishCaptureWorkItem({ runId: resumed.id, workKey: "product:model-2", status: "failed",
+      observedUnitCount: 0, terminationReason: "fixture_failure" });
+    await datasets.finishTarget({ runId: resumed.id, targetKey: "product-detail", status: "completed",
+      observedUnitCount: 0, terminationReason: "target_scope_completed" });
     await expect(datasets.getRun(resumed.id)).resolves.toMatchObject({
-      targets: [expect.objectContaining({ status: "failed" })],
+      targets: [expect.objectContaining({ status: "completed", observedUnitCount: 0 })],
       workItems: [expect.objectContaining({ status: "failed", terminationReason: "fixture_failure" })],
     });
   }, 15_000);

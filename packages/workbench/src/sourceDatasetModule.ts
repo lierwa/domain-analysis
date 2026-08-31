@@ -289,7 +289,8 @@ async function finishTarget(
       // WHY：快照数无法表达动态发现队列是否耗尽；target 只能由持久工作账本证明完整完成。
       const incompleteWork = await transaction.select({ id: sourceCaptureWorkItems.id })
         .from(sourceCaptureWorkItems).where(and(eq(sourceCaptureWorkItems.runId, input.runId),
-          eq(sourceCaptureWorkItems.targetKey, input.targetKey), ne(sourceCaptureWorkItems.status, "completed")))
+          eq(sourceCaptureWorkItems.targetKey, input.targetKey),
+          inArray(sourceCaptureWorkItems.status, ["pending", "running"])))
         .limit(1);
       if (incompleteWork.length > 0) {
         throw new SourceDatasetError("invalid_state", `target 仍有未完成捕获工作：${input.targetKey}`);
