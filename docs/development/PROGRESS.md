@@ -9,14 +9,14 @@
 
 当前默认策略是：选择 ZOL 门类品牌排行榜中综合评分大于 0 的品牌，按榜单顺序最多 20 个；每批 3 个品牌；每品牌每轮 10 个型号；每品牌最多 20 个型号，品牌目录不足时以来源穷尽结束该品牌。
 
-本轮已补齐瞬时 DNS/传输失败后的持久自动 Resume：Worker 完成命令后、API 启动时和 Graphile cron 扫描都会从 Source Dataset 查找可安全恢复的 Batch；自动恢复先验证当前 Confirmed Crawl Plan 仍可执行，历史旧计划回到人工规划门。微波炉任务的持久数据已保留，当前等待按恢复链继续执行。
+本轮已补齐瞬时 DNS/传输失败后的持久自动 Resume：Worker 完成命令后、API 启动时和 Graphile cron 扫描都会从 Source Dataset 查找可安全恢复的 Batch；自动恢复先验证当前 Confirmed Crawl Plan 仍可执行，历史旧计划回到人工规划门。微波炉任务已经沿同一 Confirmed Crawl Plan 和 Source Batch 的恢复链继续执行，Codex 每 5 分钟核对一次 Source Dataset 与独立服务状态。
 
 ## Git 与运行环境
 
-- worktree：`/Users/guojunxi/Desktop/work/domain-analysis`
-- branch：`master`
+- 主工作区：`/Users/guojunxi/Desktop/work/domain-analysis`，branch `master`
+- 当前服务执行工作区：`/Users/guojunxi/.codex/worktrees/fcb1/domain-analysis`，与本地 `master` 使用同一份实现
 - 当前实现、测试与权威文档合入本地 `master`；本轮未推送远端
-- PostgreSQL 保留运行数据；API、Web 与 Graphile Worker 当前未运行
+- PostgreSQL 保留运行数据；API、Web 与 Graphile Worker 由独立 `launchctl` 服务运行，分别监听 `4000` 与 `6173`
 - 数据库、浏览器状态、原始页面与图片资产只保留在本机，不进入 Git
 
 ## 产品链状态
@@ -32,7 +32,7 @@
 | 原始页面、图片、血缘与导出 | 已接通 | Source Dataset |
 | 新正式冰箱门类纵向验收 | 已形成终态报告 | Capture Task / Crawl Plan / Source Dataset |
 | 瞬时传输失败无人值守恢复 | 已接通并通过回归测试 | Source Execution / Graphile Worker |
-| 微波炉门类纵向验收 | Capture Task v2、Crawl Plan v2 已确认，Source Batch 保留待恢复状态 | Source Dataset |
+| 微波炉门类纵向验收 | Capture Task v2、Crawl Plan v2 已确认，Source Batch 已恢复并继续执行 | Source Dataset |
 
 ## 当前领域规则
 
@@ -69,7 +69,8 @@
 - 两个项目 Skill 的 `quick_validate.py` 校验通过。
 - `git diff --check`：通过，仅有 Git 行尾转换提示。
 - 最新 ZOL 排行榜 adapter、规划组装、自动恢复和确认门回归均通过；随后六个 workspace 全量类型检查、全量测试和生产构建再次通过。
-- 当前没有 API、Web 或 Graphile Worker 进程；真实微波炉 Source Run 的持久状态仍为 `running`，需先经过进程丢失恢复再继续。
+- API 健康检查通过，Web 可访问；独立 `launchctl` API/Web 服务保持 `running`，Graphile Worker 已连接并消费 `execute_source_collection` 与 `schedule_source_recovery`。
+- Workbench 真实页面已确认微波炉任务显示“后台执行中”。
 
 ## 当前正式运行
 
@@ -78,8 +79,9 @@
 - 已确认策略：综合评分严格大于 0、按榜单顺序最多 20 个品牌、每批 3 个、每品牌每轮 10 个、每品牌最多 20 个
 - Planning Run：`crawl-planning-run-4b649fc5-bd5e-4d6e-a40a-b84f9cb42b73`；ZOL 榜单 41 行，执行品牌 19 个
 - Confirmed Crawl Plan：`crawl-plan-5aa3b862-d09a-4773-b947-fcf23d91871a`，version 2；无 planning blocker，最大执行容量 380 个型号
-- Source Batch：`source-batch-476fab42-4a67-4a7b-bf8e-00a594378cb4`；Source Run：`source-run-133bf9a6-046a-4dc0-a63c-f84ffd57c5ca`，当前 `running`
-- 当前观测：368 个工作项完成、8 个工作项运行中、4 个工作项局部失败；347 个不可变快照、275 个资源文件；两个图片请求仍为 `started`，Graphile job 仍保留已失效 Worker 锁
+- Source Batch：`source-batch-476fab42-4a67-4a7b-bf8e-00a594378cb4`，当前 `running`，恢复状态 `running`
+- 原始 Source Run：`source-run-133bf9a6-046a-4dc0-a63c-f84ffd57c5ca`，已按 `execution_process_lost` 收口为 `stopped`；恢复 Source Run：`source-run-ce8291f0-1550-48da-8d47-7d7372a7bb3a`，当前 `running`
+- 2026-08-31 12:03 观测：恢复 Run 已新增 163 个不可变快照、118 个资源文件；整个恢复链累计 510 个快照、393 个资源文件。工作项为 546 个完成、11 个运行中、4 个局部失败、8 个旧 Run 停止项；请求为 526 个完成、26 个失败、1 个执行中、2 个旧 Run 取消项。最新快照产生于 12:03，任务仍在推进。
 
 ## 架构影响
 
@@ -93,11 +95,12 @@
 - Source Execution 失败分类补充可信 DNS SERVFAIL 与临时网关错误；请求、品牌/型号工作项与 Source Run 的失败作用域已经分开，`target_count` 明确为最大覆盖边界。事实源和依赖方向不变。
 - 本轮新增 Source Execution 自动恢复查询、Source Dataset 未完成批次扫描、Graphile cron/延迟 Resume 投递和 Resume command 幂等；事实源仍为 Source Dataset/Source Execution，模块职责与依赖方向按基线扩展为 `改变`。
 - 自动恢复查询新增当前计划可执行性门，避免旧规划协议在启动扫描或 cron 中反复创建失败任务；未改变事实源与依赖方向。
+- 本次启动独立服务、恢复既有 Source Batch 和配置 Codex 观察任务不改变模块职责、事实源、依赖方向或公共 contract。
 
 ## 后续入口
 
-1. 从独立本机服务进程启动 API、Web 与 Graphile Worker，让启动恢复先收口进程丢失状态，再沿同一 Confirmed Crawl Plan 继续微波炉任务。
-2. Source Batch 进入终态后，核对 Batch/Run/target/work item、请求账本、快照、图片、血缘和最终状态。
+1. Codex 观察任务每 5 分钟核对独立服务和 Source Dataset 的实际增量；暂时性请求按 30 秒超时、最多重试一次，仍失败则记录并继续后续图片、型号或品牌。
+2. Source Batch 进入终态后，核对 Batch/Run/target/work item、请求账本、快照、图片、血缘和全部 19 个品牌的最终状态。
 
 ## 交付状态
 
