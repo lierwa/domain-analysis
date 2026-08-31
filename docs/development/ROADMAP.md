@@ -35,6 +35,7 @@
 5. 参数页、图集页、来源原图、请求、work item、Run、内存和存储量与计划对账；
 6. Resume 继续同一 Confirmed Crawl Plan，不在批次之间重新采访或重新确认。
 7. 单个品牌、型号或图片的暂时性失败在有界重试后留痕并继续；访问限制、计划/结构/契约/存储错误和预算停止门仍结束整个运行。
+8. Worker 或 API 重启后，已持久化的瞬时传输失败可以由确定性 Resume job 自动继续；恢复不会重新采访、改变 Confirmed Crawl Plan 或突破 request budget。
 
 ## 跨门类验证
 

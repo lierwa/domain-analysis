@@ -36,7 +36,7 @@ Workbench Chat Timeline
 | Capture Task | 拥有负责人确认的门类、内容范围、品牌筛选规则、品牌批次、每轮型号量和每品牌型号上限 | 具体品牌、榜单快照、来源分页、频率和 Provider 配置 |
 | Crawl Planning | 调查来源门类、品牌排行榜、入选品牌目录、Provider 能力和预算，按任务规则生成执行品牌集合 | 执行来源请求或改写任务策略 |
 | Crawl Plan | 拥有版本化计划草案、榜单审计、榜单快照、执行品牌清单和预算 | 运行生命周期和响应解释 |
-| PostgreSQL Background Command Queue | 持久派发 Start/Resume 并按 command ID 去重 | 拥有 Source Run 终态 |
+| PostgreSQL Background Command Queue | 持久派发 Start/Resume、自动恢复扫描与命令去重 | 拥有 Source Run 终态 |
 | Source Execution | 拥有 Batch、Run、target、work item 与恢复生命周期 | 决定计划范围 |
 | Source Access Gate | 持久准入 HTML 与图片请求，执行节奏、预算和访问限制熔断 | 选择品牌或型号 |
 | ZOL Catalog + Gallery Provider | 按计划识别品牌目录、型号、参数页、图集和图片关系 | 扩大计划范围或清洗商品参数 |
@@ -81,6 +81,9 @@ Workbench Chat Timeline
 - 每个型号使用独立 work item；参数页、图集页和全部排队图片完成后才增加型号完成数。
 - `target_count` 表达计划允许的最大覆盖边界；来源穷尽或隔离失败可以低于该值，实际完成数和失败原因由 target 与 work item 分别保存，任何执行都不得超过计划上限。
 - Resume 只跳过恢复链中已经完整完成的型号，未完成型号重新执行，已有快照保持不可变。
+- Worker 完整消费 Start/Resume 后，Source Execution 只为 `transient_transport` 和满足安全条件的 `execution_process_lost` 生成自动 Resume 请求；请求先把 Batch 标记为 `pending`，再以 `source-auto-resume-{runId}` 作为确定性 job key 延迟投递。
+- 自动 Resume 候选生成前必须重新通过当前 Confirmed Crawl Plan 的可执行性校验；旧规划协议、过期版本或已失效计划回到人工规划门，不进入自动恢复队列。
+- API 启动时扫描未完成 Batch，Graphile cron 每分钟再次扫描；恢复仍进入同一 Resume 入口和 Source Run 恢复链，累计请求数受原 Confirmed Crawl Plan 的 request budget 约束。访问限制、计划/契约错误、预算耗尽和人工停止不会自动重试。
 - 队列关闭等待真实在途任务退出；Run 终态要求请求和 work item 全部终态，局部失败不会留下 running 项。
 
 ## 公共传输与内存边界
@@ -100,5 +103,5 @@ ZOL Provider 接受 Confirmed Crawl Plan 中的门类 slug 与品牌目录数组
 1. 用户可以从 Workbench Chat Timeline 发起采集请求并确认采访范围草案。
 2. 已确认 Capture Task 可以启动 Planning Run，并在同一产品表面查看规划活动与 Crawl Plan Draft。
 3. 负责人可以独立确认计划，再执行 Prepare 和 Start。
-4. 后台执行、恢复、访问限制和 Source Dataset 对账保持现有验证结果。
+4. 后台执行、瞬时传输自动恢复、访问限制和 Source Dataset 对账保持现有验证结果。
 5. 正式门类计划按榜单规则选择最多 20 个品牌，每批 3 个、每品牌每轮 10 个，达到每品牌 20 个型号上限或来源穷尽；没有可验证排行榜时保持在计划确认门。

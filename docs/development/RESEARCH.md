@@ -42,7 +42,9 @@ ZOL 特有 DOM 和 URL 协议只保留在 ZOL Provider，不进入共享领域�
 - 固定 `source_collection` queue；
 - `concurrency=1`；
 - `maxAttempts=1`，来源请求的重试由 Source Execution 管理；
-- command ID 同时承担 job key 和领域幂等关联；
+- command ID 同时承担普通命令的 job key 和领域幂等关联；自动 Resume 使用 `source-auto-resume-{runId}` 确定性 job key 与 `preserve_run_at`；
+- 使用 Graphile Worker 的 cron 扫描在 API 启动和每分钟周期发现未完成 Batch；候选类型和恢复预算由 Source Execution/Source Dataset 决定，队列不推导领域状态；
+- 自动恢复投递前重新验证 Batch 绑定的 Confirmed Crawl Plan 仍是当前可执行协议；历史旧计划只保留人工重新规划入口；
 - Start/Resume 返回 `202` 后由 Worker 完整消费 Source Execution 事件；
 - 只释放已被终态 Batch 或终态 Run 证明退出的 Worker lock。
 
@@ -50,7 +52,7 @@ Graphile Worker 只负责命令交付；Batch、Run、work item 和 Source Datas
 
 ### 验证与退出
 
-Windows PostgreSQL 14 已验证 HTTP 返回后独立消费、幂等提交、Resume command 关联和进程恢复。替换队列时保持 Source Execution 和 Source Dataset contract 不变。
+Windows PostgreSQL 14 已验证 HTTP 返回后独立消费、幂等提交、Resume command 关联和进程恢复；本轮补充了本机自动 Resume 的回归测试。Graphile 官方 `addJob` 支持 `runAt`、`jobKey` 与 `maxAttempts`，官方 cron 使用普通队列周期投递且避免重复调度：[addJob](https://worker.graphile.org/docs/library/add-job)、[job key](https://worker.graphile.org/docs/job-key)、[cron](https://worker.graphile.org/docs/cron)。替换队列时保持 Source Execution 和 Source Dataset contract 不变。
 
 ## R-003 HTML 与图片独立调度
 

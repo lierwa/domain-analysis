@@ -78,10 +78,12 @@ export interface SourceDatasetModule extends SourceRequestAdmissionPort {
   acquireBatchLease(batchId: string): Promise<{ release(): Promise<void> }>;
   recoverInterruptedBatches(input?: { taskId?: string }): Promise<string[]>;
   listPendingRecoveryBatches(): Promise<SourceCollectionBatch[]>;
+  listUnfinishedBatches(): Promise<SourceCollectionBatch[]>;
   setBatchRecoveryState(batchId: string, state: "pending" | "running" | "completed"):
     Promise<SourceCollectionBatch>;
   getBatch(batchId: string): Promise<SourceCollectionBatch | null>;
   getBatchByCommandId(commandId: string): Promise<SourceCollectionBatch | null>;
+  getRunByExecutionCommandId(commandId: string): Promise<SourceCollectionRun | null>;
   listBatchRuns(batchId: string): Promise<SourceCollectionRun[]>;
   reopenBatch(batchId: string): Promise<SourceCollectionBatch>;
   listCompletedCaptureWorkKeys(input: { runId: string; captureUnit: string }): Promise<string[]>;
@@ -123,6 +125,9 @@ export function createSourceDatasetModule(
     listPendingRecoveryBatches: async () => (await db.select().from(sourceCollectionBatches)
       .where(eq(sourceCollectionBatches.recoveryState, "pending"))
       .orderBy(asc(sourceCollectionBatches.startedAt))).map(normalizeBatch),
+    listUnfinishedBatches: async () => (await db.select().from(sourceCollectionBatches)
+      .where(inArray(sourceCollectionBatches.status, ["failed", "partial", "stopped"]))
+      .orderBy(asc(sourceCollectionBatches.startedAt))).map(normalizeBatch),
     setBatchRecoveryState: (batchId, state) => setBatchRecoveryState(db, batchId, state),
     getBatch: async (batchId) => {
       const row = await db.query.sourceCollectionBatches.findFirst({
@@ -135,6 +140,12 @@ export function createSourceDatasetModule(
         where: eq(sourceCollectionBatches.commandId, commandId),
       });
       return row ? normalizeBatch(row) : null;
+    },
+    getRunByExecutionCommandId: async (commandId) => {
+      const row = await db.query.sourceCollectionRuns.findFirst({
+        where: eq(sourceCollectionRuns.executionCommandId, commandId),
+      });
+      return row ? normalizeRun(row) : null;
     },
     listBatchRuns: async (batchId) => (await db.select().from(sourceCollectionRuns)
       .where(eq(sourceCollectionRuns.executionBatchId, batchId))

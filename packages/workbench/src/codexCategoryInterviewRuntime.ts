@@ -227,7 +227,7 @@ function materializationPrompt(input: CategoryInterviewMaterializationInput) {
   return [
     "把用户已经确认的 Markdown 采访范围草案忠实转换成正式 Capture Task。",
     "这是确认后的纯结构化步骤：不得调用 web search、不得提出问题、不得补充草案中不存在的事实、不得改变范围。",
-    "sourceCandidates 只收录草案中已经明确出现且具有有效 http/https URL 的调查种子；没有精确 URL 就省略，不得为了凑品牌、平台、标准或技术四类入口现场编造。sourceKind 必须按发布者身份判断：只有品牌自己发布的官网入口才是 brand_official；ZOL 等第三方商品数据库、聚合目录或媒体平台不是品牌官网，当前无法归入其他明确角色时使用 other。完整来源清单由后续 Planning Run 调查。",
+    "sourceCandidates 只收录草案中已经明确出现且具有有效 http/https URL 的调查种子；没有精确 URL 就省略，不得为了凑品牌、平台、标准或技术四类入口现场编造。sourceKind 必须按发布者身份判断：只有品牌自己发布的官网入口才是 brand_official；ZOL 等第三方商品数据库、聚合目录或媒体平台不是品牌官网，当前无法归入其他明确角色时使用 other。完整来源清单由后续 Planning Run 调查。草案若明确纳入产品图集、型号图片、商品原图或来源原图，必须把这项作为 generalTopics 或 categoryTopics 中的正向采集内容保留，不能只写在 sourceCandidates 的 expectedContents、role 或链接说明里。",
     "originalRequest 使用最初用户要求；category.code 使用稳定的小写英文 slug。brandSelectionPolicy、executionCadencePolicy 和 modelCoveragePolicy 必须忠实转换草案中的确认值。当前默认策略对应 source_brand_ranking/comprehensive_score/minimumScoreExclusive=0/maxBrands=20、fixed/brandBatchSize=3/modelsPerBrandPerRound=10、max_models_per_brand/maxModelsPerBrand=20；不得用兼容默认代替草案事实。来源候选只忠实转换草案中已经确认的公开入口，不增加平台专用字段。",
     "最终只返回符合下方 JSON Schema 的 JSON 对象，不要使用 Markdown 代码块或添加解释。",
     `Final answer JSON Schema: ${JSON.stringify(zodSchemaToCodexJsonSchema(captureTaskMaterializationSchema))}`,

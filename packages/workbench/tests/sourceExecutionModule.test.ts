@@ -34,6 +34,23 @@ describe("来源执行准备", () => {
     expect(collect).not.toHaveBeenCalled();
   });
 
+  it("Graphile 重放同一 Resume command 时不创建第二个来源运行", async () => {
+    const existingRun = { id: "run-existing", status: "completed" as const } as SourceCollectionRun;
+    const getRunByExecutionCommandId = vi.fn(async () => existingRun);
+    const planning = { requireExecutablePlan: vi.fn() } as unknown as CrawlPlanExecutionReader;
+    const datasets = { getRunByExecutionCommandId } as unknown as SourceDatasetModule;
+    const execution = createSourceExecutionModule(planning, datasets, new Map());
+
+    const events = [];
+    for await (const event of execution.resume({ taskId: "task-1", runId: "run-old",
+      expectedTaskRevision: 1, expectedPlanVersion: 1, commandId: "source-command-resume-1" })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([]);
+    expect(planning.requireExecutablePlan).not.toHaveBeenCalled();
+  });
+
   it("批次环境预检失败时 Start 前返回错误且不创建 Batch 或 Run", async () => {
     const source = executableSource("brand", "public.web-resource");
     const plan = { id: "plan-1", taskId: "task-1", taskRevision: 2, version: 3,
@@ -302,7 +319,8 @@ describe("来源执行准备", () => {
     const reopenBatch = vi.fn(async () => batch);
     const finishBatch = vi.fn(async () => ({ ...batch, status: "completed" as const,
       finishedAt: "2026-08-21T00:00:03.000Z", terminationReason: "1/1 个来源完成" }));
-    const datasets = { getRun: vi.fn(async (runId: string) => runId === previous.id
+    const datasets = { getRunByExecutionCommandId: vi.fn(async () => null),
+      getRun: vi.fn(async (runId: string) => runId === previous.id
       ? { run: previous, targets: [], workItems: [], requestAttempts: [], accessGates: [], records: [] } : null),
       startRun, startTarget: vi.fn(async () => ({})), finishTarget: vi.fn(async () => ({})),
       finishRun, prepareRunForResume: vi.fn(async () => previous),
@@ -337,6 +355,64 @@ describe("来源执行准备", () => {
     expect(reopenBatch).toHaveBeenCalledWith("batch-1");
     expect(finishBatch).toHaveBeenCalledWith({ batchId: "batch-1", status: "completed",
       terminationReason: "1/1 个来源完成" });
+  });
+
+  it("瞬时传输失败会生成有界自动 Resume 请求并标记批次待恢复", async () => {
+    const failedRun = {
+      id: "run-failed", taskId: "task-1", executionBatchId: "batch-1",
+      sourceCollectionPlanId: "plan-1", sourceCollectionPlanSourceKey: "brand",
+      sourceCollectionPlanVersion: 3, providerKey: "public.web-resource", providerVersion: "1.0.0",
+      requestBudget: 10, accessPolicy: {} as never, status: "failed" as const,
+      snapshotCount: 2, accessibleCount: 2, failedCount: 1, assetCount: 0,
+      startedAt: "2026-08-21T00:00:00.000Z", finishedAt: "2026-08-21T00:00:01.000Z",
+      terminationReason: "可信 DoH 查询失败：DNS status 2",
+      failureCategory: "transient_transport" as const,
+    } satisfies SourceCollectionRun;
+    const batch = { id: "batch-1", taskId: "task-1", sourceCollectionPlanId: "plan-1",
+      sourceCollectionPlanVersion: 3, taskRevision: 2, status: "partial" as const,
+      recoveryState: "completed" as const, plannedSourceCount: 1,
+      startedAt: "2026-08-21T00:00:00.000Z", finishedAt: "2026-08-21T00:00:01.000Z" };
+    const setBatchRecoveryState = vi.fn(async () => ({ ...batch, recoveryState: "pending" as const }));
+    const datasets = {
+      getBatch: vi.fn(async () => batch),
+      listBatchRuns: vi.fn(async () => [failedRun]),
+      setBatchRecoveryState,
+    } as unknown as SourceDatasetModule;
+    const planning = { requireExecutablePlan: vi.fn(async () => ({})) } as unknown as CrawlPlanExecutionReader;
+    const execution = createSourceExecutionModule(planning, datasets, new Map());
+
+    const [request] = await execution.automaticResumeRequests({ batchId: "batch-1" });
+
+    expect(request).toMatchObject({ batchId: "batch-1", taskId: "task-1", runId: "run-failed",
+      expectedTaskRevision: 2, expectedPlanVersion: 3 });
+    expect(request?.runAt).toBeInstanceOf(Date);
+    expect(setBatchRecoveryState).toHaveBeenCalledWith("batch-1", "pending");
+  });
+
+  it("历史计划不可执行时不生成自动 Resume", async () => {
+    const batch = { id: "batch-old", taskId: "task-1", sourceCollectionPlanId: "plan-old",
+      sourceCollectionPlanVersion: 1, taskRevision: 2, status: "partial" as const,
+      recoveryState: "completed" as const, plannedSourceCount: 1,
+      startedAt: "2026-08-21T00:00:00.000Z", finishedAt: "2026-08-21T00:00:01.000Z" };
+    const failedRun = { id: "run-old", taskId: "task-1", executionBatchId: batch.id,
+      sourceCollectionPlanId: batch.sourceCollectionPlanId, sourceCollectionPlanVersion: 1,
+      sourceCollectionPlanSourceKey: "brand", providerKey: "public.web-resource",
+      providerVersion: "1.0.0", requestBudget: 10, accessPolicy: {} as never,
+      status: "failed" as const, snapshotCount: 1, accessibleCount: 1, failedCount: 1,
+      assetCount: 0, startedAt: batch.startedAt, finishedAt: batch.finishedAt,
+      terminationReason: "可信 DoH 查询失败：DNS status 2",
+      failureCategory: "transient_transport" as const } satisfies SourceCollectionRun;
+    const requireExecutablePlan = vi.fn(async () => {
+      throw new Error("已确认计划使用旧规划协议，请重新运行 Planning Run");
+    });
+    const setBatchRecoveryState = vi.fn();
+    const datasets = { getBatch: vi.fn(async () => batch),
+      listBatchRuns: vi.fn(async () => [failedRun]), setBatchRecoveryState } as unknown as SourceDatasetModule;
+    const execution = createSourceExecutionModule({ requireExecutablePlan }, datasets, new Map());
+
+    await expect(execution.automaticResumeRequests({ batchId: batch.id })).resolves.toEqual([]);
+    expect(requireExecutablePlan).toHaveBeenCalledOnce();
+    expect(setBatchRecoveryState).not.toHaveBeenCalled();
   });
 });
 

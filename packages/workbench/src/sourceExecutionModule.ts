@@ -54,6 +54,18 @@ export interface CrawlPlanExecutionReader {
     expectedPlanVersion: number;
   }): Promise<CrawlPlan>;
 }
+export type SourceExecutionRecoveryLookup =
+  | { batchId: string }
+  | { commandId: string }
+  | { runId: string };
+export interface SourceExecutionRecoveryRequest {
+  batchId: string;
+  taskId: string;
+  runId: string;
+  expectedTaskRevision: number;
+  expectedPlanVersion: number;
+  runAt: Date;
+}
 export interface SourceExecutionModule {
   prepare(input: { taskId: string; planId: string; expectedTaskRevision: number;
     expectedPlanVersion: number }): Promise<SourcePreparation>;
@@ -62,6 +74,7 @@ export interface SourceExecutionModule {
   resume(input: { taskId: string; runId: string; expectedTaskRevision: number;
     expectedPlanVersion: number; commandId?: string; signal?: AbortSignal }): AsyncIterable<SourceRunEvent>;
   recoverBatch(input: { batchId: string; signal?: AbortSignal }): Promise<void>;
+  automaticResumeRequests(input: SourceExecutionRecoveryLookup): Promise<SourceExecutionRecoveryRequest[]>;
   validateSource(source: CrawlPlanSource): void;
 }
 
@@ -145,6 +158,7 @@ export function createSourceExecutionModule(
       }
     },
     resume: async function* (raw) {
+      if (raw.commandId && await datasets.getRunByExecutionCommandId(raw.commandId)) return;
       const request = sourceExecutionPlanRequestSchema.parse({ expectedTaskRevision: raw.expectedTaskRevision,
         expectedPlanVersion: raw.expectedPlanVersion });
       const previous = await datasets.getRun(raw.runId);
@@ -175,7 +189,57 @@ export function createSourceExecutionModule(
       }
     },
     recoverBatch: (input) => recoverExecutionBatch(planning, datasets, resolve, input),
+    automaticResumeRequests: (input) => findAutomaticResumeRequests(planning, datasets, input),
   };
+}
+
+const automaticRecoveryDelayMs = 60_000;
+
+async function findAutomaticResumeRequests(
+  planning: CrawlPlanExecutionReader,
+  datasets: SourceDatasetModule,
+  input: SourceExecutionRecoveryLookup,
+): Promise<SourceExecutionRecoveryRequest[]> {
+  const batch = await findRecoveryBatch(datasets, input);
+  if (!batch || batch.status === "completed") return [];
+  try {
+    await planning.requireExecutablePlan({ taskId: batch.taskId, planId: batch.sourceCollectionPlanId,
+      expectedTaskRevision: batch.taskRevision, expectedPlanVersion: batch.sourceCollectionPlanVersion });
+  } catch {
+    // WHY：历史计划或已失效计划必须回到人工规划门；自动恢复只能继续当前可执行的 Confirmed Plan。
+    return [];
+  }
+  const latestRuns = latestRunsBySource(await datasets.listBatchRuns(batch.id));
+  const candidates: SourceCollectionRun[] = [];
+  for (const run of latestRuns.values()) {
+    if (run.status === "failed" && run.failureCategory === "transient_transport") {
+      candidates.push(run);
+      continue;
+    }
+    if (run.status === "stopped" && run.failureCategory === "execution_process_lost"
+      && await isSafeAutomaticRecovery(datasets, run)) candidates.push(run);
+  }
+  if (candidates.length === 0) return [];
+  await datasets.setBatchRecoveryState(batch.id, "pending");
+  return candidates.map((run) => ({
+    batchId: batch.id,
+    taskId: batch.taskId,
+    runId: run.id,
+    expectedTaskRevision: batch.taskRevision,
+    expectedPlanVersion: batch.sourceCollectionPlanVersion,
+    runAt: new Date(Date.now() + automaticRecoveryDelayMs),
+  }));
+}
+
+async function findRecoveryBatch(
+  datasets: SourceDatasetModule,
+  input: SourceExecutionRecoveryLookup,
+) {
+  if ("batchId" in input) return datasets.getBatch(input.batchId);
+  if ("commandId" in input) return datasets.getBatchByCommandId(input.commandId);
+  const view = await datasets.getRun(input.runId);
+  const batchId = view?.run.executionBatchId;
+  return batchId ? datasets.getBatch(batchId) : null;
 }
 
 type ProviderReadiness = { status: "ready" } | { status: "failed"; reason: string };

@@ -38,6 +38,7 @@ await workbench.sourceDatasets.recoverInterruptedBatches();
 const sourceExecutionQueue = await createSourceExecutionQueue({
   connectionString: config.postgresDatabaseUrl,
   execution: workbench.sourceExecution,
+  datasets: workbench.sourceDatasets,
 });
 const app = await buildServer({ workbench, sourceExecutionQueue });
 

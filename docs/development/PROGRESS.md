@@ -1,7 +1,7 @@
 # 数据抓取平台开发进度
 
 更新日期：2026-08-31
-当前阶段：ZOL 冰箱正式抓取终态与执行容错收口
+当前阶段：ZOL 微波炉真实抓取恢复链收口
 
 ## 简单说明
 
@@ -9,15 +9,14 @@
 
 当前默认策略是：选择 ZOL 门类品牌排行榜中综合评分大于 0 的品牌，按榜单顺序最多 20 个；每批 3 个品牌；每品牌每轮 10 个型号；每品牌最多 20 个型号，品牌目录不足时以来源穷尽结束该品牌。
 
-本次正式运行完成首批海尔、美的、容声各 10 个型号并形成终态 Source Dataset；完整结果见 `ZOL-REFRIGERATOR-CAPTURE-REPORT.md`。
+本轮已补齐瞬时 DNS/传输失败后的持久自动 Resume：Worker 完成命令后、API 启动时和 Graphile cron 扫描都会从 Source Dataset 查找可安全恢复的 Batch；自动恢复先验证当前 Confirmed Crawl Plan 仍可执行，历史旧计划回到人工规划门。微波炉任务的持久数据已保留，当前等待按恢复链继续执行。
 
 ## Git 与运行环境
 
-- worktree：`D:\work\domain-analysis-zol-v0`
-- branch：`codex/zol-v0-vertical-publish-20260828`
-- 远程接续分支：`origin/codex/zol-v0-vertical-publish-20260828`
-- 当前实现、迁移、测试、Skills、权威文档和结论报告作为同一 Git 交付形成跨电脑接续点
-- PostgreSQL、API、Web 与 Graphile Worker 当前在本机运行；API `4000`，Web `6173`
+- worktree：`/Users/guojunxi/Desktop/work/domain-analysis`
+- branch：`master`
+- 当前实现、测试与权威文档合入本地 `master`；本轮未推送远端
+- PostgreSQL 保留运行数据；API、Web 与 Graphile Worker 当前未运行
 - 数据库、浏览器状态、原始页面与图片资产只保留在本机，不进入 Git
 
 ## 产品链状态
@@ -32,6 +31,8 @@
 | Prepare / Start / Resume | 已接通 | Source Execution |
 | 原始页面、图片、血缘与导出 | 已接通 | Source Dataset |
 | 新正式冰箱门类纵向验收 | 已形成终态报告 | Capture Task / Crawl Plan / Source Dataset |
+| 瞬时传输失败无人值守恢复 | 已接通并通过回归测试 | Source Execution / Graphile Worker |
+| 微波炉门类纵向验收 | Capture Task v2、Crawl Plan v2 已确认，Source Batch 保留待恢复状态 | Source Dataset |
 
 ## 当前领域规则
 
@@ -51,6 +52,9 @@
 - ZOL Provider 已按 `category_slug` 执行通用品类目录，并区分来源穷尽与访问失败。
 - ZOL Provider 已按工作项隔离暂时性失败：请求有界重试耗尽后记录品牌/型号失败并继续；图片 404、非成功响应或格式不合格只结束当前型号。
 - Source Execution 的访问限制熔断只响应登录、验证和拒绝访问；普通 `not_found/source_error` 快照保留后继续，`target_count` 作为计划最大覆盖边界允许实际结果因来源穷尽或隔离失败而更小。
+- Source Execution 只将 `transient_transport` 和满足安全条件的进程丢失标记为自动 Resume 候选；请求使用同一 Confirmed Crawl Plan、同一 Source Run 恢复链和原 request budget，结构性失败保留为终态供人工处理。
+- API 启动扫描未完成 Batch，Graphile cron 每分钟触发恢复扫描；自动 Resume 使用确定性 job key 和固定延迟，重放同一 Resume command 不会创建第二个 Source Run。
+- 自动 Resume 候选生成前必须通过当前 Confirmed Crawl Plan 的可执行性校验；旧规划协议不会反复自动入队。
 - Workbench 已展示排行榜证据、执行品牌、批次与型号边界；存在 blocker、无有效排行榜审计或旧检查清单的计划不能确认。
 - 冰箱专用固定品牌验收 API 已删除；正式链路只有 Planning Run 生成 Crawl Plan 一个计划入口。
 
@@ -59,27 +63,23 @@
 2026-08-31 当前工作区：
 
 - `npm run typecheck`：shared、db、workbench、worker、api、web 六个 workspace 全部通过。
-- `npm test`：43 个测试文件通过、2 个跳过；195 个测试通过、7 个跳过。
+- `npm test`：43 个测试文件通过、2 个跳过；200 个测试通过、7 个跳过。
+- 本轮自动恢复回归：2 个文件、16 个测试通过，覆盖瞬时失败候选、旧计划保护、启动扫描、完成回调、确定性 job key 与重复 Resume 幂等。
 - `npm run build`：通过；Web 完成 2483 个模块构建。只有 Vite 大分块提示，不是 Node 异常退出或 OOM。
 - 两个项目 Skill 的 `quick_validate.py` 校验通过。
 - `git diff --check`：通过，仅有 Git 行尾转换提示。
-- API 与 Web 健康检查：HTTP 200。
-- 最新 ZOL 排行榜 adapter、规划组装与确认门聚焦回归：3 个文件、13 个测试全部通过；随后六个 workspace 全量类型检查、全量测试和生产构建再次通过。
-- 执行容错聚焦回归：4 个文件、22 个测试通过，覆盖型号 DNS 重试耗尽、品牌目录临时失败、资源不存在、低于最大目标收口和结构错误停止；随后六个 workspace 类型检查、195 项全量测试和生产构建通过。
-
-本轮没有出现 Node 异常退出或 OOM；正式 Source Run 观测到的 Node 私有内存最高约 388 MB。
+- 最新 ZOL 排行榜 adapter、规划组装、自动恢复和确认门回归均通过；随后六个 workspace 全量类型检查、全量测试和生产构建再次通过。
+- 当前没有 API、Web 或 Graphile Worker 进程；真实微波炉 Source Run 的持久状态仍为 `running`，需先经过进程丢失恢复再继续。
 
 ## 当前正式运行
 
-- Confirmed Capture Task：`capture-task-acf59990-8c0d-422f-8a67-4ceb020adf87`，revision 1，status `ready`
+- Confirmed Capture Task：`capture-task-f3db0719-1fdf-45e7-814a-e74c8b946f51`，revision 2，status `ready`
+- 已确认范围：家用微波炉；包含单功能、微烤一体机、微蒸烤一体机及其他具备微波功能的家用组合型产品；不抓商用、不抓无微波功能蒸烤箱
 - 已确认策略：综合评分严格大于 0、按榜单顺序最多 20 个品牌、每批 3 个、每品牌每轮 10 个、每品牌最多 20 个
-- 当前规划协议：`executionChecklistVersion=5`；品牌排行榜审计必须通过 typed contract，旧协议草稿不能确认或执行
-- Planning Run：`crawl-planning-run-56a1c76c-ca08-4555-93c4-4f31711f6408`；官方冰箱榜 50 行，综合评分大于 0 的执行品牌 20 个
-- Confirmed Crawl Plan：`crawl-plan-41c7bca7-4fc5-46ba-a364-de0be0114332`，version 5；无 planning blocker，20 个品牌入口，参数 3 / 10 / 20
-- Source Batch：`source-batch-5219dbea-2d69-42a8-b85f-0206d308308a`；Source Run：`source-run-48f29f4d-187a-4313-a9f7-07f0efdd0e5b`，终态 `failed`
-- 最终结果：835 个不可变快照、834 个验收内容响应、703 张图片、30 个完整型号；海尔 / 美的 / 容声各完成第一轮 10 个型号
-- 终止原因：`可信 DoH 查询失败：DNS status 2`；两个终止图片请求均完成一次有界重试，没有登录、验证码、401、403、429、来源风控或 OOM
-- 终态对账与完整结论：`ZOL-REFRIGERATOR-CAPTURE-REPORT.md`
+- Planning Run：`crawl-planning-run-4b649fc5-bd5e-4d6e-a40a-b84f9cb42b73`；ZOL 榜单 41 行，执行品牌 19 个
+- Confirmed Crawl Plan：`crawl-plan-5aa3b862-d09a-4773-b947-fcf23d91871a`，version 2；无 planning blocker，最大执行容量 380 个型号
+- Source Batch：`source-batch-476fab42-4a67-4a7b-bf8e-00a594378cb4`；Source Run：`source-run-133bf9a6-046a-4dc0-a63c-f84ffd57c5ca`，当前 `running`
+- 当前观测：368 个工作项完成、8 个工作项运行中、4 个工作项局部失败；347 个不可变快照、275 个资源文件；两个图片请求仍为 `started`，Graphile job 仍保留已失效 Worker 锁
 
 ## 架构影响
 
@@ -91,12 +91,14 @@
 - 旧的冰箱专用计划旁路已删除，不保留兼容入口。
 - ZOL 排行榜事实改由来源 adapter 沿官方链路确定性核验；Planning Run 与 Crawl Plan 事实源未变，没有新增第二运行时或 fallback。
 - Source Execution 失败分类补充可信 DNS SERVFAIL 与临时网关错误；请求、品牌/型号工作项与 Source Run 的失败作用域已经分开，`target_count` 明确为最大覆盖边界。事实源和依赖方向不变。
+- 本轮新增 Source Execution 自动恢复查询、Source Dataset 未完成批次扫描、Graphile cron/延迟 Resume 投递和 Resume command 幂等；事实源仍为 Source Dataset/Source Execution，模块职责与依赖方向按基线扩展为 `改变`。
+- 自动恢复查询新增当前计划可执行性门，避免旧规划协议在启动扫描或 cron 中反复创建失败任务；未改变事实源与依赖方向。
 
 ## 后续入口
 
-1. 本次正式 Source Run 已完成终态对账，代码、测试、迁移、Skills、权威文档和结论报告作为同一 Git 交付推送。
-2. 后续若继续完成剩余品牌范围，从当前 Confirmed Crawl Plan 和 Source Run 恢复事实发起新的明确执行动作。
+1. 从独立本机服务进程启动 API、Web 与 Graphile Worker，让启动恢复先收口进程丢失状态，再沿同一 Confirmed Crawl Plan 继续微波炉任务。
+2. Source Batch 进入终态后，核对 Batch/Run/target/work item、请求账本、快照、图片、血缘和最终状态。
 
 ## 交付状态
 
-本次终态交付已获用户明确授权；远程 Git 提交不包含数据库、原始页面、图片或本机秘密。
+本轮代码合入本地 `master`；未推送远端，提交不包含数据库、原始页面、图片或本机秘密。

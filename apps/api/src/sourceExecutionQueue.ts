@@ -5,13 +5,18 @@ import {
   sourceExecutionPlanRequestSchema,
   type SourceExecutionAcceptance,
 } from "@domain-analysis/shared";
-import type { SourceExecutionModule } from "@domain-analysis/workbench";
+import type {
+  SourceDatasetModule,
+  SourceExecutionModule,
+  SourceExecutionRecoveryRequest,
+} from "@domain-analysis/workbench";
 import { makeWorkerUtils, run, type TaskList } from "graphile-worker";
 import { Pool } from "pg";
 import { z } from "zod";
 
 const taskIdentifier = "execute_source_collection";
 const queueIdentifier = "source_collection";
+const recoveryTaskIdentifier = "schedule_source_recovery";
 const commandBaseSchema = z.object({
   commandId: z.string().min(1).max(240),
   taskId: z.string().min(1).max(240),
@@ -35,6 +40,7 @@ export interface SourceExecutionQueue {
 export async function createSourceExecutionQueue(input: {
   connectionString: string;
   execution: SourceExecutionModule;
+  datasets?: Pick<SourceDatasetModule, "listUnfinishedBatches">;
   pgPool?: Pool;
 }): Promise<SourceExecutionQueue> {
   const ownsPool = !input.pgPool;
@@ -42,25 +48,51 @@ export async function createSourceExecutionQueue(input: {
   const workerUtils = await makeWorkerUtils({ pgPool });
   await workerUtils.migrate();
   await unlockTerminatedSourceWorkers(pgPool, workerUtils);
-  const runner = await run({
-    pgPool,
-    concurrency: 1,
-    noHandleSignals: true,
-    crontab: "",
-    taskList: createSourceExecutionTaskList(input.execution),
-  });
   let closed = false;
 
-  async function enqueue(command: z.infer<typeof commandSchema>) {
+  async function enqueue(command: z.infer<typeof commandSchema>, options: EnqueueOptions = {}) {
     if (closed) throw new Error("来源执行队列已经关闭");
     await workerUtils.addJob(taskIdentifier, command, {
       queueName: queueIdentifier,
-      jobKey: command.commandId,
+      jobKey: options.jobKey ?? command.commandId,
+      jobKeyMode: options.jobKeyMode,
+      runAt: options.runAt,
       // WHY：来源限制和 Provider 失败已经写入 Batch/Run；队列自动重试会制造第二轮真实请求。
       maxAttempts: 1,
     });
     return sourceExecutionAcceptanceSchema.parse({ status: "accepted", commandId: command.commandId });
   }
+
+  const enqueueAutomaticResume = async (request: SourceExecutionRecoveryRequest) => {
+    const commandId = `source-auto-resume-${request.runId}`;
+    await enqueue(commandSchema.parse({ kind: "resume", commandId, taskId: request.taskId,
+      runId: request.runId, expectedTaskRevision: request.expectedTaskRevision,
+      expectedPlanVersion: request.expectedPlanVersion }), {
+      jobKey: commandId, jobKeyMode: "preserve_run_at", runAt: request.runAt,
+    });
+  };
+  const scheduleRecovery = async (inputValue: { batchId: string } | { commandId: string } | { runId: string }) => {
+    const requests = await input.execution.automaticResumeRequests(inputValue);
+    for (const request of requests) await enqueueAutomaticResume(request);
+  };
+  const scanUnfinishedBatches = async () => {
+    if (!input.datasets) return;
+    for (const batch of await input.datasets.listUnfinishedBatches()) {
+      await scheduleRecovery({ batchId: batch.id });
+    }
+  };
+  const runner = await run({
+    pgPool,
+    concurrency: 1,
+    noHandleSignals: true,
+    crontab: `* * * * * ${recoveryTaskIdentifier} ?queue=${queueIdentifier}&max=1`,
+    taskList: createSourceExecutionTaskList(input.execution, async (command) => {
+      await scheduleRecovery(command.kind === "start"
+        ? { commandId: command.commandId } : { runId: command.runId });
+    }, scanUnfinishedBatches),
+  });
+
+  await scanUnfinishedBatches();
 
   return {
     enqueueStart: async (raw) => {
@@ -122,9 +154,19 @@ function createPgPool(connectionString: string) {
   return pool;
 }
 
-export function createSourceExecutionTaskList(execution: SourceExecutionModule): TaskList {
+type EnqueueOptions = {
+  runAt?: Date;
+  jobKey?: string;
+  jobKeyMode?: "preserve_run_at";
+};
+
+export function createSourceExecutionTaskList(
+  execution: SourceExecutionModule,
+  onCommandCompleted: (command: z.infer<typeof commandSchema>) => Promise<void> = async () => undefined,
+  onRecoverySweep: () => Promise<void> = async () => undefined,
+): TaskList {
   return {
-    [taskIdentifier]: async (rawPayload) => {
+    [taskIdentifier]: async (rawPayload: unknown) => {
       const command = commandSchema.parse(rawPayload);
       const events = command.kind === "start"
         ? execution.start({ taskId: command.taskId, planId: command.planId,
@@ -135,7 +177,9 @@ export function createSourceExecutionTaskList(execution: SourceExecutionModule):
           commandId: command.commandId });
       // WHY：HTTP 已返回；完整消费领域流，Batch/Run 才能把终态写回唯一事实源。
       for await (const _event of events) { /* progress is read from Source Dataset */ }
+      await onCommandCompleted(command);
     },
+    [recoveryTaskIdentifier]: async () => { await onRecoverySweep(); },
   };
 }
 
