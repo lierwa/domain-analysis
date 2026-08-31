@@ -9,7 +9,7 @@
 
 当前默认策略是：选择 ZOL 门类品牌排行榜中综合评分大于 0 的品牌，按榜单顺序最多 20 个；每批 3 个品牌；每品牌每轮 10 个型号；每品牌最多 20 个型号，品牌目录不足时以来源穷尽结束该品牌。
 
-本轮已补齐瞬时 DNS/传输失败后的持久自动 Resume：Worker 完成命令后、API 启动时和 Graphile cron 扫描都会从 Source Dataset 查找可安全恢复的 Batch；自动恢复先验证当前 Confirmed Crawl Plan 仍可执行，历史旧计划回到人工规划门。型号图集或大图分区的局部结构异常已经按当前型号隔离，不阻断后续品牌。微波炉任务继续沿同一 Confirmed Crawl Plan 和 Source Batch 的恢复链执行，Codex 每 5 分钟核对一次 Source Dataset 与独立服务状态。
+本轮已补齐瞬时 DNS/传输失败后的持久自动 Resume：Worker 完成命令后、API 启动时和 Graphile cron 扫描都会从 Source Dataset 查找可安全恢复的 Batch；自动恢复先验证当前 Confirmed Crawl Plan 仍可执行，历史旧计划回到人工规划门。型号图集或大图分区的局部结构异常已经按当前型号隔离，不阻断后续品牌；Target 在全部工作项进入完成或失败终态后正常收口。微波炉任务继续沿同一 Confirmed Crawl Plan 和 Source Batch 的恢复链执行，Codex 每 5 分钟核对一次 Source Dataset 与独立服务状态。
 
 ## Git 与运行环境
 
@@ -52,6 +52,7 @@
 - ZOL Provider 已按 `category_slug` 执行通用品类目录，并区分来源穷尽与访问失败。
 - ZOL Provider 已按工作项隔离暂时性失败：请求有界重试耗尽后记录品牌/型号失败并继续；图片 404、非成功响应或格式不合格只结束当前型号。
 - 型号图集无法枚举大图分区或大图详情无法识别来源图片字段时，Provider 保存拒绝快照并把当前型号标记为 `content_not_accepted`；参数页无法绑定型号身份、来源级目录结构变化和安全限制仍保留为 Run 级停止门。
+- Source Dataset 完成 Target 时只等待 `pending` 或 `running` 工作项；已完成和已隔离失败的工作项都属于可对账终态。
 - Source Execution 的访问限制熔断只响应登录、验证和拒绝访问；普通 `not_found/source_error` 快照保留后继续，`target_count` 作为计划最大覆盖边界允许实际结果因来源穷尽或隔离失败而更小。
 - Source Execution 只将 `transient_transport` 和满足安全条件的进程丢失标记为自动 Resume 候选；请求使用同一 Confirmed Crawl Plan、同一 Source Run 恢复链和原 request budget，结构性失败保留为终态供人工处理。
 - API 启动扫描未完成 Batch，Graphile cron 每分钟触发恢复扫描；自动 Resume 使用确定性 job key 和固定延迟，重放同一 Resume command 不会创建第二个 Source Run。
@@ -74,6 +75,7 @@
 - Workbench 真实页面已确认微波炉任务显示“后台执行中”。
 - 型号图集局部结构异常回归：`zolCatalogGalleryProvider.test.ts` 11 个测试通过，覆盖图集入口与大图详情两类局部失败后继续后续型号。
 - Worker 全量测试：8 个文件通过、2 个跳过；56 个测试通过、7 个跳过；Worker 类型检查通过。
+- Source Dataset 终态收口集成回归：9 个测试通过，验证未结束工作项仍阻止完成、已失败工作项允许 Target 完成；Workbench 全量测试 15 个文件、66 个测试通过，类型检查通过。
 
 ## 当前正式运行
 
@@ -83,9 +85,9 @@
 - Planning Run：`crawl-planning-run-4b649fc5-bd5e-4d6e-a40a-b84f9cb42b73`；ZOL 榜单 41 行，执行品牌 19 个
 - Confirmed Crawl Plan：`crawl-plan-5aa3b862-d09a-4773-b947-fcf23d91871a`，version 2；无 planning blocker，最大执行容量 380 个型号
 - Source Batch：`source-batch-476fab42-4a67-4a7b-bf8e-00a594378cb4`，当前 `running`，恢复状态 `running`
-- 原始 Source Run：`source-run-133bf9a6-046a-4dc0-a63c-f84ffd57c5ca`，已按 `execution_process_lost` 收口为 `stopped`；第一段恢复 Run：`source-run-ce8291f0-1550-48da-8d47-7d7372a7bb3a`，在第 10 至 12 个品牌组按图集结构错误收口；当前恢复 Run：`source-run-c5fc9e3c-8249-494a-bf22-9f8febd1c96e`，状态 `running`
+- 原始 Source Run：`source-run-133bf9a6-046a-4dc0-a63c-f84ffd57c5ca`，已按 `execution_process_lost` 收口为 `stopped`；第一段恢复 Run：`source-run-ce8291f0-1550-48da-8d47-7d7372a7bb3a`，在第 10 至 12 个品牌组按图集结构错误收口；第二段恢复 Run：`source-run-c5fc9e3c-8249-494a-bf22-9f8febd1c96e`，在 Source Dataset 完成收口保护下停止；当前恢复 Run：`source-run-8e76eae2-de80-47e0-9022-88fbab337376`，状态 `running`
 - 第一段恢复结束时，恢复链已经保存 2558 个不可变快照、2048 个资源文件；美的、格兰仕、松下各完成 20 个型号，东芝 19 个、海尔 20 个、西门子 8 个、创维 2 个、大宇 18 个、易厨 4 个，目录不足的品牌按来源穷尽结束。当前恢复 Run 从已完成型号之后继续重试第 10 至 12 个品牌组，并推进其余 7 个品牌。
-- 2026-08-31 13:13 观测：当前恢复 Run 已新增 6 个快照，整个恢复链累计 2564 个快照、2048 个资源文件，Batch 与 Run 均为 `running`。
+- 2026-08-31 13:58 观测：当前恢复 Run 已新增 3 个快照，整个恢复链累计 3778 个快照、2918 个资源文件，Batch 与 Run 均为 `running`。
 
 ## 架构影响
 
@@ -101,6 +103,7 @@
 - 自动恢复查询新增当前计划可执行性门，避免旧规划协议在启动扫描或 cron 中反复创建失败任务；未改变事实源与依赖方向。
 - 本次启动独立服务、恢复既有 Source Batch 和配置 Codex 观察任务不改变模块职责、事实源、依赖方向或公共 contract。
 - 型号图集和大图分区的局部解析错误改为复用现有 Work Item 隔离语义；没有新增协议、恢复入口或第二事实源，本次架构影响为 `澄清`。
+- Target 完成核对从“全部完成”澄清为“全部终态”，与既有 Work Item 失败隔离语义一致；没有改变 Source Dataset 的事实源、模块职责或公共 contract。
 
 ## 后续入口
 
