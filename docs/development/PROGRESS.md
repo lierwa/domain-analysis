@@ -1,7 +1,7 @@
 # 数据抓取平台开发进度
 
 更新日期：2026-08-31
-当前阶段：ZOL 微波炉真实抓取恢复链收口
+当前阶段：ZOL 微波炉真实抓取终态对账
 
 ## 简单说明
 
@@ -9,7 +9,7 @@
 
 当前默认策略是：选择 ZOL 门类品牌排行榜中综合评分大于 0 的品牌，按榜单顺序最多 20 个；每批 3 个品牌；每品牌每轮 10 个型号；每品牌最多 20 个型号，品牌目录不足时以来源穷尽结束该品牌。
 
-本轮已补齐瞬时 DNS/传输失败后的持久自动 Resume：Worker 完成命令后、API 启动时和 Graphile cron 扫描都会从 Source Dataset 查找可安全恢复的 Batch；自动恢复先验证当前 Confirmed Crawl Plan 仍可执行，历史旧计划回到人工规划门。型号图集或大图分区的局部结构异常已经按当前型号隔离，不阻断后续品牌；Target 在全部工作项进入完成或失败终态后正常收口。微波炉任务继续沿同一 Confirmed Crawl Plan 和 Source Batch 的恢复链执行，Codex 每 5 分钟核对一次 Source Dataset 与独立服务状态。
+本轮已补齐瞬时 DNS/传输失败后的持久自动 Resume：Worker 完成命令后、API 启动时和 Graphile cron 扫描都会从 Source Dataset 查找可安全恢复的 Batch；自动恢复先验证当前 Confirmed Crawl Plan 仍可执行，历史旧计划回到人工规划门。型号图集或大图分区的局部结构异常按当前型号隔离，不阻断后续品牌；Target 在全部工作项进入完成或失败终态后正常收口。微波炉任务已完成终态对账。
 
 ## Git 与运行环境
 
@@ -32,7 +32,7 @@
 | 原始页面、图片、血缘与导出 | 已接通 | Source Dataset |
 | 新正式冰箱门类纵向验收 | 已形成终态报告 | Capture Task / Crawl Plan / Source Dataset |
 | 瞬时传输失败无人值守恢复 | 已接通并通过回归测试 | Source Execution / Graphile Worker |
-| 微波炉门类纵向验收 | Capture Task v2、Crawl Plan v2 已确认，Source Batch 已恢复并继续执行 | Source Dataset |
+| 微波炉门类纵向验收 | Capture Task v2、Crawl Plan v2 已确认，Source Batch 已完成并完成终态对账 | Source Dataset |
 
 ## 当前领域规则
 
@@ -76,6 +76,7 @@
 - 型号图集局部结构异常回归：`zolCatalogGalleryProvider.test.ts` 11 个测试通过，覆盖图集入口与大图详情两类局部失败后继续后续型号。
 - Worker 全量测试：8 个文件通过、2 个跳过；56 个测试通过、7 个跳过；Worker 类型检查通过。
 - Source Dataset 终态收口集成回归：9 个测试通过，验证未结束工作项仍阻止完成、已失败工作项允许 Target 完成；Workbench 全量测试 15 个文件、66 个测试通过，类型检查通过。
+- 微波炉真实 Batch 终态对账：无 `started` 请求或 `running` 工作项；19 个计划品牌均为完成、来源穷尽或隔离失败终态。
 
 ## 当前正式运行
 
@@ -84,10 +85,10 @@
 - 已确认策略：综合评分严格大于 0、按榜单顺序最多 20 个品牌、每批 3 个、每品牌每轮 10 个、每品牌最多 20 个
 - Planning Run：`crawl-planning-run-4b649fc5-bd5e-4d6e-a40a-b84f9cb42b73`；ZOL 榜单 41 行，执行品牌 19 个
 - Confirmed Crawl Plan：`crawl-plan-5aa3b862-d09a-4773-b947-fcf23d91871a`，version 2；无 planning blocker，最大执行容量 380 个型号
-- Source Batch：`source-batch-476fab42-4a67-4a7b-bf8e-00a594378cb4`，当前 `running`，恢复状态 `running`
-- 原始 Source Run：`source-run-133bf9a6-046a-4dc0-a63c-f84ffd57c5ca`，已按 `execution_process_lost` 收口为 `stopped`；第一段恢复 Run：`source-run-ce8291f0-1550-48da-8d47-7d7372a7bb3a`，在第 10 至 12 个品牌组按图集结构错误收口；第二段恢复 Run：`source-run-c5fc9e3c-8249-494a-bf22-9f8febd1c96e`，在 Source Dataset 完成收口保护下停止；当前恢复 Run：`source-run-8e76eae2-de80-47e0-9022-88fbab337376`，状态 `running`
-- 第一段恢复结束时，恢复链已经保存 2558 个不可变快照、2048 个资源文件；美的、格兰仕、松下各完成 20 个型号，东芝 19 个、海尔 20 个、西门子 8 个、创维 2 个、大宇 18 个、易厨 4 个，目录不足的品牌按来源穷尽结束。当前恢复 Run 从已完成型号之后继续重试第 10 至 12 个品牌组，并推进其余 7 个品牌。
-- 2026-08-31 13:58 观测：当前恢复 Run 已新增 3 个快照，整个恢复链累计 3778 个快照、2918 个资源文件，Batch 与 Run 均为 `running`。
+- Source Batch：`source-batch-476fab42-4a67-4a7b-bf8e-00a594378cb4`，状态 `completed`，恢复状态 `completed`，终态原因为 `1/1 个来源完成`
+- 恢复链：原始 Run `source-run-133bf9a6-046a-4dc0-a63c-f84ffd57c5ca` 按进程丢失收口；两段中间恢复 Run 保存历史终态；最终 Run `source-run-8e76eae2-de80-47e0-9022-88fbab337376` 以 `plan_scope_completed` 完成，目标实际覆盖 247 个来源型号。
+- 19 个品牌对账：美的、格兰仕、松下、东芝、海尔、惠而浦、三洋、LG 各完成 20 个型号；西门子 8、创维 2、大宇 19、易厨 4、帝而 18、ouio 1、家易仕 1、米家 1、日立 12、威力 5 个型号按来源穷尽结束；方太完成 15 个型号，型号 `1228243` 因无法识别图集大图分区而隔离失败。
+- 2026-08-31 14:00 最终观测：246 个型号完成、1 个局部失败；3,799 个不可变快照、2,918 个资源文件；3,879 个最新工作项完成、1 个失败、0 个运行中；请求为 3,822 个完成、106 个失败、2 个历史取消，0 个执行中。
 
 ## 架构影响
 
@@ -104,11 +105,11 @@
 - 本次启动独立服务、恢复既有 Source Batch 和配置 Codex 观察任务不改变模块职责、事实源、依赖方向或公共 contract。
 - 型号图集和大图分区的局部解析错误改为复用现有 Work Item 隔离语义；没有新增协议、恢复入口或第二事实源，本次架构影响为 `澄清`。
 - Target 完成核对从“全部完成”澄清为“全部终态”，与既有 Work Item 失败隔离语义一致；没有改变 Source Dataset 的事实源、模块职责或公共 contract。
+- 微波炉 Batch 进入终态不改变架构基线。
 
 ## 后续入口
 
-1. Codex 观察任务每 5 分钟核对独立服务和 Source Dataset 的实际增量；暂时性请求按 30 秒超时、最多重试一次，仍失败则记录并继续后续图片、型号或品牌。
-2. Source Batch 进入终态后，核对 Batch/Run/target/work item、请求账本、快照、图片、血缘和全部 19 个品牌的最终状态。
+1. 基于已完成的微波炉 Source Dataset 审核原始页面、图片资产和血缘；数据处理阶段仍须按路线图重新访谈、调研和设计。
 
 ## 交付状态
 
