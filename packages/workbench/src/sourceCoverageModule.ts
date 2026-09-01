@@ -81,7 +81,7 @@ async function assessSourceCoverage(db: WorkbenchDb, taskId: string, assessedAt:
       .from(sourceRequestAttempts).where(inArray(sourceRequestAttempts.runId, runIds)) : [],
   ]);
   const publicRuns = runRows.filter((run) => run.providerKey === "public.web-resource");
-  const { metadata, attemptedUrls } = collectPlanMetadata(planRows);
+  const { metadata, attemptedUrls } = collectPlanMetadata(planRows, publicRuns);
   const acceptedSources = collectAcceptedSources(publicRuns, snapshotRows, metadata);
   const productCatalog = completedProductCatalog(
     batchRows, runRows, subjectRows, workItemRows, snapshotRows,
@@ -120,14 +120,24 @@ async function assessSourceCoverage(db: WorkbenchDb, taskId: string, assessedAt:
   });
 }
 
-function collectPlanMetadata(planRows: (typeof sourceCollectionPlans.$inferSelect)[]) {
+function collectPlanMetadata(
+  planRows: (typeof sourceCollectionPlans.$inferSelect)[],
+  publicRuns: (typeof sourceCollectionRuns.$inferSelect)[],
+) {
   const metadata = new Map<string, PublicSourceMetadata>();
   const attemptedUrls = new Set<string>();
+  const executedSources = new Set(publicRuns.flatMap((run) => run.sourceCollectionPlanId
+    && run.sourceCollectionPlanVersion && run.sourceCollectionPlanSourceKey
+    ? [metadataKey(run.sourceCollectionPlanId, run.sourceCollectionPlanVersion,
+      run.sourceCollectionPlanSourceKey)] : []));
   for (const plan of planRows) {
     const content = crawlPlanContentSchema.safeParse(plan.content);
     if (!content.success) continue;
     for (const source of content.data.sources.filter((item) => item.provider.key === "public.web-resource")) {
-      for (const url of source.entryUrls) attemptedUrls.add(normalizeUrl(url));
+      // WHY：Draft 只是待确认候选；只有已经创建 Source Run 的来源才算真正进入过执行。
+      if (executedSources.has(metadataKey(plan.id, plan.version, source.key))) {
+        for (const url of source.entryUrls) attemptedUrls.add(normalizeUrl(url));
+      }
     }
     const audit = multiSourcePlanningAuditSchema.safeParse(content.data.researchAudit);
     if (!audit.success) continue;
@@ -261,9 +271,9 @@ function findUnfinishedExecutions(
   }
   for (const attempt of attemptRows.filter((item) => item.state === "started")) result.add(attempt.id);
   for (const batch of batchRows) {
-    const batchRuns = runRows.filter((run) => run.executionBatchId === batch.id);
-    const sourceKeys = new Set(batchRuns.map((run) => run.sourceCollectionPlanSourceKey ?? run.id));
-    if (batch.status === "running" || sourceKeys.size < batch.plannedSourceCount) result.add(batch.id);
+    // WHY：failed/stopped/partial 都是可审计终态；只有活动 Batch 或已进入恢复调度的 Batch 才阻止缺口规划。
+    if (batch.status === "running" || batch.recoveryState === "pending"
+      || batch.recoveryState === "running") result.add(batch.id);
   }
   return [...result];
 }

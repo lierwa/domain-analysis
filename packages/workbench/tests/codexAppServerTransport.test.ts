@@ -37,6 +37,8 @@ describe("Codex app-server 进程环境", () => {
     });
 
     const options = execaMock.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(Object.keys(options?.env ?? {}).filter((key) => key.toLowerCase() === "path"))
+      .toEqual(["PATH"]);
     expect(options?.env?.PATH?.split(path.delimiter)).toEqual([
       path.dirname(process.execPath),
       "/usr/bin",

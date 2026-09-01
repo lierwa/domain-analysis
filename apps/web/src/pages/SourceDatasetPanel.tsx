@@ -81,22 +81,33 @@ function LoadedSourceDatasetPanel({ task, view }: { task: DatasetTask; view: Sou
 function CoverageSummary({ coverage }: { coverage: SourceDatasetTaskView["coverage"] }) {
   if (!coverage) return null;
   const dimensions = [...coverage.families, ...coverage.facets];
-  const satisfied = dimensions.filter((item) => item.status === "satisfied").length;
+  const satisfied = dimensions.filter((item) => item.status === "satisfied").length
+    + (coverage.productCatalog.status === "satisfied" ? 1 : 0);
+  const total = dimensions.length + 1;
   return <details className="border-b border-line bg-panel px-4 py-3 sm:px-5">
     <summary className="cursor-pointer text-sm font-medium">
-      原始资料入口最低覆盖：{coverage.status === "satisfied" ? "已达到" : `已满足 ${satisfied}/${dimensions.length} 项`}
+      原始资料入口最低覆盖：{coverage.status === "satisfied" ? "已达到"
+        : coverage.status === "in_progress" ? `执行尚未终态，已满足 ${satisfied}/${total} 项`
+          : `已满足 ${satisfied}/${total} 项`}
     </summary>
     <ul className="mt-3 grid gap-2 text-xs leading-5 text-muted sm:grid-cols-2 lg:grid-cols-4">
-      {coverage.productCatalog.status === "satisfied" && <li>
-        <span className="text-ink">ZOL 商品目录</span>：{coverage.productCatalog.brandCount ?? "?"} 个品牌，
-        {coverage.productCatalog.coveredModelCount ?? "?"}/{coverage.productCatalog.modelCount ?? "?"} 个型号有完成记录
-      </li>}
+      <li>
+        <span className={coverage.productCatalog.status === "satisfied" ? "text-ink" : "text-danger"}>
+          ZOL 商品目录
+        </span>：{coverage.productCatalog.status === "satisfied"
+          ? <>{coverage.productCatalog.brandCount ?? "?"} 个品牌，
+            {coverage.productCatalog.coveredModelCount ?? "?"}/{coverage.productCatalog.modelCount ?? "?"} 个型号有完成记录</>
+          : "尚未达到"}
+      </li>
       {dimensions.map((item) => <li key={item.key}>
         <span className={item.status === "satisfied" ? "text-ink" : "text-danger"}>
           {coverageLabels[item.key] ?? item.key}
         </span>：{item.acceptedSourceCount}/{item.minimumAcceptedSources} 条，
         {item.distinctOriginCount}/{item.minimumDistinctOrigins} 个网站
       </li>)}
+      {coverage.unfinishedExecutionIds.length > 0 && <li className="text-danger">
+        执行终态：仍有 {coverage.unfinishedExecutionIds.length} 个执行项未结束
+      </li>}
     </ul>
   </details>;
 }

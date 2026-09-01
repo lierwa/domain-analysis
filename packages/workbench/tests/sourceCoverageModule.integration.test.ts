@@ -64,6 +64,14 @@ describeWithPostgres("Source Dataset 原始资料最低覆盖", () => {
     await db.insert(sourceCollectionPlans).values({ id: planId, taskId, taskRevision: 1,
       version: 1, status: "confirmed", contentHash: "a".repeat(64), content,
       createdAt: at, confirmedAt: at });
+    const draftOnlyUrl = "https://draft-only.example.org/not-executed";
+    await db.insert(sourceCollectionPlans).values({ id: `plan-draft-${randomUUID()}`, taskId,
+      taskRevision: 1, version: 2, status: "draft", contentHash: "c".repeat(64),
+      content: { ...content, sources: [{ ...content.sources[0]!, key: "public.draft-only",
+        entryUrls: [draftOnlyUrl], targets: [{ ...content.sources[0]!.targets[0]!,
+          key: "public.draft-only.resource", providerConfiguration: [
+            { key: "route", value: "exact" }, { key: "url", value: draftOnlyUrl },
+          ] }] }] }, createdAt: at });
     await db.insert(sourceCollectionBatches).values([
       { id: zolBatchId, taskId, sourceCollectionPlanId: planId, sourceCollectionPlanVersion: 1,
         taskRevision: 1, status: "completed", plannedSourceCount: 1, startedAt: at, finishedAt: at },
@@ -118,6 +126,7 @@ describeWithPostgres("Source Dataset 原始资料最低覆盖", () => {
       reference: { sourceBatchId: zolBatchId } });
     expect(coverage.acceptedSources).toHaveLength(7);
     expect(coverage.attemptedUrls).toHaveLength(8);
+    expect(coverage.attemptedUrls).not.toContain(draftOnlyUrl);
     expect(coverage.unfinishedExecutionIds).toEqual([]);
     expect(dimension(coverage.families, "standards_and_regulation")).toMatchObject({
       status: "satisfied", acceptedSourceCount: 3, distinctOriginCount: 2,
@@ -144,6 +153,21 @@ describeWithPostgres("Source Dataset 原始资料最低覆盖", () => {
     const inProgress = await createSourceCoverageModule(db, () => new Date(at)).assessTask(taskId);
     expect(inProgress.status).toBe("in_progress");
     expect(inProgress.unfinishedExecutionIds).toContain(pendingTargetId);
+
+    await db.update(sourceCollectionTargetRuns).set({ status: "completed", finishedAt: at })
+      .where(eq(sourceCollectionTargetRuns.id, pendingTargetId));
+    await db.update(sourceCollectionBatches).set({ status: "stopped",
+      plannedSourceCount: research.sources.length + 1, finishedAt: at })
+      .where(eq(sourceCollectionBatches.id, publicBatchId));
+    const stopped = await createSourceCoverageModule(db, () => new Date(at)).assessTask(taskId);
+    expect(stopped.status).toBe("gaps");
+    expect(stopped.unfinishedExecutionIds).not.toContain(publicBatchId);
+
+    await db.update(sourceCollectionBatches).set({ recoveryState: "pending" })
+      .where(eq(sourceCollectionBatches.id, publicBatchId));
+    const recovering = await createSourceCoverageModule(db, () => new Date(at)).assessTask(taskId);
+    expect(recovering.status).toBe("in_progress");
+    expect(recovering.unfinishedExecutionIds).toContain(publicBatchId);
   });
 });
 

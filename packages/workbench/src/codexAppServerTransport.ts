@@ -30,10 +30,12 @@ export function startCodexAppServerTransport(options: {
     ? args
     : ["--prefix", options.packageRoot ?? options.cwd, "exec", "--", "codex", ...args];
   const environment = { ...process.env };
-  const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === "path") ?? "PATH";
+  const pathKeys = Object.keys(environment).filter((key) => key.toLowerCase() === "path");
+  const inheritedPath = environment.PATH ?? pathKeys.map((key) => environment[key]).find(Boolean);
+  for (const key of pathKeys) delete environment[key];
   // WHY：常驻服务可能通过 Node 绝对路径启动而没有继承 Node 所在目录；npm 的 env node shebang
-  // 仍依赖 PATH，因此把当前已验证运行中的 Node 目录放在子进程 PATH 首位，且保留原环境作为退出路径。
-  environment[pathKey] = [path.dirname(process.execPath), environment[pathKey]]
+  // 仍依赖 PATH；Windows 环境键不区分大小写，因此先收口重复键，再写入唯一事实源。
+  environment.PATH = [path.dirname(process.execPath), inheritedPath]
     .filter((value): value is string => Boolean(value))
     .join(path.delimiter);
   // WHY：进程连接跨多个业务回合复用；单回合超时和取消由官方 turn/interrupt 管理，不能交给进程总超时。

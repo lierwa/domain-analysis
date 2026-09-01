@@ -1,6 +1,6 @@
 # 数据抓取平台开发进度
 
-更新日期：2026-09-01
+更新日期：2026-09-02
 当前阶段：微波炉阶段 1 原始资料最低覆盖已通过，等待阶段 2 重新采访、调研与设计
 
 ## 简单说明
@@ -22,7 +22,7 @@ Source Dataset 现在直接按品牌、型号和资源展示已抓到的数据�
 ## Git 与运行环境
 
 - 主工作区：`/Users/guojunxi/Desktop/work/domain-analysis`，branch `master`
-- `master` 当前 HEAD 与 `origin/master` 一致；本轮代码、测试、权威文档和验收报告均为本机未提交增量，未推送
+- 多来源阶段 1 基线已随 `4997e0b` 进入 `master`；Windows 正确性修复随本文件所在提交形成新的跨电脑接续点
 - 常驻 `launchctl` API/Web 均从主工作区运行并监听 `4000`/`6173`；进程工作目录已核对为主工作区 `apps/api` 与 `apps/web`
 - fcb1 worktree 已从 Git 登记和文件系统删除；其中 5,472 个正式内容寻址资产先按 checksum 无损合并到主工作区，原有 2 个文件保留
 - PostgreSQL 与正式 Source Asset 保留在主工作区本地运行边界
@@ -87,11 +87,11 @@ Source Dataset 现在直接按品牌、型号和资源展示已抓到的数据�
 - Source Execution 汇总当前 Batch 的全部 Run；活动 Batch 再次启动返回既有 `already_running` 结果，完成态重新执行先显示页面内确认框。
 - 商品地图的活动展开行、详情选择和 Run 审计分别建模；详情关闭后焦点返回首次地图触发器，键盘路径与画布/大纲行为一致。
 - API 支持用 `SOURCE_ASSET_CACHE_PATH` 显式复用正式抓取所在 checkout 的内容寻址资产；默认仍使用当前仓库 `data/source-assets`，不复制附件或改写血缘。
-- Codex App Server 子进程 PATH 显式包含当前 Node 目录，修复 launchd 环境下 `npm` 无法找到 `node` 导致采访立即失败的问题；原协议、模型与会话事实源不变。
+- Codex App Server 子进程把当前 Node 目录写入唯一 `PATH` 键；同时覆盖 launchd 的精简环境与 Windows `Path`/`PATH` 大小写重复，原协议、模型与会话事实源不变。
 
 ## 当前验证
 
-截至 2026-09-01 的验证：
+截至 2026-09-02 的验证：
 
 - `npm run typecheck`：shared、db、workbench、worker、api、web 六个 workspace 全部通过。
 - `npm test`：44 个测试文件通过、2 个跳过；203 个测试通过、7 个跳过。
@@ -134,6 +134,9 @@ Source Dataset 现在直接按品牌、型号和资源展示已抓到的数据�
 - 最终 Source Coverage 为 `satisfied`：ZOL 商品目录 19 个品牌、247/247 个型号有完成关联、3,792 个 accessible 快照；accepted 公开资料累计 20 条；标准监管 9 条/6 个网站，专业技术 5 条/5 个网站，品牌官方 6 条/3 个网站；五个计划主题入口分别为 7、7、7、10、6 条，剩余 gap 0。Batch、Run、Target、Work Item、Request Attempt 未结束记录均为 0。
 - 覆盖模块、自动 ZOL 引用与缺口规划的 PostgreSQL 集成回归 74/74 通过；Source Dataset 覆盖展示聚焦回归 12/12 通过。
 - 独立 Agent 最终复核通过，无剩余 must-fix。商品目录门已改为逐型号核对同 Run 的 completed Work Item 与真实 Snapshot；Snapshot 必须有 lineage、`accessible`、`accepted`、非空且非 legacy。Run 汇总计数不再能单独放行商品目录，真实数据仍为 247/247 个型号、3,792 个 accepted Snapshot。
+- Windows 正确性聚焦回归：4 个测试文件、20 个测试通过，覆盖唯一 `PATH`、只有真实 Source Run 才形成已尝试 URL、终态 Batch 与恢复中 Batch 分流，以及 Source Dataset 的商品目录/执行终态展示。
+- Windows 无外部服务全量 Vitest：40 个测试文件通过、10 个按 PostgreSQL 环境门跳过；187 个测试通过、36 个跳过。当前主机的 Code Integrity 阻止 PostgreSQL `libpq.dll` 加载，因此本轮新增 PostgreSQL 集成断言仍需在可运行官方 PostgreSQL 的环境补跑。
+- Windows `npm run typecheck`：shared、db、workbench、worker、api、web 六个 workspace 全部通过；`npm run build` 通过，Web 完成 2,487 个模块构建，仅有既有 Vite 大分块提示；`git diff --check` 通过，仅有行尾转换提示。
 
 ## 当前正式运行
 
@@ -181,6 +184,7 @@ Source Dataset 现在直接按品牌、型号和资源展示已抓到的数据�
 - 2026-09-01 已完成 ZOL 引用与真实执行的架构影响为 `改变`：Planning request/audit 新增结构化 ZOL 完成引用；Workbench 只接受同任务、完成 Batch 与完成 ZOL Provider Run，计划和执行不再重复抓 ZOL。历史 Source Dataset 仍是已完成原始事实源，新 Source Dataset Batch 保存本轮公开来源事实；没有新增 Provider、抓取器或 fallback。
 - 2026-09-01 全资料最低覆盖与增量规划的架构影响为 `改变`：新增 typed `SourceCoverageModule`，只从 Source Dataset accepted 快照投影来源族、主题、独立 origin、已尝试 URL 和执行终态；Planning 与 Source Dataset 页面共用该 interface。Crawl Plan 当前协议升级为 v7，手工 `completedSourceReferences` 请求入口删除，ZOL 完成引用改由覆盖模块自动推导。原始事实源、Provider 和执行依赖方向不变。
 - 旧的一次性专业研究任务文档已删除；没有保留第二条研究流程、旧 v5 确认入口或 fallback。
+- 2026-09-01 Windows 正确性修复的架构影响为 `澄清`：只有已经创建 Source Run 的公开来源才进入已尝试 URL；`failed`、`stopped`、`partial` Batch 保持终态，只有活动或恢复中的 Batch 阻止缺口 Planning；Web 完整展示商品目录与执行终态门。Source Dataset、Source Coverage、Planning 和 Web 的事实源及依赖方向不变，公共 contract 未改变。
 
 Baseline Impact:
 
@@ -199,4 +203,4 @@ Baseline Impact:
 
 ## 交付状态
 
-本轮实现、测试和权威文档已纳入 Git `master` 并推送至 `origin/master`；以本文件所在提交作为跨电脑接续点。数据库、原始页面、图片和本机秘密只保留在本地，不进入 Git。
+多来源阶段 1 实现、测试和权威文档已纳入 Git `master`；Windows 正确性修复随本文件所在提交推送至 `origin/master`，并作为新的跨电脑接续点。数据库、原始页面、图片和本机秘密只保留在本地，不进入 Git。

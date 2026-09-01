@@ -167,6 +167,33 @@ describe("Source Dataset 商品地图", () => {
     expect(screen.getByText("原始资料入口最低覆盖：已达到")).toBeTruthy();
   });
 
+  it("商品目录缺口和未结束执行不会显示为全部覆盖", () => {
+    const client = new QueryClient();
+    const view = dataset();
+    view.coverage = { ...view.coverage!, status: "gaps", productCatalog: { status: "gap" } };
+    client.setQueryData(["source-runs", "task-1"], view);
+    const rendered = render(<QueryClientProvider client={client}>
+      <SourceDatasetPanel task={captureTask()} />
+    </QueryClientProvider>);
+
+    expect(screen.getByText("原始资料入口最低覆盖：已满足 8/9 项")).toBeTruthy();
+    expect(screen.getByText((_content, element) => element?.tagName === "LI"
+      && element.textContent === "ZOL 商品目录：尚未达到")).toBeTruthy();
+
+    rendered.unmount();
+    const activeClient = new QueryClient();
+    const activeView = dataset();
+    activeView.coverage = { ...activeView.coverage!, status: "in_progress",
+      unfinishedExecutionIds: ["batch-running"] };
+    activeClient.setQueryData(["source-runs", "task-1"], activeView);
+    render(<QueryClientProvider client={activeClient}>
+      <SourceDatasetPanel task={captureTask()} />
+    </QueryClientProvider>);
+
+    expect(screen.getByText("原始资料入口最低覆盖：执行尚未终态，已满足 9/9 项")).toBeTruthy();
+    expect(screen.getByText("执行终态：仍有 1 个执行项未结束")).toBeTruthy();
+  });
+
   it("只轮询当前活动 Batch，并保留运行时间格式", () => {
     const active = sourceDatasetTaskViewSchema.parse({ ...dataset(), currentExecution: {
       ...dataset().currentExecution!, status: "running", recoveryState: "none", finishedAt: undefined,
