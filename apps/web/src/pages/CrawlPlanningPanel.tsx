@@ -1,5 +1,5 @@
 import {
-  brandRankingPlanningAuditSchema,
+  multiSourcePlanningAuditSchema,
   type CaptureTask,
   type CrawlPlanningEvent,
   type InterviewMessageTimelinePart,
@@ -69,7 +69,7 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div>
         <p className="text-sm font-semibold">第二步：制定抓取计划</p>
-        <p className="mt-1 text-xs leading-5 text-muted">系统核验 ZOL 品牌排行榜与入选品牌目录，再按已确认规则形成执行品牌集合；计划确认和开始抓取是两个独立动作。</p>
+        <p className="mt-1 text-xs leading-5 text-muted">系统在同一阶段规划商品目录、标准监管、专业技术与品牌公开资料；计划确认和开始抓取是两个独立动作。</p>
       </div>
       <button type="button" className="button-primary" disabled={isRunning}
         onClick={() => void start()}>
@@ -107,11 +107,16 @@ function PlanDraftCard({ plan, confirming, onConfirm }: {
   confirming: boolean;
   onConfirm: () => void;
 }) {
-  const audit = useMemo(() => brandRankingPlanningAuditSchema.safeParse(plan.content.researchAudit), [plan]);
-  const facts = audit.success ? audit.data : undefined;
+  const audit = useMemo(() => multiSourcePlanningAuditSchema.safeParse(plan.content.researchAudit), [plan]);
+  const completedCatalog = audit.success && audit.data.productCatalog.kind === "completed_source_reference"
+    ? audit.data.productCatalog : undefined;
+  const facts = audit.success && audit.data.productCatalog.kind !== "completed_source_reference"
+    ? audit.data.productCatalog : undefined;
+  const publicResearch = audit.success ? audit.data.publicSourceResearch : undefined;
   const confirmationBlockers = [
-    ...(plan.content.executionChecklistVersion === 5 ? [] : ["当前草稿需要按现行排行榜协议重新规划"]),
-    ...(audit.success ? [] : ["当前草稿缺少可验证的品牌排行榜审计"]),
+    ...(plan.content.executionChecklistVersion === 7 ? [] : ["当前草稿需要按现行多来源规划协议重新规划"]),
+    ...(audit.success && audit.data.priorCoverage ? [] : ["当前草稿缺少资料覆盖快照"]),
+    ...(audit.success ? [] : ["当前草稿缺少可验证的多来源规划审计"]),
     ...plan.content.planningBlockers,
   ];
   return <article className="mt-5 rounded-lg border border-line bg-panel p-4 sm:p-5">
@@ -122,17 +127,42 @@ function PlanDraftCard({ plan, confirming, onConfirm }: {
       </div>
       <span className="status-badge">{plan.status === "draft" ? "待确认" : "已确认"}</span>
     </div>
-    {facts && <>
-      <dl className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        {facts.rankingStatus === "verified" ? <>
+    {audit.success && <>
+      <dl className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-7">
+        {completedCatalog && <Metric label="ZOL 商品数据" value="已完成，本次跳过" />}
+        {facts?.rankingStatus === "verified" ? <>
           <Metric label="榜单行" value={facts.rankingRows.length} />
           <Metric label="执行品牌" value={facts.executionBrands.length} />
           <Metric label="品牌批次" value={facts.brandBatchSize} />
           <Metric label="每轮型号" value={facts.modelsPerBrandPerRound} />
           <Metric label="每品牌上限" value={facts.maxModelsPerBrand} />
-        </> : <Metric label="排行榜状态" value="待核实" attention />}
+        </> : facts ? <Metric label="排行榜状态" value="待核实" attention /> : null}
+        {publicResearch && <>
+          <Metric label="专业主题" value={publicResearch.topics.length} />
+          <Metric label="公开来源" value={publicResearch.sources.length} />
+          <Metric label="受阻线索" value={publicResearch.blocked.length}
+            attention={publicResearch.blocked.length > 0} />
+        </>}
+        {audit.data.priorCoverage && <>
+          <Metric label="已接受资料" value={audit.data.priorCoverage.acceptedSources.length} />
+          <Metric label="待补缺口" value={audit.data.priorCoverage.gaps.length}
+            attention={audit.data.priorCoverage.gaps.length > 0} />
+        </>}
       </dl>
-      {facts.rankingStatus === "verified" ? <>
+      {audit.data.priorCoverage && <details className="mt-4 rounded-lg border border-line bg-surface p-3">
+        <summary className="cursor-pointer text-sm font-medium">查看规划前的全部资料覆盖</summary>
+        <ul className="mt-3 space-y-2 text-sm leading-6 text-muted">
+          {audit.data.priorCoverage.families.map((item) => <li key={item.key}>
+            {coverageLabels[item.key] ?? item.key}：{item.acceptedSourceCount}/{item.minimumAcceptedSources} 条，
+            {item.distinctOriginCount}/{item.minimumDistinctOrigins} 个网站
+          </li>)}
+          {audit.data.priorCoverage.facets.map((item) => <li key={item.key}>
+            {coverageLabels[item.key] ?? item.key}：{item.acceptedSourceCount}/{item.minimumAcceptedSources} 条，
+            {item.distinctOriginCount}/{item.minimumDistinctOrigins} 个网站
+          </li>)}
+        </ul>
+      </details>}
+      {facts?.rankingStatus === "verified" ? <>
         <p className="mt-4 text-xs text-muted">榜单证据：<a href={facts.rankingUrl} target="_blank" rel="noreferrer"
           className="text-ink underline decoration-line underline-offset-4">{facts.rankingUrl}</a> · {new Date(facts.observedAt).toLocaleString()}</p>
         <p className="mt-4 text-sm leading-6 text-muted">综合评分大于 {facts.selectionPolicy.minimumScoreExclusive}，按榜单顺序最多 {facts.selectionPolicy.maxBrands} 个品牌；每批 {facts.brandBatchSize} 个，每品牌每轮 {facts.modelsPerBrandPerRound} 个，最多 {facts.maxModelsPerBrand} 个型号。最大执行容量 {facts.estimatedModelCapacity.toLocaleString()} 个型号。</p>
@@ -151,7 +181,28 @@ function PlanDraftCard({ plan, confirming, onConfirm }: {
             {facts.blockedSelectedBrands.map((brand) => <li key={`${brand.rank}-${brand.name}`}>第 {brand.rank} 名 {brand.name}：{brand.reason}</li>)}
           </ul>
         </details>}
-      </> : <p className="mt-4 text-sm leading-6 text-muted">{facts.rankingReason}</p>}
+      </> : facts ? <p className="mt-4 text-sm leading-6 text-muted">{facts.rankingReason}</p> : null}
+      {completedCatalog && <p className="mt-4 text-sm leading-6 text-muted">
+        已完成批次：{completedCatalog.sourceBatchId}。本计划不会再次执行 {completedCatalog.providerKey}。
+      </p>}
+      {publicResearch && publicResearch.sources.length > 0 && <details className="mt-4 rounded-lg border border-line bg-surface p-3">
+        <summary className="cursor-pointer text-sm font-medium">查看 {publicResearch.sources.length} 个标准、专业技术与品牌公开入口</summary>
+        <div className="mt-3 grid gap-x-5 gap-y-2 sm:grid-cols-2">
+          {publicResearch.sources.map((source) => <a key={source.key} href={source.url}
+            target="_blank" rel="noreferrer" className="truncate text-sm text-ink underline decoration-line underline-offset-4">
+            {source.name}
+          </a>)}
+        </div>
+      </details>}
+      {publicResearch && publicResearch.blocked.length > 0 && <details className="mt-4 rounded-lg border border-warning/40 bg-warning/5 p-3">
+        <summary className="cursor-pointer text-sm font-medium">查看 {publicResearch.blocked.length} 条未取得入口记录</summary>
+        <ul className="mt-3 space-y-2 text-sm leading-6 text-muted">
+          {publicResearch.blocked.map((item, index) => <li key={`${item.sourceKind}-${index}`}>
+            <span className="font-medium text-ink">{publicSourceKindLabels[item.sourceKind] ?? item.sourceKind}：</span>
+            {item.query}；{item.reason}
+          </li>)}
+        </ul>
+      </details>}
     </>}
     {confirmationBlockers.length > 0 && <div className="mt-4 rounded-lg border border-warning/40 bg-warning/5 p-3">
       <p className="text-sm font-medium">计划保持待确认</p>
@@ -161,7 +212,7 @@ function PlanDraftCard({ plan, confirming, onConfirm }: {
     </div>}
     {plan.status === "draft" && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
       <p className="text-xs text-muted">{confirmationBlockers.length > 0
-        ? "排行榜与执行范围核实后才能确认。"
+        ? "多来源执行范围核实后才能确认。"
         : "确认只冻结计划版本；不会开始抓取。"}</p>
       <button type="button" className="button-primary" disabled={confirming || confirmationBlockers.length > 0} onClick={onConfirm}>
         {confirming ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ChevronRight className="h-4 w-4" />}
@@ -170,6 +221,25 @@ function PlanDraftCard({ plan, confirming, onConfirm }: {
     </div>}
   </article>;
 }
+
+const publicSourceKindLabels: Record<string, string> = {
+  regulator: "监管机构",
+  standards_body: "标准机构",
+  technical_publisher: "专业技术机构",
+  industry_organization: "行业组织",
+  brand_official: "品牌公开资料",
+};
+
+const coverageLabels: Record<string, string> = {
+  standards_and_regulation: "标准与监管来源",
+  professional_technical: "专业技术来源",
+  brand_official: "品牌官方来源",
+  operating_principle: "运行原理主题入口",
+  core_components: "核心部件主题入口",
+  safety_and_regulation: "安全与法规主题入口",
+  performance_and_testing: "性能与测试主题入口",
+  use_and_maintenance: "使用与维护主题入口",
+};
 
 function Metric({ label, value, attention = false }: { label: string; value: number | string; attention?: boolean }) {
   return <div className="rounded-lg border border-line bg-surface px-3 py-2">

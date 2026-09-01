@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import { crawlPlanningRuns, sourceCollectionPlans, type WorkbenchDb } from "@domain-analysis/db";
+import {
+  crawlPlanningRuns,
+  sourceCollectionPlans,
+  type WorkbenchDb,
+} from "@domain-analysis/db";
 import {
   appendInterviewTimelineActivity,
   appendInterviewTimelineText,
@@ -18,11 +22,13 @@ import {
   type CrawlPlanningView,
   type InterviewMessageTimelinePart,
   type InterviewTurnActivity,
+  type SourceCoverageAssessment,
 } from "@domain-analysis/shared";
 import { and, desc, eq } from "drizzle-orm";
 
 import type { CaptureTaskModule } from "./captureTaskModule";
 import type { CrawlPlanModule } from "./crawlPlanModule";
+import type { SourceCoverageModule } from "./sourceCoverageModule";
 
 export type CrawlPlanningRuntimeEvent =
   | { type: "activity"; activity: InterviewTurnActivity }
@@ -34,6 +40,7 @@ export interface CrawlPlanningRuntime {
   run(input: {
     task: CaptureTask;
     instruction?: string;
+    coverage: SourceCoverageAssessment;
     signal?: AbortSignal;
   }): AsyncIterable<CrawlPlanningRuntimeEvent>;
   close?(): Promise<void>;
@@ -69,13 +76,14 @@ export function createCrawlPlanningModule(
   tasks: CaptureTaskModule,
   plans: CrawlPlanModule,
   runtime: CrawlPlanningRuntime,
+  coverage: SourceCoverageModule,
   validateSource?: (source: CrawlPlanContent["sources"][number]) => void,
   now: () => Date = () => new Date(),
 ): CrawlPlanningModule {
   const get = (taskId: string) => loadView(db, tasks, plans, taskId);
   return {
     get,
-    run: (input) => runPlanning({ db, tasks, plans, runtime, validateSource, now, input }),
+    run: (input) => runPlanning({ db, tasks, plans, runtime, coverage, validateSource, now, input }),
     confirm: async (input) => {
       await plans.confirmDraft(input);
       const view = await get(input.taskId);
@@ -90,6 +98,7 @@ type PlanningContext = {
   tasks: CaptureTaskModule;
   plans: CrawlPlanModule;
   runtime: CrawlPlanningRuntime;
+  coverage: SourceCoverageModule;
   validateSource?: (source: CrawlPlanContent["sources"][number]) => void;
   now: () => Date;
   input: { taskId: string; expectedTaskRevision: number; instruction?: string; signal?: AbortSignal };
@@ -101,6 +110,13 @@ async function* runPlanning(context: PlanningContext): AsyncGenerator<CrawlPlann
     ...(context.input.instruction ? { instruction: context.input.instruction } : {}),
   });
   const task = await requireReadyTask(context.tasks, context.input.taskId, request.expectedTaskRevision);
+  const coverage = await context.coverage.assessTask(task.id);
+  if (coverage.status === "in_progress") {
+    throw new CrawlPlanningError("invalid_state", "现有来源仍在执行，终态后才能规划资料缺口");
+  }
+  if (coverage.status === "satisfied") {
+    throw new CrawlPlanningError("invalid_state", "该任务的阶段 1 原始资料已经达到最低覆盖门");
+  }
   const active = await context.db.query.crawlPlanningRuns.findFirst({
     where: and(eq(crawlPlanningRuns.taskId, task.id), eq(crawlPlanningRuns.status, "running")),
   });
@@ -121,7 +137,8 @@ async function* runPlanning(context: PlanningContext): AsyncGenerator<CrawlPlann
   yield parseEvent({ type: "run.started", taskId: task.id, runId });
 
   try {
-    for await (const event of context.runtime.run({ task, instruction: request.instruction, signal: context.input.signal })) {
+    for await (const event of context.runtime.run({ task, instruction: request.instruction,
+      coverage, signal: context.input.signal })) {
       if (event.type === "activity") {
         timelineParts = boundedParts(appendInterviewTimelineActivity(timelineParts, event.activity));
         await updateTimeline(context.db, runId, timelineParts);

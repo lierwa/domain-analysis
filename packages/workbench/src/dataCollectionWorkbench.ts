@@ -20,6 +20,7 @@ import {
 import { createCrawlPlanningModule, type CrawlPlanningModule,
   type CrawlPlanningRuntime } from "./crawlPlanningModule";
 import { createSourceDatasetModule, type SourceDatasetModule } from "./sourceDatasetModule";
+import { createSourceCoverageModule } from "./sourceCoverageModule";
 import { createSourceExecutionModule, type SourceExecutionModule, type SourceProvider } from "./sourceExecutionModule";
 
 export interface DataCollectionWorkbench {
@@ -49,11 +50,15 @@ export async function openDataCollectionWorkbench(
   const db = createWorkbenchDb(databaseUrl);
   const captureTasks = createCaptureTaskModule(db);
   const categoryInterviewRuntime = options.categoryInterviewRuntime;
-  const sourceDatasets = createSourceDatasetModule(db, options.sourceDatasetModule);
+  const sourceCoverage = createSourceCoverageModule(db);
+  const sourceDatasets = createSourceDatasetModule(db, {
+    ...options.sourceDatasetModule,
+    coverageModule: sourceCoverage,
+  });
   const crawlPlans = createCrawlPlanModule(db, captureTasks);
   const crawlPlanningRuntime = options.crawlPlanningRuntime;
   const crawlPlanning = crawlPlanningRuntime
-    ? createCrawlPlanningModule(db, captureTasks, crawlPlans, crawlPlanningRuntime, (source) => {
+    ? createCrawlPlanningModule(db, captureTasks, crawlPlans, crawlPlanningRuntime, sourceCoverage, (source) => {
       const provider = options.sourceProviders?.get(source.provider.key);
       if (!provider || provider.version !== source.provider.version) {
         throw new Error(`计划引用了当前未装配的 Provider：${source.provider.key}@${source.provider.version}`);

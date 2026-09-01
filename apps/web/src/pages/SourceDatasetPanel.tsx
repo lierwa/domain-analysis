@@ -51,10 +51,12 @@ function LoadedSourceDatasetPanel({ task, view }: { task: DatasetTask; view: Sou
   }, [inspectorOpen]);
   if (state.graph.stats.sourceCount === 0 && view.batches.length === 0) {
     return <div className="flex h-full min-h-0 flex-col gap-3"><SourceExecutionControls task={task} view={view} />
+      <CoverageSummary coverage={view.coverage} />
       <EmptyPanel /></div>;
   }
   return <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-surface">
     <SourceExecutionControls task={task} view={view} />
+    <CoverageSummary coverage={view.coverage} />
     <DatasetHeader graph={state.graph} mode={state.mode} />
     <MapToolbar mode={state.mode} query={state.query} visibleNodeCount={state.visibleGraph.nodes.length}
       onMode={state.changeMode} onQuery={state.setQuery} />
@@ -75,6 +77,40 @@ function LoadedSourceDatasetPanel({ task, view }: { task: DatasetTask; view: Sou
     <MapLegend mode={state.mode} recordCount={state.graph.stats.recordCount} />
   </section>;
 }
+
+function CoverageSummary({ coverage }: { coverage: SourceDatasetTaskView["coverage"] }) {
+  if (!coverage) return null;
+  const dimensions = [...coverage.families, ...coverage.facets];
+  const satisfied = dimensions.filter((item) => item.status === "satisfied").length;
+  return <details className="border-b border-line bg-panel px-4 py-3 sm:px-5">
+    <summary className="cursor-pointer text-sm font-medium">
+      原始资料入口最低覆盖：{coverage.status === "satisfied" ? "已达到" : `已满足 ${satisfied}/${dimensions.length} 项`}
+    </summary>
+    <ul className="mt-3 grid gap-2 text-xs leading-5 text-muted sm:grid-cols-2 lg:grid-cols-4">
+      {coverage.productCatalog.status === "satisfied" && <li>
+        <span className="text-ink">ZOL 商品目录</span>：{coverage.productCatalog.brandCount ?? "?"} 个品牌，
+        {coverage.productCatalog.coveredModelCount ?? "?"}/{coverage.productCatalog.modelCount ?? "?"} 个型号有完成记录
+      </li>}
+      {dimensions.map((item) => <li key={item.key}>
+        <span className={item.status === "satisfied" ? "text-ink" : "text-danger"}>
+          {coverageLabels[item.key] ?? item.key}
+        </span>：{item.acceptedSourceCount}/{item.minimumAcceptedSources} 条，
+        {item.distinctOriginCount}/{item.minimumDistinctOrigins} 个网站
+      </li>)}
+    </ul>
+  </details>;
+}
+
+const coverageLabels: Record<string, string> = {
+  standards_and_regulation: "标准与监管来源",
+  professional_technical: "专业技术来源",
+  brand_official: "品牌官方来源",
+  operating_principle: "运行原理主题入口",
+  core_components: "核心部件主题入口",
+  safety_and_regulation: "安全与法规主题入口",
+  performance_and_testing: "性能与测试主题入口",
+  use_and_maintenance: "使用与维护主题入口",
+};
 
 function useDatasetMapController(task: DatasetTask, view: SourceDatasetTaskView) {
   const [mode, setMode] = useState<SourceDataMapMode>("product");

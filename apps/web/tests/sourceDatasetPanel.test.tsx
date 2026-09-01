@@ -66,6 +66,25 @@ describe("Source Dataset 商品地图", () => {
     expect(graph.stats.attentionCount).toBe(1);
   });
 
+  it("已处理但源站无图片的型号只显示来源标识", () => {
+    const view = dataset();
+    const brand = view.capturedBrands[0]!;
+    const model = brand.models[1]!;
+    model.status = "completed";
+    model.issueCount = 0;
+    brand.counts = { total: 2, completed: 2, needsAttention: 0 };
+    view.issues = [];
+    view.currentExecution = { ...view.currentExecution!, completedModelCount: 247,
+      needsAttentionModelCount: 0, issueCount: 0 };
+
+    const graph = buildSourceDataGraph(view, task(), "product");
+    const node = graph.nodes.find((item) => item.id === "model:model-2");
+
+    expect(node?.status).toBe("neutral");
+    expect(node?.meta).toContain("来源无图片");
+    expect(graph.stats.attentionCount).toBe(0);
+  });
+
   it("搜索型号时只带出该型号及其品牌血缘", () => {
     const graph = buildSourceDataGraph(dataset(), task(), "product");
     const searched = visibleSourceDataGraph(graph, new Set(), "1228243");
@@ -138,6 +157,16 @@ describe("Source Dataset 商品地图", () => {
     expect(screen.getByText("3799")).toBeTruthy();
   });
 
+  it("在 Source Dataset 展示全部资料的最低覆盖结论", () => {
+    const client = new QueryClient();
+    client.setQueryData(["source-runs", "task-1"], dataset());
+    render(<QueryClientProvider client={client}>
+      <SourceDatasetPanel task={captureTask()} />
+    </QueryClientProvider>);
+
+    expect(screen.getByText("原始资料入口最低覆盖：已达到")).toBeTruthy();
+  });
+
   it("只轮询当前活动 Batch，并保留运行时间格式", () => {
     const active = sourceDatasetTaskViewSchema.parse({ ...dataset(), currentExecution: {
       ...dataset().currentExecution!, status: "running", recoveryState: "none", finishedAt: undefined,
@@ -195,7 +224,25 @@ function dataset() {
       requestedUrl: "https://detail.zol.com.cn/1229/1228243/pic.shtml",
       ruleVersion: "zol-catalog-gallery-v2", reason: "图集没有明确的大图分区入口", httpStatus: 200,
       occurrenceCount: 3, runIds: ["run-1", "run-2", "run-3"], latestSnapshotId: "snapshot-1" }],
+    coverage: { policyVersion: "source-coverage-v1", status: "satisfied",
+      productCatalog: { status: "satisfied", reference: { providerKey: "zol.catalog-gallery",
+        sourceBatchId: "batch-1", reason: "ZOL 已完成" } }, acceptedSources: [], attemptedUrls: [],
+      families: [coverageDimension("standards_and_regulation", 9, 6, 3),
+        coverageDimension("professional_technical", 5, 5, 3),
+        coverageDimension("brand_official", 6, 3, 3)],
+      facets: [coverageDimension("operating_principle", 7, 7, 2),
+        coverageDimension("core_components", 7, 7, 2),
+        coverageDimension("safety_and_regulation", 7, 5, 2),
+        coverageDimension("performance_and_testing", 10, 8, 2),
+        coverageDimension("use_and_maintenance", 6, 5, 2)],
+      gaps: [], unfinishedExecutionIds: [], assessedAt: "2026-09-01T00:00:00.000Z" },
   });
+}
+
+function coverageDimension(key: string, acceptedSourceCount: number,
+  distinctOriginCount: number, minimumAcceptedSources: number) {
+  return { key, acceptedSourceCount, distinctOriginCount, minimumAcceptedSources,
+    minimumDistinctOrigins: 2, status: "satisfied" as const };
 }
 
 function run() {

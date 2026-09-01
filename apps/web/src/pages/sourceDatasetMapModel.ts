@@ -100,9 +100,11 @@ function addModelBranch(graph: SourceDataMapGraph, view: SourceDatasetTaskView,
   brand: SourceDatasetBrandSummary, model: SourceDatasetModelSummary, brandId: string) {
   const id = `model:${model.subjectId}`;
   const issues = view.issues.filter((issue) => issue.subjectId === model.subjectId);
+  const sourceHasNoImages = model.status === "completed" && model.resources.images === 0;
   addNode(graph, { id, kind: "model", title: model.displayName, eyebrow: "型号",
     description: `源站型号 ${model.sourceEntityId}`,
-    meta: `${resourceTotal(model)} 条资源${model.issueCount > 0 ? ` · ${model.issueCount} 个问题` : ""}`,
+    meta: `${resourceTotal(model)} 条资源${sourceHasNoImages ? " · 来源无图片" : ""}${model.issueCount > 0
+      ? ` · ${model.issueCount} 个问题` : ""}`,
     status: model.status === "needs_attention" ? "attention" : "neutral", expandable: resourceTotal(model) > 0,
     searchText: normalize(`${brand.displayName} ${model.displayName} ${model.sourceEntityId}`),
     entity: { kind: "model", brand, model, issues } });

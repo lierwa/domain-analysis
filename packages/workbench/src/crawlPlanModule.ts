@@ -2,9 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { sourceCollectionPlans, type WorkbenchDb } from "@domain-analysis/db";
 import {
-  brandRankingPlanningAuditSchema,
   crawlPlanContentSchema,
   crawlPlanSchema,
+  multiSourcePlanningAuditSchema,
   type CrawlPlan,
   type CrawlPlanContent,
 } from "@domain-analysis/shared";
@@ -96,7 +96,7 @@ export function createCrawlPlanModule(
           throw new CrawlPlanError("invalid_state", "只有当前 Crawl Plan Draft 可以确认");
         }
         const candidateContent = crawlPlanContentSchema.parse(candidate.content);
-        if (candidateContent.executionChecklistVersion !== 5) {
+        if (candidateContent.executionChecklistVersion !== 7) {
           throw new CrawlPlanError("invalid_state", "该草稿使用旧规划协议，请重新运行 Planning Run");
         }
         requireCurrentPlanningAudit(candidateContent);
@@ -140,7 +140,7 @@ export function createCrawlPlanModule(
       if (plan.status !== "confirmed") {
         throw new CrawlPlanError("invalid_state", "只有当前已确认来源计划可以启动");
       }
-      if (plan.content.executionChecklistVersion !== 5) {
+      if (plan.content.executionChecklistVersion !== 7) {
         throw new CrawlPlanError("invalid_state", "已确认计划使用旧规划协议，请重新运行 Planning Run");
       }
       requireCurrentPlanningAudit(plan.content);
@@ -155,9 +155,12 @@ export function createCrawlPlanModule(
 }
 
 function requireCurrentPlanningAudit(content: CrawlPlanContent) {
-  const parsed = brandRankingPlanningAuditSchema.safeParse(content.researchAudit);
+  const parsed = multiSourcePlanningAuditSchema.safeParse(content.researchAudit);
   if (!parsed.success) {
-    throw new CrawlPlanError("invalid_state", "计划缺少当前协议的品牌排行榜审计，请重新运行 Planning Run");
+    throw new CrawlPlanError("invalid_state", "计划缺少当前协议的多来源规划审计，请重新运行 Planning Run");
+  }
+  if (!parsed.data.priorCoverage) {
+    throw new CrawlPlanError("invalid_state", "计划缺少资料覆盖快照，请重新运行 Planning Run");
   }
   return parsed.data;
 }

@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { execa } from "execa";
 import ndjson from "ndjson";
 
@@ -27,9 +29,17 @@ export function startCodexAppServerTransport(options: {
   const executableArgs = options.executable
     ? args
     : ["--prefix", options.packageRoot ?? options.cwd, "exec", "--", "codex", ...args];
+  const environment = { ...process.env };
+  const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === "path") ?? "PATH";
+  // WHY：常驻服务可能通过 Node 绝对路径启动而没有继承 Node 所在目录；npm 的 env node shebang
+  // 仍依赖 PATH，因此把当前已验证运行中的 Node 目录放在子进程 PATH 首位，且保留原环境作为退出路径。
+  environment[pathKey] = [path.dirname(process.execPath), environment[pathKey]]
+    .filter((value): value is string => Boolean(value))
+    .join(path.delimiter);
   // WHY：进程连接跨多个业务回合复用；单回合超时和取消由官方 turn/interrupt 管理，不能交给进程总超时。
   const subprocess = execa(executable, executableArgs, {
     cwd: options.cwd,
+    env: environment,
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",

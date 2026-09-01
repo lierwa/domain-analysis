@@ -1,7 +1,7 @@
 # 数据抓取平台开发文档
 
 状态：当前开发入口
-更新日期：2026-08-30
+更新日期：2026-09-01
 
 ## 权威阅读顺序
 
@@ -23,6 +23,7 @@
 | `ARCHITECTURE.md` | 模块职责、事实源、依赖方向和通过门 |
 | `ZOL-CATEGORY-COLLECTION.md` | ZOL 品牌目录、型号参数和完整图集的来源设计 |
 | `ZOL-REFRIGERATOR-CAPTURE-REPORT.md` | 本次正式冰箱抓取的终态、覆盖结果和 Source Dataset 对账 |
+| `ZOL-MICROWAVE-CAPTURE-REPORT.md` | 本次正式微波炉抓取的数据完整性、来源关联、资产哈希和来源无图片标识验收 |
 | `RESEARCH.md` | 当前采用的技术结论、证据和退出条件 |
 | `ROADMAP.md` | 后续阶段顺序和停止门 |
 | `PROGRESS.md` | 当前完成度、验证证据、阻塞和下一步 |

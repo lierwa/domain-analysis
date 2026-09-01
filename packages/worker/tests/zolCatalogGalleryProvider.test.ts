@@ -271,6 +271,33 @@ describe("ZOL 品牌目录批次参数与图集 Provider", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it("源站明确暂无图片时完成型号并保留零图片结果", async () => {
+    vi.useFakeTimers();
+    try {
+      const baseRequest = fixtureRequest();
+      const admission = createAdmission();
+      const provider = createZolCatalogGalleryProvider({ request: async (url) => {
+        if (url.pathname === "/2115/2114001/pic.shtml") {
+          return response(url.href, '<main><p class="nopic">暂无图片</p></main>');
+        }
+        return baseRequest(url);
+      } });
+      const events: SourceProviderEvent[] = [];
+      const collection = (async () => {
+        for await (const event of provider.collect(source(), "run-source-no-images", admission)) events.push(event);
+      })();
+
+      await vi.runAllTimersAsync();
+      await collection;
+
+      expect(admission.failedModelWorkKeys).toEqual([]);
+      expect(admission.completedModelWorkKeys).toHaveLength(4);
+      expect(events.filter((event) => event.type === "capture"
+        && event.snapshot.payload?.kind === "asset")).toHaveLength(6);
+      expect(events.at(-1)).toMatchObject({ type: "target.completed", observedUnitCount: 4 });
+    } finally { vi.useRealTimers(); }
+  });
+
   it("型号页面结构无法绑定时停止当前来源运行", async () => {
     const baseRequest = fixtureRequest();
     const admission = createAdmission();

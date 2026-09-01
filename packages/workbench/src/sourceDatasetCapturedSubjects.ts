@@ -10,6 +10,7 @@ import {
 } from "@domain-analysis/db";
 import {
   brandRankingPlanningAuditSchema,
+  multiSourcePlanningAuditSchema,
   sourceDatasetBrandSummarySchema,
   sourceDatasetCurrentExecutionSchema,
   sourceDatasetIssueSummarySchema,
@@ -68,7 +69,9 @@ export async function loadCapturedSubjectProjection(
   const planContent = isRecord(rawPlanContent) ? rawPlanContent : undefined;
   const brandMetadata = projectBrandMetadata(planContent?.["researchAudit"]);
   const workById = new Map(workItems.map((work) => [work.id, work]));
-  const issueProjection = projectIssues(snapshots, workById);
+  const completedModelSubjects = new Set(workItems.flatMap((work) => work.resourceKind === "model_bundle"
+    && work.status === "completed" && work.subjectId ? [work.subjectId] : []));
+  const issueProjection = projectIssues(snapshots, workById, completedModelSubjects);
   const assetCountBySubject = countAssetsBySubject(assets, snapshots, workById);
   const capturedBrands = projectBrands(subjects, workItems, issueProjection.issues, assetCountBySubject,
     brandMetadata);
@@ -132,6 +135,7 @@ function projectBrands(
 function projectIssues(
   rows: Array<typeof sourceSnapshots.$inferSelect>,
   workById: Map<string, typeof sourceCaptureWorkItems.$inferSelect>,
+  completedModelSubjects: Set<string>,
 ) {
   const grouped = new Map<string, SourceDatasetIssueSummary>();
   for (const row of rows) {
@@ -155,7 +159,9 @@ function projectIssues(
       latestSnapshotId: snapshot.id,
     }));
   }
-  return { issues: [...grouped.values()] };
+  // WHY：历史失败快照继续保留审计；同一型号后续完成后，只退出“当前问题”投影。
+  return { issues: [...grouped.values()].filter((issue) => !issue.subjectId
+    || !completedModelSubjects.has(issue.subjectId)) };
 }
 
 function countAssetsBySubject(
@@ -193,7 +199,11 @@ function uniqueWorkCount(
 }
 
 function projectBrandMetadata(value: unknown) {
-  const parsed = brandRankingPlanningAuditSchema.safeParse(value);
+  const multiSource = multiSourcePlanningAuditSchema.safeParse(value);
+  const catalogAudit = multiSource.success
+    && multiSource.data.productCatalog.kind !== "completed_source_reference"
+    ? multiSource.data.productCatalog : value;
+  const parsed = brandRankingPlanningAuditSchema.safeParse(catalogAudit);
   if (!parsed.success || parsed.data.rankingStatus !== "verified") return new Map<string, { name: string; order: number }>();
   return new Map(parsed.data.executionBrands.map((brand, order) => [brand.key, { name: brand.name, order }]));
 }

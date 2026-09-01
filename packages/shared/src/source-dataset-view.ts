@@ -14,6 +14,7 @@ import {
   sourceSnapshotLineageSchema,
   sourceSnapshotRecordSchema,
 } from "./source-dataset";
+import { sourceCoverageAssessmentSchema } from "./source-coverage";
 
 export const sourceDatasetResourceFormatSchema = z.enum([
   "html", "json", "xml", "csv", "text", "pdf", "word", "spreadsheet", "image", "video",
@@ -208,6 +209,7 @@ export const sourceDatasetTaskViewSchema = z.object({
   currentExecution: sourceDatasetCurrentExecutionSchema.optional(),
   capturedBrands: z.array(sourceDatasetBrandSummarySchema).default([]),
   issues: z.array(sourceDatasetIssueSummarySchema).default([]),
+  coverage: sourceCoverageAssessmentSchema.optional(),
 }).strict();
 
 export const sourceDatasetRunViewSchema = z.object({

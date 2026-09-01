@@ -19,6 +19,7 @@ import {
   sourceProviderAssetSchema,
   sourceProviderResourceReferenceSchema,
   sourceSnapshotCommitSchema,
+  sourceDatasetTaskViewSchema,
   type SourceAccessPolicy,
   type SourceAsset,
   type SourceCollectionBatch,
@@ -55,6 +56,7 @@ import { exportSourceDatasetRun, loadSourceDatasetRun,
 import { acquireSourceBatchLease, recoverInterruptedSourceBatches } from "./sourceExecutionRecovery";
 import { acquireSourceRunLease, createSourceRequestAdmission,
   prepareSourceRunForResume } from "./sourceRequestAdmission";
+import type { SourceCoverageModule } from "./sourceCoverageModule";
 
 type SnapshotWrite = SourceSnapshotCommit & {
   assets?: SourceProviderAsset[];
@@ -102,7 +104,8 @@ export interface SourceDatasetModule extends SourceRequestAdmissionPort {
 
 export function createSourceDatasetModule(
   db: WorkbenchDb,
-  options: { assetCachePath?: string; assetStore?: SourceAssetStore; now?: () => Date } = {},
+  options: { assetCachePath?: string; assetStore?: SourceAssetStore; now?: () => Date;
+    coverageModule?: SourceCoverageModule } = {},
 ): SourceDatasetModule {
   const store = options.assetStore ?? createCacacheSourceAssetStore(
     options.assetCachePath ?? path.resolve("data", "source-assets"),
@@ -110,7 +113,13 @@ export function createSourceDatasetModule(
   const admission = createSourceRequestAdmission(db, options.now);
   return {
     ...admission,
-    listTask: (taskId) => loadSourceDatasetTaskView(db, taskId),
+    listTask: async (taskId) => {
+      const [view, coverage] = await Promise.all([
+        loadSourceDatasetTaskView(db, taskId),
+        options.coverageModule?.assessTask(taskId),
+      ]);
+      return sourceDatasetTaskViewSchema.parse({ ...view, coverage });
+    },
     listTaskRecords: (input) => loadSourceDatasetRecordPage(db, input),
     getRun: (runId) => loadSourceDatasetRun(db, runId),
     getRunAudit: (runId) => loadSourceDatasetRunAudit(db, runId),

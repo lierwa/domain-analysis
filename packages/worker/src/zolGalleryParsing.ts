@@ -21,6 +21,8 @@ export interface ZolGalleryImage {
 
 export function parseZolGallerySections(response: RawPublicResponse, modelId: string): ZolGallerySection[] {
   const $ = cheerio.load(htmlText(response));
+  // WHY：源站明确声明无图是完整的来源事实，不是页面结构异常；空集合会让型号以零图片完成。
+  if ($("p.nopic").toArray().some((element) => cleanText($(element).text()) === "暂无图片")) return [];
   const sections = $(".section").toArray().flatMap((element, ordinal) => {
     const list = $(element).find(".picture-list").first();
     if (list.length === 0) return [];

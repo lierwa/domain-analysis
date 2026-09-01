@@ -1,7 +1,7 @@
 # 技术调研登记
 
 状态：当前采用结论
-更新日期：2026-08-31
+更新日期：2026-09-01
 
 本文件只记录当前实现和下一阶段直接依赖的技术结论、验证证据与退出条件。
 
@@ -186,3 +186,85 @@ ZOL adapter 先校验 Capture Task 排行榜候选、榜单品牌目录中的唯
 最小原型必须用当前微波炉 Batch 证明：19 个品牌、247 个型号、246 个完成、1 个需关注；3,799 个快照和 2,918 个图片附件按全部 4 个 Run 汇总；同一内容拒绝在 3 个 Run 出现时只投影为 1 个问题；单张图片详情不得加载整个 Run。
 
 如果 Provider 无法从已保存的来源目录事实确定品牌或型号，记录保持在“未归类原始记录”，不得由通用模块猜测。若真实数据无法满足上述关联门，停止 UI 切换并保留现有运行审计入口。
+
+## R-011 多来源 Planning 与公开原始资料抓取
+
+### 要解决的问题
+
+ZOL、标准监管、专业技术和品牌公开资料需要在同一 Planning 阶段进入一份 Crawl Plan。Planning 负责发现可执行入口，Provider 负责保存原始响应；两者不能合成一份离线研究报告，也不能建立第二套抓取系统。
+
+### 复用与处置
+
+| 能力 | 当前资产 | 处置 |
+| --- | --- | --- |
+| 品类商品目录核验 | `createZolCategoryPlanningRuntime` 与 ZOL adapter | 继续确定性执行，模型不拥有榜单事实 |
+| 多轮搜索与结构化来源发现 | 锁定的 Codex App Server `stdio`、ephemeral thread、官方 web search 事件、本地 Zod 校验 | 复用，只承担 Planning 调查 |
+| 公开网页/PDF 原始抓取 | `public.web-resource@2.0.0`、Public Resource Transport、Source Access Gate | 复用，按计划 exact URL 保存原文和附件 |
+| 执行与失败隔离 | 现有 Source Execution、Request Ledger、Source Dataset | 复用，每个来源独立 Source Run |
+| 旧的大型 Codex planning agent 或新的通用研究框架 | 会重复计划事实源、搜索编排、抓取和引用存储 | 不恢复、不引入；先验证现有正式 seam |
+
+本轮不增加依赖。产品特有代码只负责三件事：把已确认品类范围写成研究提示、把结构化来源结果映射为现有 Crawl Plan source、将 ZOL 与公开来源合并成一个计划。搜索、进程协议、结构化输出校验、HTTP 传输、重试、预算和持久化均复用官方或项目既有能力。
+
+### 真实最小原型
+
+2026-09-01 使用真实 Codex App Server 和 web search 执行微波炉 Planning 研究：约 110.6 秒内完成 3–5 轮搜索，返回 10 个专业主题和 11 个公开直达候选，覆盖中国标准/认证、技术与安全机构、食品安全资料以及品牌官方说明书。App Server 报告本次累计 268,647 tokens，其中输入 264,146、输出 4,501；该数值说明多轮搜索上下文成本较高，不能把无界 Deep Research 放进每次规划。
+
+原型只证明“通用品类主题拆解 → 多轮搜索 → 结构化直达入口”能够工作，不证明 11 个来源充分，也没有把搜索结果当作已抓取原文。公开来源仍必须经过负责人确认、Provider 实际请求和 Source Dataset 终态验收。
+
+2026-09-01 完成正式微波炉纵向验证：Capture Task revision 3 明确引用同任务已完成的 ZOL Batch，Planning Run `crawl-planning-run-7a63fa4e-584d-4b75-9e87-6927294a25d0` 没有再次调用 ZOL 目录 Runtime，生成 17 个 `public.web-resource` exact 来源：6 个品牌公开来源、6 个监管来源、4 个标准平台来源和 1 个专业期刊来源。Crawl Plan `crawl-plan-8673cd17-9108-415d-af15-07e0c199916e` version 3 无 blocker，并通过 Confirm、Prepare 与 Start。
+
+Source Batch `source-batch-abe119fd-f6be-4b40-b6f9-b36d4473aac7` 的 17 个 Source Run 全部进入终态：15 个完成，USDA 页面和专业期刊摘要页分别因 `access_denied` 进入 `source_restricted`，后续来源仍继续。Source Dataset 保存 16 个 Snapshot（15 个 accepted、1 个 failed）和 4 个 PDF Asset。该结果验证的是多来源原始采集和失败留痕，不是资料充分性判断。
+
+### 采用边界
+
+- 该轮 Crawl Plan 检查清单升级为 v6，并保存一份 `multi_source_planning` audit；R-012 已将当前确认与执行协议升级为 v7，v6 及更早计划只读保留。
+- 主题使用通用 facet，具体原理词、部件词、标准号、品牌和 URL 都是当前任务调查结果，不能写进跨品类规则。
+- 只接受公开、可审计、无需绕过登录、验证码、付费或许可限制的 HTTPS 直达入口。
+- 搜索过程中单个查询或候选失败进入 `blocked`；执行过程中单个来源失败保存在对应 Source Run，后续来源继续。
+- Codex 只接收已确认 Capture Task 的品类范围和来源候选，不接收 Cookie、Profile、认证 Header、未脱敏原始内容或 Source Dataset 私有资产。
+- 最终 JSON 由本地 schema 校验；模型 commentary 不作为计划事实，Provider 不从模型说明文字推导执行参数。
+- 已完成来源复用由 `SourceCoverageModule` 从同任务 Source Dataset 自动推导；只有完成 Batch 与对应完成 Provider Run 可以进入计划审计。调用方不再手工提交完成引用，该引用不会复制原始数据。
+
+### 验证门与退出条件
+
+当前代码、typed contract、UI 投影和 Provider 注册已经接线，并完成负责人确认后的真实多来源 Crawl Plan、Source Execution 和 Source Dataset 对账。该轮证明执行链闭环；阶段 1 的资料最低覆盖采用门由 R-012 单独定义和验收。
+
+若真实规划持续超过预算、来源入口不可执行、模型无法稳定返回合法 schema，或 Source Dataset 无法逐来源保存原文与失败事实，则停止正式确认并重新评估研究运行时；不得在当前链路上叠加第二套搜索器、抓取器或引用库。
+
+## R-012 阶段 1 原始资料最低覆盖门
+
+### 要解决的问题
+
+多来源全部进入终态，只能证明抓取链能够收口，不能证明各类原始资料已经达到最基本的输入规模。覆盖门必须同时检查商品目录、来源族、主题、独立站点、已接受原始内容和全部计划运行终态；不能用“计划里出现过 URL”或 HTTP 成功替代资料验收。
+
+### 候选与采用结论
+
+| 候选 | Node/TypeScript 与本地边界 | 处置 |
+| --- | --- | --- |
+| [Great Expectations](https://docs.greatexpectations.io/docs/home/) | Apache-2.0、持续维护，但需要 Python 运行时，主要验证表格字段与数据质量，不能表达本项目的来源族、主题和独立站点语义 | 不引入 |
+| [PostgreSQL 聚合](https://www.postgresql.org/docs/current/functions-aggregate.html) + [JSON 函数](https://www.postgresql.org/docs/current/functions-json.html) + 现有 Drizzle | 已部署、本地可运行，可以读取不可变 Source Dataset；产品规则仍由 typed contract 明确表达 | 采用 |
+| [Zod refinements](https://zod.dev/api?id=refinements) | 项目已锁定使用，负责覆盖投影和 Planning 输入的边界校验；不承担数据库事实推导 | 采用 |
+
+本轮不增加依赖。Source Dataset 继续拥有 Run、Snapshot、Asset、URL 和血缘事实；Workbench 新增一个小的 `SourceCoverageModule`，集中完成去重、独立站点计数、来源族与主题缺口计算。Planning 和 Source Dataset 页面通过同一个 interface 读取结果，避免各自维护第二套判断。
+
+### 最低覆盖规则
+
+- 商品目录：同一 Capture Task 必须存在已完成的 ZOL Batch 和完成的 ZOL Provider Run，并至少有品牌、型号、全部型号完成关联及 accepted 原始快照；后续补资料不得重跑它。
+- 必需来源族：`standards_and_regulation`、`professional_technical`、`brand_official`。每族至少 `3` 条已接受原始资料，且至少来自 `2` 个 URL origin。
+- 必需主题入口：运行原理、核心部件、安全与法规、性能与测试、使用与维护。每个经确认计划标注的主题至少有 `2` 条已接受原始资料入口，且至少来自 `2` 个 URL origin；该门不冒充正文语义审核。
+- 已接受资料：`public.web-resource` Run 完成，并存在 `accessible`、`accepted`、非空、带 URL 与 lineage 的 Snapshot；Snapshot requested URL 必须与计划 exact URL 一致，再按规范化 URL 去重。
+- 计划终态：同一任务的 Batch、Run、Target、Work Item 和 Request Attempt 都必须进入终态；失败保留在审计中，但不计入已接受资料。
+- exact URL 只声明自身实际返回的一种格式；HTML 页面链接的 PDF 必须作为独立 PDF 直达候选，不能用一个 URL 同时宣称抓到 HTML 与 PDF。
+- 增量规划：只规划当前缺口，排除已经接受和已经尝试的 exact URL；每个缺口至少调查“缺少数量 + 2”个候选，并覆盖足够的不同 origin。
+
+这是阶段 1 的最低输入门，只表示已经形成可供下一阶段重新采访、调研和设计的基本原始资料，不表示资料已经足以支撑专业导购，也不对内容做清洗、事实合并或正确性裁决。
+
+### 当前真实差距与退出条件
+
+2026-09-01 独立审计确认：商品目录完成；标准平台 4/4、监管 5/6、品牌官方 6/6，但专业技术 0/1。当前 15 条成功资料均为 HTTP 200、非空、带 URL 与 lineage，4 个 PDF 的内容签名、哈希和数据库一致。USDA 记录为 robots.txt 403；专业期刊候选在真正发出请求前被持久访问门阻止，不能描述为源站明确拒绝。
+
+因此此前“执行链闭环”保留为已验证事实，“资料最低覆盖通过”撤回。系统应继续增量规划和抓取，直至全部来源族、必需主题和终态门满足；若公开、可审计且无需绕过访问限制的候选已经穷尽，则以具体缺口、已尝试入口和来源限制停止，不用重复重试同一 URL 伪造进展。
+
+2026-09-01 完成缺口闭环验证：覆盖模块从 Source Dataset 自动确认唯一缺口为 `professional_technical` 0/3；其余来源族与五个必需主题已经达标。Planning Run `crawl-planning-run-d73f70a5-de0a-41dc-9e6b-c0634a5a2d96` 没有重跑 ZOL，也没有重用 17 个历史 exact URL，只为该缺口生成 5 个新候选、覆盖 5 个 URL origin。Crawl Plan `crawl-plan-da4d5e07-d39f-4b47-966b-6c2aa2cce165` version 4 通过 v7 确认门。
+
+Source Batch `source-batch-c370c3dd-9e51-428f-bacb-a4a2fd25349f` 的 5 个 Source Run 全部完成并各保存 1 条 accessible、accepted、非空且与计划 exact URL 一致、带 lineage 的 Snapshot；WSU 来源另保存 1 个 PDF Asset。最终商品目录为 19 个品牌、247/247 个型号有完成记录；累计 20 条已接受公开资料：标准监管 9 条/6 个 origin，专业技术 5 条/5 个 origin，品牌官方 6 条/3 个 origin；五个必需计划主题入口分别为 7、7、7、10、6 条，均超过 2 条/2 个 origin 的最低门。全部 Batch、Run、Target、Work Item 和 Request Attempt 终态，覆盖状态为 `satisfied`，剩余缺口 0。

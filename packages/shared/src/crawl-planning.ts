@@ -2,13 +2,18 @@ import { z } from "zod";
 
 import { sourceAccessStates, sourceKinds } from "./capture-task";
 import { interviewMessageTimelinePartSchema, interviewTurnActivitySchema } from "./category-interview";
+import {
+  completedSourceReferenceSchema,
+  publicResearchFacets,
+  publicResearchSourceKinds,
+  sourceCoverageAssessmentSchema,
+} from "./source-coverage";
 
 const idSchema = z.string().min(1).max(240);
 const keySchema = z.string().regex(/^[a-z][a-z0-9_.-]+$/);
 const isoDateSchema = z.string().datetime({ offset: true });
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const boundedText = z.string().trim().min(1).max(2_000);
-
 const quantityBase = {
   unit: z.string().trim().min(1).max(120),
   denominator: z.string().trim().min(1).max(1_000),
@@ -206,6 +211,80 @@ export const brandRankingPlanningAuditSchema = z.union([
   unavailableBrandRankingAuditSchema,
 ]);
 
+const publicSourceResearchTopicSchema = z.object({
+  key: keySchema,
+  facet: z.enum(publicResearchFacets),
+  label: z.string().trim().min(1).max(300),
+  searchTerms: z.array(z.string().trim().min(1).max(500)).min(2).max(12),
+  purpose: boundedText,
+}).strict();
+
+const publicSourceResearchItemSchema = z.object({
+  key: keySchema,
+  name: z.string().trim().min(1).max(500),
+  publisher: z.string().trim().min(1).max(500),
+  sourceKind: z.enum(publicResearchSourceKinds),
+  url: z.string().url().max(2_048),
+  topics: z.array(keySchema).min(1).max(20),
+  rawFormats: z.array(z.enum(["HTML", "PDF", "TEXT"])).min(1).max(3),
+  reason: boundedText,
+}).strict();
+
+const publicSourceResearchBlockerSchema = z.object({
+  sourceKind: z.enum(publicResearchSourceKinds),
+  query: z.string().trim().min(1).max(1_000),
+  reason: boundedText,
+}).strict();
+
+export const publicSourceResearchSchema = z.object({
+  topics: z.array(publicSourceResearchTopicSchema).min(5).max(20),
+  sources: z.array(publicSourceResearchItemSchema).max(50),
+  blocked: z.array(publicSourceResearchBlockerSchema).max(50),
+}).strict().superRefine((research, context) => {
+  const topicKeys = research.topics.map((topic) => topic.key);
+  if (new Set(topicKeys).size !== topicKeys.length) {
+    context.addIssue({ code: "custom", path: ["topics"], message: "专业主题 key 必须唯一" });
+  }
+  const requiredFacets = publicResearchFacets.filter((facet) => facet !== "category_specific");
+  for (const facet of requiredFacets) {
+    if (!research.topics.some((topic) => topic.facet === facet)) {
+      context.addIssue({ code: "custom", path: ["topics"], message: `专业主题缺少 ${facet}` });
+    }
+  }
+  const sourceKeys = research.sources.map((source) => source.key);
+  const sourceUrls = research.sources.map((source) => new URL(source.url).href);
+  if (new Set(sourceKeys).size !== sourceKeys.length || new Set(sourceUrls).size !== sourceUrls.length) {
+    context.addIssue({ code: "custom", path: ["sources"], message: "公开来源 key 与 URL 必须唯一" });
+  }
+  for (const [index, source] of research.sources.entries()) {
+    const url = new URL(source.url);
+    if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")
+      || url.hostname === "example.invalid" || url.hostname.endsWith("zol.com.cn")) {
+      context.addIssue({ code: "custom", path: ["sources", index, "url"],
+        message: "公开来源必须是非 ZOL 的公网 HTTPS 直达入口" });
+    }
+    if (source.topics.some((key) => !topicKeys.includes(key))) {
+      context.addIssue({ code: "custom", path: ["sources", index, "topics"],
+        message: "公开来源引用了未声明的专业主题" });
+    }
+  }
+});
+
+export const multiSourcePlanningAuditSchema = z.object({
+  kind: z.literal("multi_source_planning"),
+  productCatalog: z.union([
+    brandRankingPlanningAuditSchema,
+    completedSourceReferenceSchema.extend({
+      kind: z.literal("completed_source_reference"),
+      observedAt: isoDateSchema,
+    }).strict(),
+  ]),
+  publicSourceResearch: publicSourceResearchSchema,
+  // WHY：历史 v6 计划没有覆盖快照，仍需只读；只有 v7 确认门强制要求该字段。
+  priorCoverage: sourceCoverageAssessmentSchema.optional(),
+  observedAt: isoDateSchema,
+}).strict();
+
 export const crawlPlanningRunSchema = z.object({
   id: idSchema,
   taskId: idSchema,
@@ -282,6 +361,8 @@ export type CrawlPlanSource = z.infer<typeof crawlPlanSourceSchema>;
 export type CrawlPlanContent = z.infer<typeof crawlPlanContentSchema>;
 export type CrawlPlan = z.infer<typeof crawlPlanSchema>;
 export type BrandRankingPlanningAudit = z.infer<typeof brandRankingPlanningAuditSchema>;
+export type PublicSourceResearch = z.infer<typeof publicSourceResearchSchema>;
+export type MultiSourcePlanningAudit = z.infer<typeof multiSourcePlanningAuditSchema>;
 export type CrawlPlanningRun = z.infer<typeof crawlPlanningRunSchema>;
 export type CrawlPlanningView = z.infer<typeof crawlPlanningViewSchema>;
 export type CrawlPlanningEvent = z.infer<typeof crawlPlanningEventSchema>;

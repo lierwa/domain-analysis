@@ -3,10 +3,13 @@ import path from "node:path";
 
 import {
   createCodexCategoryInterviewRuntime,
+  createCodexPublicSourcePlanningResearcher,
+  createMultiSourceCategoryPlanningRuntime,
   createZolCategoryPlanningRuntime,
   openDataCollectionWorkbench,
 } from "@domain-analysis/workbench";
 import {
+  createPublicWebResourceProvider,
   createZolBrandRankingReader,
   createZolCatalogGalleryProvider,
 } from "@domain-analysis/worker";
@@ -22,8 +25,22 @@ const assetCachePath = config.sourceAssetCachePath
   ? path.resolve(config.sourceAssetCachePath)
   : path.join(repositoryRoot, "data", "source-assets");
 const zolProvider = createZolCatalogGalleryProvider();
+const publicProvider = createPublicWebResourceProvider({
+  queueStorageDirectory: path.join(repositoryRoot, "data", "source-queues"),
+});
 const zolBrandRankingReader = createZolBrandRankingReader();
-const sourceProviders = new Map([[zolProvider.key, zolProvider]]);
+const catalogPlanningRuntime = createZolCategoryPlanningRuntime({ rankingReader: zolBrandRankingReader });
+const publicSourceResearcher = createCodexPublicSourcePlanningResearcher({
+  repositoryRoot,
+  model: config.interviewModelId,
+  reasoningEffort: config.interviewReasoningEffort,
+});
+// WHY：Crawl Plan 中的商品目录与公开网页/PDF 是同级来源；生产注册表必须能按 source.provider
+// 分发给各自已验证的 Provider，不能让 ZOL 垂直链隐式垄断全部来源。
+const sourceProviders = new Map([
+  [zolProvider.key, zolProvider],
+  [publicProvider.key, publicProvider],
+]);
 const workbench = await openDataCollectionWorkbench({
   databaseUrl: config.postgresDatabaseUrl,
   categoryInterviewRuntime: createCodexCategoryInterviewRuntime({
@@ -31,8 +48,9 @@ const workbench = await openDataCollectionWorkbench({
     model: config.interviewModelId,
     reasoningEffort: config.interviewReasoningEffort,
   }),
-  crawlPlanningRuntime: createZolCategoryPlanningRuntime({
-    rankingReader: zolBrandRankingReader,
+  crawlPlanningRuntime: createMultiSourceCategoryPlanningRuntime({
+    catalogRuntime: catalogPlanningRuntime,
+    publicSourceResearcher,
   }),
   sourceDatasetModule: { assetCachePath },
   sourceProviders,
