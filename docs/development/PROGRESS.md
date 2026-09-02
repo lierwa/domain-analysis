@@ -1,13 +1,13 @@
 # 数据抓取平台开发进度
 
-更新日期：2026-09-02
-当前阶段：Windows 真实采集可靠性 P0 收口；阶段 2 暂缓
+更新日期：2026-09-03
+当前阶段：Windows 真实采集可靠性 P1 收口；阶段 2 暂缓
 
 ## 简单说明
 
-历史主线已经完成阶段 1 的最低输入门；2026-09-02 的新 Windows 真实复验发现当前版本尚不能稳定无人值守收口。当前开发入口是 `.scratch/source-capture-reliability/PRD.md`：先按 P0 修复 ZOL 偶发 404、公开来源熔断作用域和品牌目录失败隔离，再用干净 checkout 完成一次不在运行期间改代码的真实验收。当前不进行数据清洗、知识包成品设计或导购 Agent 开发。
+历史主线已经完成阶段 1 的最低输入门；2026-09-02 的新 Windows 真实 Batch 已完成 P0 无人值守验收：一次正式 Start 后，后台 Worker 在不改代码、不人工 Resume 的情况下进入终态。当前开发入口是 `.scratch/source-capture-reliability/PRD.md` 的 P1：把型号资源终态和商品目录 coverage/指标语义与真实 Batch 对齐。当前不进行数据清洗、知识包成品设计或导购 Agent 开发。
 
-当前复验对象为 Capture Task `capture-task-326e80eb-b65f-4f51-9c29-26ce87a2fb62`、Confirmed Crawl Plan `crawl-plan-073d11a3-fd9b-469a-bd92-e4346acd9c21` version 6 和 Batch `source-batch-0d9674f0-f8b0-42d8-b851-f6474859c2e5`。Batch 已以 `partial` 终态收口：19 个品牌、247 个型号、197 个完成、50 个需关注，3310 个 Snapshot、2418 个 Asset；公开来源最终 18/20 完成，两个真实访问限制保留。该结果是当前可靠性问题的验收输入，不覆盖下文历史成功 Batch 的事实。
+当前复验对象为 Capture Task `capture-task-326e80eb-b65f-4f51-9c29-26ce87a2fb62`、Confirmed Crawl Plan `crawl-plan-073d11a3-fd9b-469a-bd92-e4346acd9c21` version 6 和 Batch `source-batch-b2a25771-63c3-4b8a-8b77-4687989b6c28`。Batch 已以 `partial` 终态收口：21 个来源中 15 个完成、6 个受限；3,489 个 Snapshot、2,712 个 Asset。ZOL Run 完成 19 个品牌、247 个型号中的 234 个，13 个需关注；公开资料来源族与主题门均满足，但商品目录 coverage 因 Batch `partial` 仍为 gap。完整依据见 `MICROWAVE-REAL-CAPTURE-REPORT.md`。该结果不覆盖下文历史成功 Batch 的事实。
 
 ZOL 微波炉验收已经完成：247 个型号全部处理，其中 1 个型号由 ZOL 明确标识为无图片。首次公开资料执行有 15 条 accepted，但专业技术资料为 0，因此系统没有把“执行结束”当成“资料达标”。随后只补抓 5 个新专业技术入口，5/5 完成；没有重抓 ZOL，也没有重复 17 个历史 URL。最终累计 20 条 accepted 公开资料，三个来源族和五个必需主题全部达到最低门。
 
@@ -123,6 +123,8 @@ Source Dataset 现在直接按品牌、型号和资源展示已抓到的数据�
 - 2026-09-02 ZOL 品牌目录 404 失败作用域回归：`zolCatalogGalleryProvider.test.ts` 13/13 通过，验证单品牌目录 404 保存 `not_found` 观察并继续后续品牌；全量 Vitest 中 219 项通过、7 项按既有条件跳过，唯一已有 Windows 频控计时断言测得 89ms 后单独复跑 5/5 通过；六个 workspace 类型检查全部通过，`git diff --check` 通过。
 - 当前 Batch `source-batch-0d9674f0-f8b0-42d8-b851-f6474859c2e5` 已在第二次 Resume 后以 `partial` 终态收口：38 个 Run、3310 个 Snapshot、2418 个 Asset；247 个型号中 197 个完成、50 个需关注。66 条问题由 62 条型号资源问题、2 条历史品牌目录 404 和 2 条公开来源访问限制组成，不能把问题条数当作未完成型号数。
 - 2026-09-02 P0 本机实现验证：ZOL HTML 首次 404 显式复核一次，持续 404 仍交还 Provider 保存 `not_found`；公开来源按 origin 熔断且 Resume 不清除无关 gate；品牌目录持续 404 只结束当前品牌。聚焦 PostgreSQL/Worker 23/23、全量 49 个测试文件与 226 项测试通过，2 个文件与 7 项按既有条件跳过；六 workspace 类型检查和生产构建通过。
+- 2026-09-03 真实 P0 验收：Batch `source-batch-b2a25771-63c3-4b8a-8b77-4687989b6c28` 在一次 Start 后全部终态；没有运行期代码修改或人工 Resume。ZOL 的 86 个 exact URL 以 `404 -> 200` 恢复，11 个以 `404 -> 404` 保持 `not_found`；13 个需关注型号和 6 个受限公开来源保留为当前质量缺口。P0 的执行可靠性通过，阶段 1 原始资料质量门未通过，P1 进入 issue 05/07。
+- 2026-09-03 终态报告交付验证：`git diff --check`、六 workspace `npm run typecheck`、`npm test`（49 个文件、226 项通过；2 个文件与 7 项按既有环境门跳过）和 `npm run build` 均通过。报告与 issue/路线/进度已同步，待推送后核对远端 SHA。
 - 内容寻址存储全量校验：2,685 份不同内容逐一读取，0 缺失、0 大小不一致、0 SHA-256 不一致、0 元数据冲突；API 读取样本的字节数、MIME 与 SHA-256 和数据库一致。
 - 请求审计：原抓取的 106 次历史失败尝试中，98 次对应工作后来成功，8 次可还原为 TLS 断开或请求超时；它们保留在运行审计，不进入当前问题统计。
 - 本轮聚焦回归：ZOL 明确无图与商品地图标识共 2 个文件、23 个测试通过；常驻 API 返回 247/247 完成、当前问题 0。
@@ -211,10 +213,10 @@ Baseline Impact:
 
 ## 后续入口
 
-1. 按 `.scratch/source-capture-reliability/PRD.md` 顺序完成 P0：ZOL HTML 404 有界复核、公开来源 origin 熔断、ZOL 品牌失败隔离和干净 checkout 无人值守验收。
-2. P0 通过后处理型号终态语义、Planning 韧性、Source Dataset 指标和进度交付等 P1。
+1. 按 `.scratch/source-capture-reliability/PRD.md` 的 P1 顺序完成型号资源终态和 Source Dataset 指标/coverage 语义。
+2. 仅在 P1 的类型化规则与真实 Batch 对账通过后，再处理 Planning 韧性与进度交付等后续项。
 3. 当前版本的真实可靠性门通过后，再重新采访、调研并设计阶段 2；不直接沿用旧 Evidence、Knowledge Factory 或知识包实现。
 
 ## 交付状态
 
-历史多来源阶段 1 基线与本轮真实采集可靠性修复均纳入 Git `master`；本文件所在提交推送并完成本地、upstream 与 origin SHA 核对后，形成新的跨电脑代码接续点。Windows 新 Batch 的真实运行结论仍以 issue 04 后续验收记录为准。数据库、原始页面、图片和本机秘密只保留在本地，不进入 Git。
+历史多来源阶段 1 基线、本轮真实采集可靠性修复和 Batch 终态报告均纳入 Git `master`；本文件所在提交推送并完成本地、upstream 与 origin SHA 核对后，形成新的跨电脑代码接续点。Windows 新 Batch 的真实运行结论以 `MICROWAVE-REAL-CAPTURE-REPORT.md` 与 issue 04 为准。数据库、原始页面、图片和本机秘密只保留在本地，不进入 Git。

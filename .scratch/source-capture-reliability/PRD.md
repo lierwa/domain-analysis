@@ -1,8 +1,8 @@
 # 真实来源采集可靠性收口
 
-Status: ready-for-agent
+Status: ready-for-human
 Priority: P0
-Updated: 2026-09-02
+Updated: 2026-09-03
 
 ## 简单说明
 
@@ -12,12 +12,12 @@ Updated: 2026-09-02
 
 - Capture Task：`capture-task-326e80eb-b65f-4f51-9c29-26ce87a2fb62`
 - Confirmed Crawl Plan：`crawl-plan-073d11a3-fd9b-469a-bd92-e4346acd9c21` version 6
-- Source Batch：`source-batch-0d9674f0-f8b0-42d8-b851-f6474859c2e5`
-- 终态：`partial`，恢复状态 `completed`
-- ZOL：19 个品牌、247 个来源型号、197 个完成、50 个需关注
-- 原始数据：3310 个 Snapshot、2418 个 Asset
-- 公开来源：计划 20 个，最终 18 个完成；NDRC 与北交大保留真实访问限制
-- 执行历史：38 个 Run，其中 ZOL 为初始 Run 加两次人工 Resume
+- Source Batch：`source-batch-b2a25771-63c3-4b8a-8b77-4687989b6c28`
+- 终态：`partial`，恢复状态 `none`；21 个 Run 全部终态，15 个完成、6 个 `source_restricted`
+- ZOL：19 个品牌、247 个来源型号、234 个完成、13 个需关注
+- 原始数据：3489 个 Snapshot、2712 个 Asset
+- 公开来源：计划 20 个；14 个本次完成，6 个被既有 origin 安全 gate 如实阻止
+- 执行方式：一次正式 Start 后由 Worker 自行收口；运行期间无代码修改、无人工 Resume
 
 ## 目标
 
@@ -86,4 +86,5 @@ Updated: 2026-09-02
 ## Comments
 
 - 2026-09-02：负责人要求先把全部问题落入仓库问题库，按优先级逐项实施，禁止依赖上下文回忆推进。
-- 2026-09-02：P0-01/02/03 本机实现完成；49 个测试文件、226 个测试通过，2 个文件与 7 个测试按既有条件跳过；六 workspace 类型检查及生产构建通过。下一门是 issue 04 的干净 checkout 真实执行。
+- 2026-09-02：P0-01/02/03 本机实现完成；49 个测试文件、226 个测试通过，2 个文件与 7 个测试按既有条件跳过；六 workspace 类型检查及生产构建通过。
+- 2026-09-03：issue 04 的真实 Batch 已进入终态。P0 的独立执行与失败隔离得到证据；阶段 1 原始资料质量门尚未通过，后续按 P1 issue 05 与 issue 07 收口，详见 `docs/development/MICROWAVE-REAL-CAPTURE-REPORT.md`。

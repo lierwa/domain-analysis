@@ -1,22 +1,22 @@
 # 数据抓取平台路线图
 
-状态：Windows 真实采集可靠性回归处理中
-更新日期：2026-09-02
+状态：Windows 真实采集可靠性 P1 收口中
+更新日期：2026-09-03
 
 ## 当前目标
 
-历史微波炉 Batch 已证明同一个品类任务可以形成商品目录、标准监管、专业技术和品牌公开资料并通过最低覆盖；2026-09-02 的新 Windows 真实执行暴露了 ZOL 偶发 404、失败作用域和无人值守收口问题。当前先完成 `.scratch/source-capture-reliability/` 中的 P0，再恢复阶段 2；当前不设计数据清洗、知识包成品或导购 Agent。
+历史微波炉 Batch 已证明同一个品类任务可以形成商品目录、标准监管、专业技术和品牌公开资料并通过最低覆盖；2026-09-02 的新 Windows 真实执行已完成 P0 无人值守收口，确认 ZOL 偶发 404 有界复核和失败作用域隔离有效。该 Batch 仍有 13 个需关注型号、6 个受限公开来源，且商品目录 coverage 受 Batch `partial` 语义影响为 gap。当前先完成 `.scratch/source-capture-reliability/` 中的 P1，再恢复阶段 2；当前不设计数据清洗、知识包成品或导购 Agent。
 
 ## 当前可靠性回归门
 
-状态：`in_progress`
+状态：`P1_follow_up`
 
 执行顺序以 `.scratch/source-capture-reliability/PRD.md` 为入口：
 
 1. ZOL HTML 首次 404 只执行一次有界复核，最终响应进入请求账本与 Source Dataset；
 2. 公开来源按 origin 熔断，ZOL 普通品牌目录 404 只结束当前品牌；
-3. 在干净 Windows checkout 中完成一次 Start 后无人值守执行，不在运行期间修改代码或人工逐条 Resume；
-4. Source Dataset、覆盖投影、权威进度和 Git 交付状态一致。
+3. 已在 Windows checkout 中完成一次 Start 后无人值守执行，运行期间没有修改代码或人工逐条 Resume；
+4. Source Dataset、覆盖投影、权威进度和 Git 交付状态一致；其中商品目录 coverage 的 Batch 终态判定作为 P1 合同问题继续收口。
 
 通过前，历史成功 Batch 继续作为历史能力证据，但不能替代当前版本的无人值守可靠性验收。
 
