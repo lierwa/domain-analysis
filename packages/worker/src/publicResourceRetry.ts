@@ -30,6 +30,7 @@ export async function requestPublicResourcePersistently(input: {
   request: PublicResourceRequest;
   requestLane?: "asset";
   robotsPolicyRequest?: boolean;
+  retryNotFoundOnce?: boolean;
   signal?: AbortSignal;
 }) {
   const { source, runId, admission, targetKey, workKey } = input;
@@ -42,7 +43,16 @@ export async function requestPublicResourcePersistently(input: {
   await admission.startCaptureWorkItem({ runId, workKey });
   try {
     // WHY：每次重试仍重新进入持久 admission，共享计划预算、频控与取消，不让库级 retry 绕开业务账本。
-    const response = await pRetry(() => requestOneAttempt(input), {
+    const response = await pRetry(async (attemptNumber) => {
+      const result = await requestOneAttempt(input);
+      // WHY：ZOL HTML 在真实执行中会把仍存在的页面偶发返回 404；只允许来源 adapter
+      // 显式启用，并共享现有两次尝试上限，避免把通用 404 或图片缺失改成暂时错误。
+      if (input.retryNotFoundOnce && input.requestLane !== "asset" && !input.robotsPolicyRequest
+        && attemptNumber === 1 && result.statusCode === 404) {
+        throw new TransientPublicResourceError("来源 HTML 首次返回 HTTP 404，执行一次有界复核");
+      }
+      return result;
+    }, {
       retries: 1,
       minTimeout: Math.max(10_000, requestPolicy(input).minimumIntervalMs),
       maxTimeout: Math.max(10_000, requestPolicy(input).minimumIntervalMs),

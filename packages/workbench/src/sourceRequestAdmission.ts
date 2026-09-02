@@ -38,6 +38,10 @@ export function createSourceRequestAdmission(
   };
 }
 
+export function usesProviderWideAccessCircuit(providerKey: string) {
+  return providerKey !== "public.web-resource";
+}
+
 export async function acquireSourceRunLease(db: WorkbenchDb, runId: string) {
   const lease = await acquireSourceExecutionLease(db, "source-run-lease", runId,
     "Source Run 仍由活动执行进程持有，不能继续");
@@ -224,11 +228,12 @@ async function reserveRequest(
     if (!existingGate) throw new SourceDatasetError("invalid_state", `请求 gate 创建失败：${input.gateKey}`);
     const admissionTime = now();
     const gate = await alignGatePolicy(transaction, existingGate, input, admissionTime);
-    const blockedGate = await transaction.query.sourceAccessGateStates.findFirst({ where: and(
-      eq(sourceAccessGateStates.providerKey, input.providerKey),
-      eq(sourceAccessGateStates.providerVersion, input.providerVersion),
-      eq(sourceAccessGateStates.circuitState, "open"),
-    ) });
+    const blockedGate = usesProviderWideAccessCircuit(input.providerKey)
+      ? await transaction.query.sourceAccessGateStates.findFirst({ where: and(
+        eq(sourceAccessGateStates.providerKey, input.providerKey),
+        eq(sourceAccessGateStates.providerVersion, input.providerVersion),
+        eq(sourceAccessGateStates.circuitState, "open"),
+      ) }) : undefined;
     if (blockedGate || gate.circuitState === "open") return {
       status: "blocked", reason: blockedGate?.blockedReason ?? gate.blockedReason ?? "circuit_open",
       manualResumeRequired: blockedGate?.manualResumeRequired ?? gate.manualResumeRequired,
@@ -299,11 +304,15 @@ async function finishRequest(
       .returning();
     if (changed.length !== 1) throw new SourceDatasetError("invalid_state", `请求尝试已经结束：${input.attemptId}`);
     if (input.state === "restricted") {
-      // WHY：首个明确限制是整个 Provider 身份的停止事实；持久开路防止另一进程或重启后继续打源站。
+      // WHY：ZOL 的页面与图片共享一个站点身份；通用公开 Provider 则承载互不相关的 origin，
+      // 只允许当前 origin gate 熔断，避免一个站点的限制阻止其他已确认来源。
+      const circuitScope = usesProviderWideAccessCircuit(gate.providerKey)
+        ? and(eq(sourceAccessGateStates.providerKey, gate.providerKey),
+          eq(sourceAccessGateStates.providerVersion, gate.providerVersion))
+        : eq(sourceAccessGateStates.key, existing.gateKey);
       await transaction.update(sourceAccessGateStates).set({ circuitState: "open", blockedAt: finishedAt,
         blockedReason: input.restrictionReason, manualResumeRequired: true, updatedAt: finishedAt })
-        .where(and(eq(sourceAccessGateStates.providerKey, gate.providerKey),
-          eq(sourceAccessGateStates.providerVersion, gate.providerVersion)));
+        .where(circuitScope);
     }
     return normalizeAttempt(changed[0]!);
   });

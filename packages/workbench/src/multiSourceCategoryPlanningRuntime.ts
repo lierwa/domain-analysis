@@ -30,9 +30,18 @@ export type PublicSourcePlanningResearchEvent =
   | Exclude<CrawlPlanningRuntimeEvent, { type: "completed" }>
   | { type: "completed"; research: PublicSourceResearch };
 
+interface PublicSourcePlanningResearchInput {
+  task: CaptureTask;
+  coverage: SourceCoverageAssessment;
+  correction?: {
+    previousResearch: PublicSourceResearch;
+    validationErrors: string[];
+  };
+  signal?: AbortSignal;
+}
+
 export interface PublicSourcePlanningResearcher {
-  run(input: { task: CaptureTask; coverage: SourceCoverageAssessment; signal?: AbortSignal }):
-    AsyncIterable<PublicSourcePlanningResearchEvent>;
+  run(input: PublicSourcePlanningResearchInput): AsyncIterable<PublicSourcePlanningResearchEvent>;
   close?(): Promise<void>;
 }
 
@@ -49,6 +58,9 @@ export function createCodexPublicSourcePlanningResearcher(options: {
     model: options.model,
     reasoningEffort: options.reasoningEffort,
     executable: options.executable,
+    // WHY：公开来源研究会同时返回多族、多主题 exact URL，真实微波炉规划已证明 180 秒不足。
+    // TRADE-OFF：只放宽该研究 turn 到 5 分钟，仍由现有中断机制有界终止，不改变访谈或其他 Codex 调用。
+    timeoutMs: 300_000,
     webSearch: true,
   });
   return {
@@ -99,14 +111,26 @@ async function* runMultiSourcePlanning(
   }
 
   let research: PublicSourceResearch | undefined;
-  for await (const event of options.publicSourceResearcher.run({
-    task: input.task, coverage: input.coverage, signal: input.signal,
-  })) {
-    if (event.type === "completed") {
-      research = event.research;
+  let correction: PublicSourcePlanningResearchInput["correction"];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    research = undefined;
+    for await (const event of options.publicSourceResearcher.run({
+      task: input.task, coverage: input.coverage, correction, signal: input.signal,
+    })) {
+      if (event.type === "completed") {
+        research = event.research;
+        continue;
+      }
+      yield event;
+    }
+    if (!research) throw new Error("公开专业来源研究没有返回结构化结果");
+    const validationErrors = coveragePlanningBlockers(input.coverage, research);
+    if (attempt === 0 && validationErrors.length > 0) {
+      // WHY：覆盖门只能在完整结构化结果上校验；把原样错误反馈一次，可补齐搜索方向，同时避免无界模型循环。
+      correction = { previousResearch: research, validationErrors };
       continue;
     }
-    yield event;
+    break;
   }
   if (!research) throw new Error("公开专业来源研究没有返回结构化结果");
 
@@ -122,11 +146,11 @@ async function* runMultiSourcePlanning(
 
 async function* runPublicSourceResearch(
   client: CodexAppServerClient,
-  input: { task: CaptureTask; coverage: SourceCoverageAssessment; signal?: AbortSignal },
+  input: PublicSourcePlanningResearchInput,
 ): AsyncIterable<PublicSourcePlanningResearchEvent> {
   let result: CodexAppServerResult | undefined;
   let eventSequence = 0;
-  for await (const item of client.run(publicSourceResearchPrompt(input.task, input.coverage), input.signal, undefined,
+  for await (const item of client.run(publicSourceResearchPrompt(input), input.signal, undefined,
     zodSchemaToCodexOutputSchema(publicSourceResearchSchema))) {
     if (item.type === "text_delta") {
       yield { type: "text_delta", delta: item.delta };
@@ -161,7 +185,8 @@ async function* runPublicSourceResearch(
   yield { type: "completed", research };
 }
 
-function publicSourceResearchPrompt(task: CaptureTask, coverage: SourceCoverageAssessment) {
+function publicSourceResearchPrompt(input: PublicSourcePlanningResearchInput) {
+  const { task, coverage, correction } = input;
   const scope = {
     category: task.content.category,
     marketScope: task.content.marketScope,
@@ -186,6 +211,11 @@ function publicSourceResearchPrompt(task: CaptureTask, coverage: SourceCoverageA
     "每个候选对应一个 exact URL，只能声明该 URL 自身实际返回的一种 rawFormat。HTML 页面里即使链接 PDF，也只能标 HTML；要抓 PDF 必须把 PDF 直达 URL 作为另一个候选。",
     "只返回公开、可审计、无需绕过登录/验证码/许可/访问控制的 HTTPS 直达网页或 PDF。排除 ZOL、电商、搜索结果列表、聚合下载站和占位 URL。标准监管优先目标市场官方原文；专业原理优先政府、大学、学术或行业机构；品牌资料只选品牌官方说明书、白皮书或技术资料。",
     "每个来源只说明对应主题和原始抓取价值，不能声称已充分覆盖。sources 与 blocked 共同表达广撒网结果；不得因局部失败停止整个研究。",
+    ...(correction ? [
+      `上一轮完整研究结果：${JSON.stringify(correction.previousResearch)}`,
+      `现有覆盖校验返回的错误：${JSON.stringify(correction.validationErrors)}`,
+      "这是唯一一次覆盖修正。保留上一轮仍符合条件的 topics、sources 和 blocked，针对上述原样错误继续网页搜索；final 必须返回合并后的完整替换结果，不能只返回新增项，也不能自行改变覆盖标准。",
+    ] : []),
     "执行期间用正常中文 commentary 汇报搜索进展，不要在 commentary 输出 JSON。只有 final_answer 返回符合 output schema 的 JSON，不要 Markdown 或解释。",
   ].join("\n\n");
 }

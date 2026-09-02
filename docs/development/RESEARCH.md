@@ -1,7 +1,7 @@
 # 技术调研登记
 
 状态：当前采用结论
-更新日期：2026-09-01
+更新日期：2026-09-02
 
 本文件只记录当前实现和下一阶段直接依赖的技术结论、验证证据与退出条件。
 
@@ -268,3 +268,33 @@ Source Batch `source-batch-abe119fd-f6be-4b40-b6f9-b36d4473aac7` 的 17 个 Sour
 2026-09-01 完成缺口闭环验证：覆盖模块从 Source Dataset 自动确认唯一缺口为 `professional_technical` 0/3；其余来源族与五个必需主题已经达标。Planning Run `crawl-planning-run-d73f70a5-de0a-41dc-9e6b-c0634a5a2d96` 没有重跑 ZOL，也没有重用 17 个历史 exact URL，只为该缺口生成 5 个新候选、覆盖 5 个 URL origin。Crawl Plan `crawl-plan-da4d5e07-d39f-4b47-966b-6c2aa2cce165` version 4 通过 v7 确认门。
 
 Source Batch `source-batch-c370c3dd-9e51-428f-bacb-a4a2fd25349f` 的 5 个 Source Run 全部完成并各保存 1 条 accessible、accepted、非空且与计划 exact URL 一致、带 lineage 的 Snapshot；WSU 来源另保存 1 个 PDF Asset。最终商品目录为 19 个品牌、247/247 个型号有完成记录；累计 20 条已接受公开资料：标准监管 9 条/6 个 origin，专业技术 5 条/5 个 origin，品牌官方 6 条/3 个 origin；五个必需计划主题入口分别为 7、7、7、10、6 条，均超过 2 条/2 个 origin 的最低门。全部 Batch、Run、Target、Work Item 和 Request Attempt 终态，覆盖状态为 `satisfied`，剩余缺口 0。
+
+## R-013 ZOL HTML 404 有界复核
+
+### 真实问题与证据
+
+2026-09-02 Windows 真实 Batch `source-batch-0d9674f0-f8b0-42d8-b851-f6474859c2e5` 中，ZOL 参数页、图集页和大图页出现大量 HTTP 404，最终只有 197/247 个型号完成。随后在同一主机使用 `DomainAnalysisBot/0.1`，分别经直连与正式 `.env.local` HTTPS 代理路径复核以下失败 exact URL，均返回 HTTP 200：
+
+- `https://detail.zol.com.cn/101/100191/param.shtml`
+- `https://detail.zol.com.cn/1229/1228247/param.shtml`
+- `https://detail.zol.com.cn/1266/1265066/pic.shtml`
+
+该证据否定了“首次 404 必然表示永久不存在”，但不能推出所有网站或所有 ZOL 图片 404 都应重试。一般 HTTP 404 仍是资源终态；本结论只约束已经通过真实执行验证的 ZOL HTML adapter。
+
+### 候选与采用结论
+
+| 候选 | 处置 |
+| --- | --- |
+| 全局把 404 视为暂时错误 | 不采用；会重复请求真实不存在资源并改变所有 Provider 语义 |
+| 新建 ZOL 专用重试循环 | 不采用；重复现有 `p-retry`、访问 gate、预算和取消机制 |
+| 调用方显式启用一次 ZOL HTML 404 复核 | 采用；复用现有 `p-retry`，每次尝试仍写持久请求账本 |
+| 放宽型号完成门或从分母删除失败型号 | 不采用；会掩盖数据缺口 |
+
+`p-retry` 的官方接口把 attempt number 传给输入函数，并允许 `shouldRetry` 决定是否消费剩余重试；当前项目继续使用锁定依赖和现有一次重试预算，不新增依赖。实现只在第一次 ZOL HTML 404 时抛出既有暂时失败信号；第二次 404 原样返回 Provider，确保最终 `not_found` 响应仍进入不可变 Source Dataset。
+
+### 验证门与退出条件
+
+- `404 -> 200` 必须产生两条 Request Attempt，最终保存 accepted Snapshot。
+- `404 -> 404` 最多两次，并保存最终 `not_found` Snapshot。
+- 401/403/429、robots、图片 Asset、通用公开来源、预算、取消和最长运行时间保持原行为。
+- 若一次复核仍不能显著降低真实假 404，停止扩大重试次数，转而调查代理出口、DNS/CDN 路径或从产品综述页跟随来源链接；不得用无界重试伪造完成率。

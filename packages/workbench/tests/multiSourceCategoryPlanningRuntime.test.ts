@@ -144,7 +144,74 @@ describe("多来源品类规划", () => {
       "public.web-resource",
     ]);
   });
+
+  it("把覆盖校验错误原样反馈一次并使用补齐后的完整研究结果", async () => {
+    const first = publicResearch();
+    const corrected = publicSourceResearchSchema.parse({ ...first, sources: [...first.sources,
+      source("industry-guide", "industry_organization", "https://industry.example.net/microwave",
+        ["principle", "components"], ["HTML"])] });
+    let calls = 0;
+    const researcher: PublicSourcePlanningResearcher = { async *run(input) {
+      calls += 1;
+      if (calls === 1) {
+        expect(input.correction).toBeUndefined();
+        yield { type: "completed", research: first };
+        return;
+      }
+      expect(input.correction).toEqual({
+        previousResearch: first,
+        validationErrors: ["family professional_technical 需要至少 2 个新候选，当前 1 个",
+          "family professional_technical 需要至少 2 个独立网站，当前 1 个"],
+      });
+      yield { type: "completed", research: corrected };
+    } };
+    const runtime = createMultiSourceCategoryPlanningRuntime({
+      catalogRuntime: unusedCatalogRuntime(), publicSourceResearcher: researcher, now: () => new Date(at),
+    });
+
+    const events = [];
+    for await (const event of runtime.run({ task: task(), coverage: professionalGapCoverage() })) {
+      events.push(event);
+    }
+
+    expect(calls).toBe(2);
+    const completed = events.at(-1);
+    expect(completed?.type).toBe("completed");
+    if (completed?.type !== "completed") throw new Error("多来源规划没有返回最终计划");
+    expect(completed.content.planningBlockers).toEqual([]);
+    expect(completed.content.sources).toHaveLength(4);
+  });
+
+  it("一次修正后仍有缺口时停止补查并保留现有覆盖门", async () => {
+    let calls = 0;
+    const researcher: PublicSourcePlanningResearcher = { async *run() {
+      calls += 1;
+      yield { type: "completed", research: publicResearch() };
+    } };
+    const runtime = createMultiSourceCategoryPlanningRuntime({
+      catalogRuntime: unusedCatalogRuntime(), publicSourceResearcher: researcher, now: () => new Date(at),
+    });
+
+    const events = [];
+    for await (const event of runtime.run({ task: task(), coverage: professionalGapCoverage() })) {
+      events.push(event);
+    }
+
+    expect(calls).toBe(2);
+    const completed = events.at(-1);
+    expect(completed?.type).toBe("completed");
+    if (completed?.type !== "completed") throw new Error("多来源规划没有返回最终计划");
+    expect(completed.content.planningBlockers).toContain(
+      "family professional_technical 需要至少 2 个新候选，当前 1 个",
+    );
+  });
 });
+
+function unusedCatalogRuntime(): CrawlPlanningRuntime {
+  return { async *run() {
+    throw new Error("已完成 ZOL 引用不应再次运行商品目录规划");
+  } };
+}
 
 function task() {
   return captureTaskSchema.parse({
@@ -234,4 +301,12 @@ function coverage(productCatalog: "gap" | "satisfied") {
       dimension("use_and_maintenance")],
     gaps: [], unfinishedExecutionIds: [], assessedAt: at,
   });
+}
+
+function professionalGapCoverage() {
+  const current = coverage("satisfied");
+  return sourceCoverageAssessmentSchema.parse({ ...current, gaps: [{
+    kind: "family", key: "professional_technical", missingSources: 1, missingOrigins: 1,
+    targetCandidateCount: 2, targetOriginCount: 2,
+  }] });
 }

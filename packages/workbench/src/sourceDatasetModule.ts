@@ -13,6 +13,7 @@ import {
   sourceObjects,
   sourceResourceReferences,
   sourceSnapshots,
+  sourceRequestAttempts,
 } from "@domain-analysis/db";
 import {
   sourceObjectSchema,
@@ -55,7 +56,7 @@ import { exportSourceDatasetRun, loadSourceDatasetRun,
   loadSourceDatasetRunAudit } from "./sourceDatasetRunViews";
 import { acquireSourceBatchLease, recoverInterruptedSourceBatches } from "./sourceExecutionRecovery";
 import { acquireSourceRunLease, createSourceRequestAdmission,
-  prepareSourceRunForResume } from "./sourceRequestAdmission";
+  prepareSourceRunForResume, usesProviderWideAccessCircuit } from "./sourceRequestAdmission";
 import type { SourceCoverageModule } from "./sourceCoverageModule";
 
 type SnapshotWrite = SourceSnapshotCommit & {
@@ -258,14 +259,23 @@ async function validateAndReleaseResume(
     || previous.requestBudget !== input.requestBudget) {
     throw new SourceDatasetError("invalid_state", "只能从同一计划、来源、Provider 和预算的已停止运行显式继续");
   }
-  // WHY：HTML 与图片的限制共享 Provider 熔断；人工继续必须成组解除同一 Provider 版本的所有 lane，
-  // 但冷却时间和窗口计数继续保留，不能借恢复绕过频控。
-  await transaction.update(sourceAccessGateStates).set({ circuitState: "closed",
-    blockedAt: null, blockedReason: null, manualResumeRequired: false,
-    updatedAt: new Date().toISOString() })
-    .where(and(eq(sourceAccessGateStates.providerKey, input.providerKey),
-      eq(sourceAccessGateStates.providerVersion, input.providerVersion),
-      eq(sourceAccessGateStates.manualResumeRequired, true)));
+  // WHY：ZOL 人工继续仍成组解除页面与图片 lane；通用公开来源只解除前序 Run 实际请求过的 origin，
+  // 不能借恢复一个网站清除另一个网站的真实访问限制。冷却时间和窗口计数始终保留。
+  const attemptedGates = usesProviderWideAccessCircuit(input.providerKey) ? []
+    : await transaction.selectDistinct({ key: sourceRequestAttempts.gateKey })
+      .from(sourceRequestAttempts).where(eq(sourceRequestAttempts.runId, previous.id));
+  const releaseScope = usesProviderWideAccessCircuit(input.providerKey)
+    ? and(eq(sourceAccessGateStates.providerKey, input.providerKey),
+      eq(sourceAccessGateStates.providerVersion, input.providerVersion))
+    : attemptedGates.length > 0
+      ? inArray(sourceAccessGateStates.key, attemptedGates.map((gate) => gate.key))
+      : undefined;
+  if (releaseScope) {
+    await transaction.update(sourceAccessGateStates).set({ circuitState: "closed",
+      blockedAt: null, blockedReason: null, manualResumeRequired: false,
+      updatedAt: new Date().toISOString() })
+      .where(and(releaseScope, eq(sourceAccessGateStates.manualResumeRequired, true)));
+  }
 }
 
 async function reopenBatch(db: WorkbenchDb, batchId: string) {

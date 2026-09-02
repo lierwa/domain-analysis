@@ -167,7 +167,6 @@ AsyncGenerator<SourceProviderEvent, BrandState | undefined> {
     return undefined;
   }
 }
-
 async function* collectModelSafely(context: ZolCollectionContext, brand: BrandState, model: ZolModelEntry):
 AsyncGenerator<SourceProviderEvent> {
   const workKey = modelWorkKey(brand, model);
@@ -208,12 +207,13 @@ AsyncGenerator<SourceProviderEvent, BrandState | undefined> {
       captureUnit: "zol_brand_catalog_page", url,
       subject: brandSubject(key),
       resourceKind: "brand_catalog",
-      maximumBytes: context.configuration.maximumHtmlBytes });
+      retryNotFoundOnce: true, maximumBytes: context.configuration.maximumHtmlBytes });
     const statusFailure = pageStatusFailure(response, `品牌 ${key} 目录第 ${page} 页`, "source");
     if (statusFailure) {
       yield inaccessible(context.targetKey, url, context.now(), observationState(response.statusCode),
-        statusFailure.message, response.finalUrl ? new URL(response.finalUrl) : undefined,
-        brandLineage(catalogUrl, key, page));
+        statusFailure.message, response.finalUrl ? new URL(response.finalUrl) : undefined, brandLineage(catalogUrl, key, page));
+      // WHY：品牌目录是独立采集单元；404 只证明该品牌当前页不存在，保留已发现型号并继续后续品牌。
+      if (response.statusCode === 404) return { key, catalogUrl, models: [...models.values()].slice(0, context.configuration.targetModelsPerBrand) };
       throw statusFailure;
     }
     let facts: ReturnType<typeof parseZolCatalogPage>;
@@ -252,7 +252,7 @@ AsyncGenerator<SourceProviderEvent> {
   const parameterResponse = await requestPersistently({ ...context, workKey: zolParameterWorkKey(model.id),
     captureUnit: "zol_model_parameters", resourceKind: "parameters",
     url: parameterUrl, subject: modelSubject(brand, model),
-    maximumBytes: context.configuration.maximumHtmlBytes });
+    retryNotFoundOnce: true, maximumBytes: context.configuration.maximumHtmlBytes });
   const statusFailure = pageStatusFailure(parameterResponse, `型号 ${model.id} 参数页`, "model");
   if (statusFailure) {
     yield inaccessible(context.targetKey, parameterUrl, context.now(), observationState(parameterResponse.statusCode),
@@ -282,7 +282,7 @@ async function* collectGallery(context: ZolCollectionContext, brand: BrandState,
   const response = await requestPersistently({ ...context, workKey: zolGalleryWorkKey(model.id),
     captureUnit: "zol_model_gallery", resourceKind: "gallery",
     url: galleryUrl, subject: modelSubject(brand, model),
-    maximumBytes: context.configuration.maximumHtmlBytes });
+    retryNotFoundOnce: true, maximumBytes: context.configuration.maximumHtmlBytes });
   const statusFailure = pageStatusFailure(response, `型号 ${model.id} 图集页`, "model");
   if (statusFailure) {
     yield inaccessible(context.targetKey, galleryUrl, context.now(), observationState(response.statusCode),
@@ -319,7 +319,7 @@ AsyncGenerator<SourceProviderEvent, number> {
     captureUnit: "zol_model_picture_set", url: detailUrl,
     subject: modelSubject(brand, model), resourceKind: "picture_set",
     resourceSection: section.title, resourceOrdinal: section.ordinal,
-    maximumBytes: context.configuration.maximumHtmlBytes });
+    retryNotFoundOnce: true, maximumBytes: context.configuration.maximumHtmlBytes });
   const statusFailure = pageStatusFailure(response, `型号 ${model.id} 大图分区`, "model");
   if (statusFailure) {
     yield inaccessible(context.targetKey, detailUrl, context.now(), observationState(response.statusCode),

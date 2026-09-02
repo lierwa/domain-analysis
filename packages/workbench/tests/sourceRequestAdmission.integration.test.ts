@@ -5,6 +5,7 @@ import {
   captureTasks,
   createWorkbenchDb,
   migrateWorkbenchDatabase,
+  sourceAccessGateStates,
   sourceCollectionPlans,
   sourceCollectionRuns,
   sourceCollectionTargetRuns,
@@ -119,6 +120,71 @@ describeWithPostgres("Source Dataset 持久请求准入", () => {
     });
   });
 
+  it("通用公开 Provider 只熔断受限 origin，不阻止其他独立网站", async () => {
+    await migrateWorkbenchDatabase(databaseUrl!);
+    db = createWorkbenchDb(databaseUrl!);
+    taskId = `task-origin-circuit-${randomUUID()}`;
+    const providerVersion = `test-${randomUUID()}`;
+    const at = "2026-08-21T00:00:00.000Z";
+    await insertConfirmedTaskAndPlan(db, taskId, at);
+    const module = createSourceDatasetModule(db, {
+      now: () => new Date(at),
+      assetStore: { async put() { throw new Error("不应写附件"); }, open() { return Readable.from([]); } },
+    });
+    const run = await module.startRun({ taskId, planId: "plan-request-admission", planVersion: 1,
+      sourceKey: "brand", providerKey: "public.web-resource", providerVersion, requestBudget: 3,
+      accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 6,
+        minimumIntervalMs: 10_000, jitterMs: { min: 0, max: 0 }, batchSize: 1,
+        batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product-detail"] });
+    await module.startTarget({ runId: run.id, targetKey: "product-detail" });
+    const first = await startWork(module, run.id, providerVersion, "restricted");
+    const restricted = await module.reserveRequest({ ...first,
+      gateKey: `public.web-resource@${providerVersion}:https://restricted.example`,
+      requestedUrl: "https://restricted.example/manual.pdf" });
+    if (restricted.status !== "admitted") throw new Error("受限来源首个请求未获准");
+    await module.finishRequest({ attemptId: restricted.attempt.id, state: "restricted",
+      finalUrl: "https://restricted.example/manual.pdf", httpStatus: 403, bytes: 0,
+      restrictionReason: "access_denied" });
+
+    await expect(module.reserveRequest({ ...first,
+      gateKey: `public.web-resource@${providerVersion}:https://restricted.example`,
+      requestedUrl: "https://restricted.example/other.pdf" })).resolves.toMatchObject({
+      status: "blocked", reason: "access_denied",
+    });
+    const second = await startWork(module, run.id, providerVersion, "independent");
+    const independent = await module.reserveRequest({ ...second,
+      gateKey: `public.web-resource@${providerVersion}:https://independent.example`,
+      requestedUrl: "https://independent.example/manual.pdf" });
+    expect(independent.status).toBe("admitted");
+    if (independent.status !== "admitted") throw new Error("独立来源请求未获准");
+    await module.finishRequest({ attemptId: independent.attempt.id, state: "completed",
+      finalUrl: "https://independent.example/manual.pdf", httpStatus: 200, bytes: 1 });
+
+    const unrelatedGateKey = `public.web-resource@${providerVersion}:https://unrelated.example`;
+    await db.insert(sourceAccessGateStates).values({ key: unrelatedGateKey,
+      providerKey: "public.web-resource", providerVersion, policyVersion: "fixture",
+      circuitState: "open", blockedAt: at, blockedReason: "access_denied",
+      manualResumeRequired: true, updatedAt: at });
+    await module.finishCaptureWorkItem({ runId: run.id, workKey: first.workKey,
+      status: "failed", observedUnitCount: 0, terminationReason: "access_denied" });
+    await module.finishCaptureWorkItem({ runId: run.id, workKey: second.workKey,
+      status: "completed", observedUnitCount: 1 });
+    await module.finishTarget({ runId: run.id, targetKey: "product-detail",
+      status: "failed", terminationReason: "access_denied" });
+    await module.finishRun({ runId: run.id, status: "failed", terminationReason: "access_denied" });
+
+    await module.startRun({ taskId, planId: "plan-request-admission", planVersion: 1,
+      sourceKey: "brand", providerKey: "public.web-resource", providerVersion, requestBudget: 3,
+      accessPolicy: { kind: "paced_http", version: "fixture", maxRequestsPerMinute: 6,
+        minimumIntervalMs: 10_000, jitterMs: { min: 0, max: 0 }, batchSize: 1,
+        batchCooldownMs: 60_000, maximumRunMs: 120_000 }, targetKeys: ["product-detail"],
+      resumedFromRunId: run.id });
+    await expect(module.getAccessGate(`public.web-resource@${providerVersion}:https://restricted.example`))
+      .resolves.toMatchObject({ circuitState: "closed", manualResumeRequired: false });
+    await expect(module.getAccessGate(unrelatedGateKey))
+      .resolves.toMatchObject({ circuitState: "open", manualResumeRequired: true });
+  });
+
   it("关闭且无在途请求的 origin gate 接受新版策略，并继承更严格的下一次时间", async () => {
     await migrateWorkbenchDatabase(databaseUrl!);
     db = createWorkbenchDb(databaseUrl!);
@@ -226,6 +292,17 @@ function admissionRequest(
     providerKey: "public.web-resource", providerVersion, policyVersion,
     requestedUrl: `https://brand.example/products/${suffix}`,
     minimumIntervalMs, maxRequestsPerMinute: 1 };
+}
+
+async function startWork(module: ReturnType<typeof createSourceDatasetModule>, runId: string,
+  providerVersion: string, suffix: string) {
+  const workKey = `work-${suffix}`;
+  await module.ensureCaptureWorkItem({ runId, targetKey: "product-detail", workKey,
+    captureUnit: "exact_page", expectedUnitCount: 1 });
+  await module.startCaptureWorkItem({ runId, workKey });
+  return { runId, targetKey: "product-detail", workKey, providerKey: "public.web-resource",
+    providerVersion, policyVersion: "fixture", minimumIntervalMs: 10_000,
+    maxRequestsPerMinute: 6 };
 }
 
 async function insertConfirmedTaskAndPlan(db: WorkbenchDb, taskId: string, at: string) {

@@ -1,11 +1,13 @@
 # 数据抓取平台开发进度
 
 更新日期：2026-09-02
-当前阶段：微波炉阶段 1 原始资料最低覆盖已通过，等待阶段 2 重新采访、调研与设计
+当前阶段：Windows 真实采集可靠性 P0 收口；阶段 2 暂缓
 
 ## 简单说明
 
-当前主线已经完成阶段 1 的最低输入门：确认品类任务后，Planning 在同一阶段生成 ZOL 商品目录、标准监管、专业技术和品牌公开资料来源；各 Provider 抓取原始网页、PDF 和附件；Source Dataset 对账成功与失败；统一覆盖模块检查所有资料，不足时只补缺口。当前不进行数据清洗、知识包成品设计或导购 Agent 开发。
+历史主线已经完成阶段 1 的最低输入门；2026-09-02 的新 Windows 真实复验发现当前版本尚不能稳定无人值守收口。当前开发入口是 `.scratch/source-capture-reliability/PRD.md`：先按 P0 修复 ZOL 偶发 404、公开来源熔断作用域和品牌目录失败隔离，再用干净 checkout 完成一次不在运行期间改代码的真实验收。当前不进行数据清洗、知识包成品设计或导购 Agent 开发。
+
+当前复验对象为 Capture Task `capture-task-326e80eb-b65f-4f51-9c29-26ce87a2fb62`、Confirmed Crawl Plan `crawl-plan-073d11a3-fd9b-469a-bd92-e4346acd9c21` version 6 和 Batch `source-batch-0d9674f0-f8b0-42d8-b851-f6474859c2e5`。Batch 已以 `partial` 终态收口：19 个品牌、247 个型号、197 个完成、50 个需关注，3310 个 Snapshot、2418 个 Asset；公开来源最终 18/20 完成，两个真实访问限制保留。该结果是当前可靠性问题的验收输入，不覆盖下文历史成功 Batch 的事实。
 
 ZOL 微波炉验收已经完成：247 个型号全部处理，其中 1 个型号由 ZOL 明确标识为无图片。首次公开资料执行有 15 条 accepted，但专业技术资料为 0，因此系统没有把“执行结束”当成“资料达标”。随后只补抓 5 个新专业技术入口，5/5 完成；没有重抓 ZOL，也没有重复 17 个历史 URL。最终累计 20 条 accepted 公开资料，三个来源族和五个必需主题全部达到最低门。
 
@@ -88,6 +90,8 @@ Source Dataset 现在直接按品牌、型号和资源展示已抓到的数据�
 - 商品地图的活动展开行、详情选择和 Run 审计分别建模；详情关闭后焦点返回首次地图触发器，键盘路径与画布/大纲行为一致。
 - API 支持用 `SOURCE_ASSET_CACHE_PATH` 显式复用正式抓取所在 checkout 的内容寻址资产；默认仍使用当前仓库 `data/source-assets`，不复制附件或改写血缘。
 - Codex App Server 子进程把当前 Node 目录写入唯一 `PATH` 键；同时覆盖 launchd 的精简环境与 Windows `Path`/`PATH` 大小写重复，原协议、模型与会话事实源不变。
+- 多来源 Planning 在首次结构化研究仍有现有覆盖 blocker 时，把原样校验错误与上一轮完整结果反馈给同一研究 Runtime 一次；第二轮仍不达标即保留 blocker，不新增校验规则或无界重试。公开来源研究单 turn 上限为 5 分钟，其他 Codex 调用保持原边界。
+- 持久请求准入按来源身份保持有界熔断：ZOL 页面与图片继续共享 Provider 级停止门；承载多个独立网站的 `public.web-resource` 只熔断真实受限的 origin gate，人工 Resume 也只解除前序 Run 实际请求过的公开来源 gate。
 
 ## 当前验证
 
@@ -114,6 +118,11 @@ Source Dataset 现在直接按品牌、型号和资源展示已抓到的数据�
 - 当前 `6173` 真实页面验收：顶部显示 247/247、唯一问题 0；搜索 `1228243` 显示“方太W25800K-01AG · 2 条资源 · 来源无图片”。
 - 键盘验收与回归测试均通过：Esc 关闭由记录组进入的 Run 审计后，焦点返回原始记录组按钮。
 - 2026-09-01 ZOL 微波炉原始数据验收：19 个计划品牌与 19 个实际品牌完全一致；247 个型号都有参数页和图集页，246 个型号有图片，1 个型号由 ZOL 明确标识为无图片；2,918 个 Asset 全部归属型号。
+- 2026-09-02 Windows 多来源 Planning 回归：全仓 48 个测试文件、219 个测试通过，2 个文件与 7 个测试按既有条件跳过；六个 workspace 类型检查通过。真实 Run `crawl-planning-run-3cfa5c02-34bb-435c-84dd-67a449955049` 在一次定向补查后生成 `crawl-plan-073d11a3-fd9b-469a-bd92-e4346acd9c21` v6，20 个公开来源、5 个专业技术来源、5 个独立专业 origin、0 个 blocker。
+- 2026-09-02 真实 Source Batch `source-batch-0d9674f0-f8b0-42d8-b851-f6474859c2e5` 已由 Confirmed Plan v6 启动。公开来源中 18/20 已完成并保存原始响应，5 个 PDF Asset 落盘；NDRC 与北交大两个 origin 的真实访问限制分别留痕且未重试。ZOL Resume Run `source-run-83c1227a-4a36-4657-84a8-4c363d6e1440` 已跨过前序瞬时 404 并保持运行；观测点为 28 个 Snapshot、12 个 Asset、6 个型号、1 个型号完成、2 个型号独立 attention。
+- 2026-09-02 ZOL 品牌目录 404 失败作用域回归：`zolCatalogGalleryProvider.test.ts` 13/13 通过，验证单品牌目录 404 保存 `not_found` 观察并继续后续品牌；全量 Vitest 中 219 项通过、7 项按既有条件跳过，唯一已有 Windows 频控计时断言测得 89ms 后单独复跑 5/5 通过；六个 workspace 类型检查全部通过，`git diff --check` 通过。
+- 当前 Batch `source-batch-0d9674f0-f8b0-42d8-b851-f6474859c2e5` 已在第二次 Resume 后以 `partial` 终态收口：38 个 Run、3310 个 Snapshot、2418 个 Asset；247 个型号中 197 个完成、50 个需关注。66 条问题由 62 条型号资源问题、2 条历史品牌目录 404 和 2 条公开来源访问限制组成，不能把问题条数当作未完成型号数。
+- 2026-09-02 P0 本机实现验证：ZOL HTML 首次 404 显式复核一次，持续 404 仍交还 Provider 保存 `not_found`；公开来源按 origin 熔断且 Resume 不清除无关 gate；品牌目录持续 404 只结束当前品牌。聚焦 PostgreSQL/Worker 23/23、全量 49 个测试文件与 226 项测试通过，2 个文件与 7 项按既有条件跳过；六 workspace 类型检查和生产构建通过。
 - 内容寻址存储全量校验：2,685 份不同内容逐一读取，0 缺失、0 大小不一致、0 SHA-256 不一致、0 元数据冲突；API 读取样本的字节数、MIME 与 SHA-256 和数据库一致。
 - 请求审计：原抓取的 106 次历史失败尝试中，98 次对应工作后来成功，8 次可还原为 TLS 断开或请求超时；它们保留在运行审计，不进入当前问题统计。
 - 本轮聚焦回归：ZOL 明确无图与商品地图标识共 2 个文件、23 个测试通过；常驻 API 返回 247/247 完成、当前问题 0。
@@ -185,6 +194,9 @@ Source Dataset 现在直接按品牌、型号和资源展示已抓到的数据�
 - 2026-09-01 全资料最低覆盖与增量规划的架构影响为 `改变`：新增 typed `SourceCoverageModule`，只从 Source Dataset accepted 快照投影来源族、主题、独立 origin、已尝试 URL 和执行终态；Planning 与 Source Dataset 页面共用该 interface。Crawl Plan 当前协议升级为 v7，手工 `completedSourceReferences` 请求入口删除，ZOL 完成引用改由覆盖模块自动推导。原始事实源、Provider 和执行依赖方向不变。
 - 旧的一次性专业研究任务文档已删除；没有保留第二条研究流程、旧 v5 确认入口或 fallback。
 - 2026-09-01 Windows 正确性修复的架构影响为 `澄清`：只有已经创建 Source Run 的公开来源才进入已尝试 URL；`failed`、`stopped`、`partial` Batch 保持终态，只有活动或恢复中的 Batch 阻止缺口 Planning；Web 完整展示商品目录与执行终态门。Source Dataset、Source Coverage、Planning 和 Web 的事实源及依赖方向不变，公共 contract 未改变。
+- 2026-09-02 多来源覆盖补查、研究时间边界和公开来源 origin 熔断的架构影响为 `澄清`：沿用现有 Codex App Server、覆盖校验、Source Request Admission 与人工 Resume seam；Source Dataset 仍是请求、限制、Snapshot 和 Asset 的唯一事实源，公共 contract、模块职责与依赖方向不变。
+- 2026-09-02 ZOL 单品牌目录 404 的架构影响为 `澄清`：Provider 把该品牌当前页保存为 `not_found` 并保留已发现型号，继续同一计划中的后续品牌；全局结构绑定、来源访问限制和预算停止门保持不变，没有修改公共 contract、事实源、Provider 注册或恢复协议。
+- 2026-09-02 ZOL HTML 一次 404 复核的架构影响为 `澄清`：复用现有 `p-retry`、Source Access Gate、Request Attempt 与两次尝试上限，只增加 ZOL HTML adapter 的显式选择；图片、robots、通用来源和公共 contract 不变。
 
 Baseline Impact:
 
@@ -199,8 +211,10 @@ Baseline Impact:
 
 ## 后续入口
 
-1. 阶段 1 的微波炉原始资料最低覆盖已经通过。下一步应重新采访、调研并设计阶段 2 的数据处理，不直接沿用旧 Evidence、Knowledge Factory 或知识包实现。
+1. 按 `.scratch/source-capture-reliability/PRD.md` 顺序完成 P0：ZOL HTML 404 有界复核、公开来源 origin 熔断、ZOL 品牌失败隔离和干净 checkout 无人值守验收。
+2. P0 通过后处理型号终态语义、Planning 韧性、Source Dataset 指标和进度交付等 P1。
+3. 当前版本的真实可靠性门通过后，再重新采访、调研并设计阶段 2；不直接沿用旧 Evidence、Knowledge Factory 或知识包实现。
 
 ## 交付状态
 
-多来源阶段 1 实现、测试和权威文档已纳入 Git `master`；Windows 正确性修复随本文件所在提交推送至 `origin/master`，并作为新的跨电脑接续点。数据库、原始页面、图片和本机秘密只保留在本地，不进入 Git。
+历史多来源阶段 1 基线与本轮真实采集可靠性修复均纳入 Git `master`；本文件所在提交推送并完成本地、upstream 与 origin SHA 核对后，形成新的跨电脑代码接续点。Windows 新 Batch 的真实运行结论仍以 issue 04 后续验收记录为准。数据库、原始页面、图片和本机秘密只保留在本地，不进入 Git。

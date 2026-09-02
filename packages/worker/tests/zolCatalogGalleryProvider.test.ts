@@ -239,6 +239,35 @@ describe("ZOL 品牌目录批次参数与图集 Provider", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it("单个品牌目录返回 404 时记录该品牌并继续后续品牌", async () => {
+    vi.useFakeTimers();
+    try {
+      const baseRequest = fixtureRequest();
+      const admission = createAdmission();
+      const provider = createZolCatalogGalleryProvider({ request: async (url) =>
+        url.href === catalogs[0]
+          ? { statusCode: 404, headers: { "content-type": "text/html" },
+            body: new Uint8Array(), finalUrl: url.href }
+          : baseRequest(url) });
+      const events: SourceProviderEvent[] = [];
+      const collection = (async () => {
+        for await (const event of provider.collect(source(), "run-missing-brand", admission)) events.push(event);
+      })();
+
+      await vi.runAllTimersAsync();
+      await collection;
+
+      expect(events.some((event) => event.type === "capture"
+        && event.snapshot.observation.requestedUrl === catalogs[0]
+        && event.snapshot.observation.state === "not_found")).toBe(true);
+      expect(admission.attempts.filter((attempt) => attempt.requestedUrl === catalogs[0])).toHaveLength(2);
+      expect(admission.completedModelWorkKeys).toEqual([
+        "model:midea:2114011", "model:midea:2114012",
+      ]);
+      expect(events.at(-1)).toMatchObject({ type: "target.completed", observedUnitCount: 2 });
+    } finally { vi.useRealTimers(); }
+  });
+
   it("型号图集局部结构异常只结束当前型号并继续后续型号", async () => {
     vi.useFakeTimers();
     try {

@@ -1,7 +1,7 @@
 # 数据抓取平台架构基线
 
-状态：完整采集链目标基线
-更新日期：2026-09-01
+状态：真实采集可靠性收口基线
+更新日期：2026-09-02
 
 ## 简单说明
 
@@ -98,6 +98,7 @@ Workbench Chat Timeline
 - HTML 与图片使用独立节奏槽，并共享 Provider 访问限制熔断。
 - 401/403/429、登录、验证码、风险正文和计划外 origin 立即停止当前计划范围。
 - 暂时性传输错误、HTTP 502/503/504 和可信 DNS SERVFAIL 最多执行一次有界重试；执行阶段每次尝试都重新经过 Source Access Gate 并写请求账本，规划阶段的只读榜单核验同样只重试一次。
+- ZOL HTML 的同一 exact URL 已在 Windows 真实执行中出现首次 404、随后原样返回 200；因此 ZOL adapter 可以显式要求一次 404 有界复核。第二次仍为 404 时必须把最终响应交还 Provider 保存 `not_found` Snapshot；该策略不适用于通用公开来源或图片 Asset，也不改变 401/403/429、robots、预算、取消和运行时限停止门。
 - 单个请求在重试耗尽后结束对应请求 Work Item；品牌目录或型号范围可以隔离时，记录终止原因并继续后续品牌或型号，不把局部失败升级为 Source Run 失败。
 - Source Execution 为计划中的每个来源分别建立 Source Run；一个来源失败时 Batch 记为部分完成并继续后续来源，只有公共 contract、存储不变量或人工停止等批次级条件才阻断整批。
 - Source Execution 只执行 Confirmed Crawl Plan 中仍需抓取的来源；Planning audit 中通过校验的 ZOL 完成引用不创建新的 Source Run，也不复制原 Snapshot 或 Asset。
