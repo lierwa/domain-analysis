@@ -17,11 +17,12 @@ import {
   CategoryInterviewTimeline,
 } from "./CategoryInterviewTimeline";
 import { CaptureTaskContentView } from "./CaptureTaskContentView";
+import { CaptureHistoryPanel } from "./CaptureHistoryPanel";
 import { CrawlPlanningPanel } from "./CrawlPlanningPanel";
 import { SourceDatasetPanel } from "./SourceDatasetPanel";
 
 type WorkspaceMode = "tasks" | "new";
-type TaskSection = "scope" | "data";
+type TaskSection = "scope" | "history" | "data";
 
 export function CaptureTaskWorkspacePage() {
   const queryClient = useQueryClient();
@@ -295,7 +296,7 @@ function CaptureTaskSidebar({
           <TaskRecordRow
             key={task.id}
             title={task.name}
-            meta={`${task.status === "ready" ? "已确认" : "需重新确认"} · v${task.revision}`}
+            meta={`${task.status === "ready" ? "已确认" : "需重新确认"} · 范围修订 ${task.revision}`}
             selected={mode === "tasks" && selectedId === task.id}
             deleting={deletingRecordId === task.id}
             onSelect={() => onSelect(task.id)}
@@ -388,6 +389,7 @@ function TaskWorkspace({
         </div>
         <nav className={`${isDataSection ? "mt-2" : "mt-6"} flex gap-5`} aria-label="抓取任务阶段">
           <Tab active={section === "scope"} onClick={() => onSectionChange("scope")} label="抓取范围" />
+          <Tab active={section === "history"} onClick={() => onSectionChange("history")} label="采集历史" />
           <Tab active={section === "data"} onClick={() => onSectionChange("data")} label="原始数据" />
         </nav>
       </header>
@@ -398,7 +400,8 @@ function TaskWorkspace({
           isRevising={isRevising}
           revisionError={revisionError}
         />
-      ) : <SourceDatasetPanel task={task} />}</div>
+      ) : section === "history" ? <CaptureHistoryPanel task={task}
+        onOpenData={() => onSectionChange("data")} /> : <SourceDatasetPanel task={task} />}</div>
     </div>
   );
 }
@@ -419,7 +422,7 @@ function TaskScope({
       <article className="rounded-xl border border-line bg-surface p-5 sm:p-7">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-5">
         <div>
-          <p className="text-sm font-semibold">当前确认版本 v{task.revision}</p>
+          <p className="text-sm font-semibold">抓取范围修订 v{task.revision}</p>
           <p className="mt-1 text-xs leading-5 text-muted">范围不够时可以继续原对话，生成新的草稿和确认版本。</p>
         </div>
         <button type="button" className="button-secondary" disabled={isRevising} onClick={onRevise}>

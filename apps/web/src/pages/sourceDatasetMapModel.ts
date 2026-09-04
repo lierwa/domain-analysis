@@ -62,11 +62,22 @@ export function buildSourceDataGraph(view: SourceDatasetTaskView,
   task: { id: string; name: string; category?: string }, mode: SourceDataMapMode): SourceDataMapGraph {
   const rootId = `task:${task.id}`;
   const current = view.currentExecution;
+  const catalog = view.coverage?.productCatalog.status === "satisfied"
+    ? view.coverage.productCatalog : undefined;
+  const capturedModelCount = view.capturedBrands.reduce((count, brand) => count + brand.counts.total, 0);
+  const productBrandCount = catalog?.brandCount ?? view.capturedBrands.length;
+  const productModelCount = catalog?.modelCount ?? capturedModelCount;
+  const completedProductCount = catalog?.coveredModelCount
+    ?? view.capturedBrands.reduce((count, brand) => count + brand.counts.completed, 0);
+  const productRecordCount = catalog?.acceptedSnapshotCount
+    ?? (current?.brandCount ? current.snapshotCount : 0);
   const graph: SourceDataMapGraph = { rootId, nodes: [], edges: [],
     planVersion: current?.planVersion,
     stats: { sourceCount: mode === "product" ? view.capturedBrands.length : view.sources.length,
-      recordCount: current?.snapshotCount ?? 0, acceptedCount: current?.completedModelCount ?? 0,
-      attentionCount: current?.issueCount ?? 0, lineageCount: current?.snapshotCount ?? 0,
+      recordCount: mode === "product" ? productRecordCount : current?.snapshotCount ?? 0,
+      acceptedCount: mode === "product" ? completedProductCount : current?.completedModelCount ?? 0,
+      attentionCount: mode === "product" ? view.issues.length : current?.issueCount ?? 0,
+      lineageCount: mode === "product" ? productRecordCount : current?.snapshotCount ?? 0,
       unresolvedBrandCount: 0,
       historicalRecordCount: view.batches.slice(1).reduce((sum, batch) => sum
         + view.runs.filter((run) => run.executionBatchId === batch.id)
@@ -74,7 +85,7 @@ export function buildSourceDataGraph(view: SourceDatasetTaskView,
   addNode(graph, { id: rootId, kind: "task", title: task.name, eyebrow: mode === "product" ? "采集任务" : "运行审计",
     description: task.category,
     meta: current ? mode === "product"
-      ? `${current.brandCount} 个品牌 · ${current.modelCount} 个型号 · ${current.needsAttentionModelCount} 个型号需关注`
+      ? `${productBrandCount} 个品牌 · ${productModelCount} 个型号 · ${view.issues.length} 个当前问题`
       : `${view.batches.length} 个 Batch · ${view.runs.length} 个 Run` : "尚无 Source Batch",
     status: "neutral", expandable: false, searchText: normalize([task.name, task.category].join(" ")),
     entity: { kind: "task", taskId: task.id, taskName: task.name, category: task.category } });

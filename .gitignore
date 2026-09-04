@@ -11,3 +11,10 @@ dist/
 coverage/
 .vite/
 storage/
+
+# 本机会话、Python 缓存和含原始资料的阶段二验收产物不进入远程仓库。
+:memory:.ses
+**/__pycache__/
+/.scratch/knowledge-processing/*.zip
+/.scratch/knowledge-processing/qa/
+/.scratch/knowledge-processing/skill-v*-verified/

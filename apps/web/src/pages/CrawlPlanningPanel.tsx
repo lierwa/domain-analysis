@@ -3,12 +3,14 @@ import {
   type CaptureTask,
   type CrawlPlanningEvent,
   type InterviewMessageTimelinePart,
+  type SourceCollectionBatch,
 } from "@domain-analysis/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronRight, LoaderCircle, RefreshCw, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { confirmCrawlPlan, fetchCrawlPlanning, streamCrawlPlanningRun } from "../lib/api";
+import { confirmCrawlPlan, fetchCrawlPlanning, fetchSourceCollectionRuns,
+  streamCrawlPlanningRun } from "../lib/api";
 
 export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
   const queryClient = useQueryClient();
@@ -16,6 +18,8 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
     queryKey: ["crawl-planning", task.id],
     queryFn: () => fetchCrawlPlanning(task.id),
   });
+  const dataset = useQuery({ queryKey: ["source-runs", task.id],
+    queryFn: () => fetchSourceCollectionRuns(task.id) });
   const [isRunning, setIsRunning] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [liveParts, setLiveParts] = useState<InterviewMessageTimelinePart[]>([]);
@@ -33,7 +37,7 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
       });
       await planning.refetch();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Planning Run 启动失败");
+      setError(cause instanceof Error ? cause.message : "资料缺口检查启动失败");
     } finally {
       setIsRunning(false);
     }
@@ -48,7 +52,7 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
       queryClient.setQueryData(["crawl-planning", task.id], view);
       await queryClient.invalidateQueries({ queryKey: ["source-runs", task.id] });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Crawl Plan 确认失败");
+      setError(cause instanceof Error ? cause.message : "采集方案确认失败");
     } finally {
       setIsConfirming(false);
     }
@@ -68,17 +72,19 @@ export function CrawlPlanningPanel({ task }: { task: CaptureTask }) {
   return <PlanningShell>
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div>
-        <p className="text-sm font-semibold">第二步：制定抓取计划</p>
-        <p className="mt-1 text-xs leading-5 text-muted">系统在同一阶段规划商品目录、标准监管、专业技术与品牌公开资料；计划确认和开始抓取是两个独立动作。</p>
+        <p className="text-sm font-semibold">第二步：制定采集方案</p>
+        <p className="mt-1 text-xs leading-5 text-muted">系统按当前资料缺口决定本次要抓哪些入口；确认后仍需单独创建执行批次。</p>
       </div>
       <button type="button" className="button-primary" disabled={isRunning}
         onClick={() => void start()}>
         {isRunning ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-        {isRunning ? "规划中…" : currentPlan ? "重新运行 Planning Run" : "启动 Planning Run"}
+        {isRunning ? "正在检查…" : currentPlan ? "重新检查资料缺口" : "检查资料缺口"}
       </button>
     </div>
     {visibleParts.length > 0 && <PlanningTimeline parts={visibleParts} />}
-    {currentPlan && <PlanDraftCard plan={currentPlan} confirming={isConfirming}
+    {currentPlan && <PlanDraftCard plan={currentPlan}
+      batch={dataset.data?.batches.find((batch) => batch.sourceCollectionPlanId === currentPlan.id
+        && batch.sourceCollectionPlanVersion === currentPlan.version)} confirming={isConfirming}
       onConfirm={() => void confirm(currentPlan.id)} />}
     {error && <p className="mt-4 text-sm text-danger" role="alert">{error}</p>}
   </PlanningShell>;
@@ -90,7 +96,7 @@ function PlanningShell({ children }: { children: React.ReactNode }) {
 
 function PlanningTimeline({ parts }: { parts: InterviewMessageTimelinePart[] }) {
   return <div className="mt-5 space-y-2 border-l-2 border-line pl-4">
-    {parts.map((part, index) => part.type === "text"
+    {parts.filter((part) => part.type !== "text" || !part.text.trimStart().startsWith("{")).map((part, index) => part.type === "text"
       ? <p key={`text-${index}`} className="text-sm leading-6 text-ink">{part.text}</p>
       : <div key={`${part.activity.id}-${index}`} className="flex items-center gap-2 text-xs text-muted">
         {part.activity.status === "running"
@@ -102,8 +108,9 @@ function PlanningTimeline({ parts }: { parts: InterviewMessageTimelinePart[] }) 
   </div>;
 }
 
-function PlanDraftCard({ plan, confirming, onConfirm }: {
+function PlanDraftCard({ plan, batch, confirming, onConfirm }: {
   plan: Awaited<ReturnType<typeof fetchCrawlPlanning>>["plans"][number];
+  batch?: SourceCollectionBatch;
   confirming: boolean;
   onConfirm: () => void;
 }) {
@@ -122,10 +129,11 @@ function PlanDraftCard({ plan, confirming, onConfirm }: {
   return <article className="mt-5 rounded-lg border border-line bg-panel p-4 sm:p-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <p className="text-xs font-medium text-muted">Crawl Plan v{plan.version}</p>
+        <p className="text-xs font-medium text-muted">采集方案 v{plan.version} · 抓取范围修订 v{plan.taskRevision}</p>
         <h3 className="mt-1 text-base font-semibold">{plan.content.summary}</h3>
       </div>
-      <span className="status-badge">{plan.status === "draft" ? "待确认" : "已确认"}</span>
+      <span className="status-badge">{plan.status === "draft" ? "方案待确认" : batch
+        ? batchStatus(batch.status) : "已确认，尚未执行"}</span>
     </div>
     {audit.success && <>
       <dl className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-7">
@@ -183,7 +191,10 @@ function PlanDraftCard({ plan, confirming, onConfirm }: {
         </details>}
       </> : facts ? <p className="mt-4 text-sm leading-6 text-muted">{facts.rankingReason}</p> : null}
       {completedCatalog && <p className="mt-4 text-sm leading-6 text-muted">
-        已完成批次：{completedCatalog.sourceBatchId}。本计划不会再次执行 {completedCatalog.providerKey}。
+        商品目录沿用已验收批次 {completedCatalog.sourceBatchId}；本方案只补抓资料缺口。
+      </p>}
+      {batch && <p className="mt-3 text-sm font-medium text-ink">
+        执行批次 {batch.id.slice(-8)} · {batchStatus(batch.status)} · {batch.plannedSourceCount} 个计划来源
       </p>}
       {publicResearch && publicResearch.sources.length > 0 && <details className="mt-4 rounded-lg border border-line bg-surface p-3">
         <summary className="cursor-pointer text-sm font-medium">查看 {publicResearch.sources.length} 个标准、专业技术与品牌公开入口</summary>
@@ -213,10 +224,10 @@ function PlanDraftCard({ plan, confirming, onConfirm }: {
     {plan.status === "draft" && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
       <p className="text-xs text-muted">{confirmationBlockers.length > 0
         ? "多来源执行范围核实后才能确认。"
-        : "确认只冻结计划版本；不会开始抓取。"}</p>
+        : "确认后会保留这份方案，执行批次仍由下一步单独创建。"}</p>
       <button type="button" className="button-primary" disabled={confirming || confirmationBlockers.length > 0} onClick={onConfirm}>
         {confirming ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ChevronRight className="h-4 w-4" />}
-        {confirming ? "正在确认…" : confirmationBlockers.length > 0 ? "等待核实" : "确认 Crawl Plan"}
+        {confirming ? "正在确认…" : confirmationBlockers.length > 0 ? "等待核实" : "确认采集方案"}
       </button>
     </div>}
   </article>;
@@ -246,6 +257,10 @@ function Metric({ label, value, attention = false }: { label: string; value: num
     <dt className="text-xs text-muted">{label}</dt>
     <dd className={`mt-1 text-lg font-semibold ${attention ? "text-danger" : "text-ink"}`}>{value}</dd>
   </div>;
+}
+
+function batchStatus(status: SourceCollectionBatch["status"]) {
+  return ({ running: "执行中", completed: "执行完成", partial: "部分完成", failed: "执行失败", stopped: "已停止" } as const)[status];
 }
 
 function projectLiveEvent(parts: InterviewMessageTimelinePart[], event: CrawlPlanningEvent) {

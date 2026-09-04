@@ -5,3 +5,4 @@ export * from "./source-dataset";
 export * from "./source-dataset-view";
 export * from "./source-coverage";
 export * from "./task-model-selection";
+export * from "./knowledge-processing";

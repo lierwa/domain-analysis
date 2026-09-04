@@ -1,0 +1,1 @@
+ALTER TABLE "workbench"."knowledge_runs" ADD COLUMN "tool_version" text NOT NULL;

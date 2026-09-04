@@ -49,6 +49,10 @@ export interface CodexAppServerResult {
   observedItemTypes: string[];
 }
 
+export type CodexAppServerAttachment =
+  | { type: "image"; url: string }
+  | { type: "localImage"; path: string };
+
 export type CodexAppServerStreamItem =
   | {
     type: "event";
@@ -81,6 +85,7 @@ export interface CodexAppServerClient {
     threadId?: string,
     outputSchema?: Record<string, unknown>,
     modelSelection?: TaskModelSelection,
+    attachments?: readonly CodexAppServerAttachment[],
   ): AsyncIterable<CodexAppServerStreamItem>;
   close(): Promise<void>;
 }
@@ -115,6 +120,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     threadId?: string,
     outputSchema?: Record<string, unknown>,
     modelSelection?: TaskModelSelection,
+    attachments: readonly CodexAppServerAttachment[] = [],
   ): AsyncIterable<CodexAppServerStreamItem> {
     if (this.active) {
       throw new CodexAppServerError(
@@ -130,7 +136,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     this.active = true;
     try {
       const transport = await this.ensureTransport();
-      yield* this.runTurn(transport, prompt, signal, threadId, outputSchema, modelSelection);
+      yield* this.runTurn(transport, prompt, signal, threadId, outputSchema, modelSelection, attachments);
     } finally {
       this.active = false;
     }
@@ -173,6 +179,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     continuationThreadId?: string,
     outputSchema?: Record<string, unknown>,
     modelSelection?: TaskModelSelection,
+    attachments: readonly CodexAppServerAttachment[] = [],
   ): AsyncIterable<CodexAppServerStreamItem> {
     const observedEvents = new Set<string>();
     const observedItemTypes = new Set<string>();
@@ -202,7 +209,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
     }, this.options.timeoutMs ?? 180_000);
     if (threadId) {
       transport.send("turn/start", turnRequestId,
-        turnStartParams(this.options, threadId, prompt, outputSchema, modelSelection));
+        turnStartParams(this.options, threadId, prompt, outputSchema, modelSelection, attachments));
     } else {
       transport.send("thread/start", threadRequestId!, threadStartParams(this.options, modelSelection));
     }
@@ -220,7 +227,7 @@ class ReusableCodexAppServerClient implements CodexAppServerClient {
           if (!parsed.success) throw protocolError("thread/start 没有返回 ephemeral thread", parsed.error.message);
           threadId = parsed.data.thread.id;
           transport.send("turn/start", turnRequestId,
-            turnStartParams(this.options, threadId, prompt, outputSchema, modelSelection));
+            turnStartParams(this.options, threadId, prompt, outputSchema, modelSelection, attachments));
         }
         if (response.success && response.data.id === turnRequestId) {
           const parsed = turnStartResultSchema.safeParse(response.data.result);
@@ -353,12 +360,14 @@ function turnStartParams(
   prompt: string,
   outputSchema?: Record<string, unknown>,
   selection?: TaskModelSelection,
+  attachments: readonly CodexAppServerAttachment[] = [],
 ) {
   const reasoningEffort = selection?.reasoningEffort ?? options.reasoningEffort;
   return {
     threadId,
     input: [
       { type: "text", text: prompt, text_elements: [] },
+      ...attachments,
       ...(options.skill ? [{ type: "skill", name: options.skill.name, path: options.skill.path }] : []),
     ],
     effort: reasoningEffort,

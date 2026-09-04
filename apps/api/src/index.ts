@@ -3,6 +3,7 @@ import path from "node:path";
 
 import {
   createCodexCategoryInterviewRuntime,
+  createCodexKnowledgeAiReviewer,
   createCodexPublicSourcePlanningResearcher,
   createMultiSourceCategoryPlanningRuntime,
   createZolCategoryPlanningRuntime,
@@ -17,6 +18,7 @@ import {
 import { loadConfig } from "./config";
 import { buildServer } from "./server";
 import { createSourceExecutionQueue } from "./sourceExecutionQueue";
+import { createKnowledgeProcessingQueue } from "./knowledgeProcessingQueue";
 
 const config = loadConfig();
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -34,6 +36,11 @@ const publicSourceResearcher = createCodexPublicSourcePlanningResearcher({
   repositoryRoot,
   model: config.interviewModelId,
   reasoningEffort: config.interviewReasoningEffort,
+});
+const knowledgeAiReviewer = createCodexKnowledgeAiReviewer({
+  repositoryRoot,
+  model: config.knowledgeReviewModelId,
+  reasoningEffort: config.knowledgeReviewReasoningEffort,
 });
 // WHY：Crawl Plan 中的商品目录与公开网页/PDF 是同级来源；生产注册表必须能按 source.provider
 // 分发给各自已验证的 Provider，不能让 ZOL 垂直链隐式垄断全部来源。
@@ -53,6 +60,14 @@ const workbench = await openDataCollectionWorkbench({
     publicSourceResearcher,
   }),
   sourceDatasetModule: { assetCachePath },
+  knowledgeProcessing: {
+    cachePath: path.join(repositoryRoot, "data", "knowledge-processing", "cache"),
+    artifactPath: path.join(repositoryRoot, "data", "knowledge-processing", "artifacts"),
+    workPath: path.join(repositoryRoot, "data", "knowledge-processing", "work"),
+    pythonPath: process.env.KNOWLEDGE_PYTHON_PATH,
+    modelRoot: process.env.KNOWLEDGE_MODEL_ROOT,
+    aiReviewer: knowledgeAiReviewer,
+  },
   sourceProviders,
 });
 if (!workbench.sourceExecution) throw new Error("Source Execution 未完成装配");
@@ -62,7 +77,8 @@ const sourceExecutionQueue = await createSourceExecutionQueue({
   execution: workbench.sourceExecution,
   datasets: workbench.sourceDatasets,
 });
-const app = await buildServer({ workbench, sourceExecutionQueue });
+const knowledgeProcessingQueue = await createKnowledgeProcessingQueue(config.postgresDatabaseUrl, workbench.knowledgeProcessing!);
+const app = await buildServer({ workbench, sourceExecutionQueue, knowledgeProcessingQueue });
 
 try {
   await app.listen({ host: config.host, port: config.port });

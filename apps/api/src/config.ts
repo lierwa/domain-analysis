@@ -10,6 +10,8 @@ const configSchema = z.object({
   sourceAssetCachePath: z.string().trim().min(1).optional(),
   interviewModelId: z.string().min(1).default("gpt-5.6-terra"),
   interviewReasoningEffort: modelReasoningEffortSchema.default("medium"),
+  knowledgeReviewModelId: z.string().min(1).default("gpt-5.6-terra"),
+  knowledgeReviewReasoningEffort: modelReasoningEffortSchema.default("medium"),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -23,5 +25,7 @@ export function loadConfig(env = process.env): AppConfig {
     sourceAssetCachePath: env.SOURCE_ASSET_CACHE_PATH,
     interviewModelId: env.INTERVIEW_MODEL_ID,
     interviewReasoningEffort: env.INTERVIEW_REASONING_EFFORT,
+    knowledgeReviewModelId: env.KNOWLEDGE_REVIEW_MODEL_ID,
+    knowledgeReviewReasoningEffort: env.KNOWLEDGE_REVIEW_REASONING_EFFORT,
   });
 }

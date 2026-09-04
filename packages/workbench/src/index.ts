@@ -13,3 +13,5 @@ export * from "./sourceDatasetExport";
 export * from "./sourceExecutionModule";
 export * from "./sourceExecutionRecovery";
 export * from "./sourceRequestAdmission";
+export * from "./knowledgeProcessingModule";
+export * from "./knowledge/aiReviewer";

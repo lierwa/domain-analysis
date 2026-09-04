@@ -5,6 +5,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool, type PoolClient } from "pg";
 
 import * as schema from "./workbenchSchema";
+import * as knowledgeSchema from "./knowledgeSchema";
 
 export const defaultWorkbenchDatabaseUrl =
   "postgresql://guojunxi@127.0.0.1:5432/domain_analysis";
@@ -17,7 +18,7 @@ const defaultWorkbenchMigrationsFolder = fileURLToPath(
 export function createWorkbenchDb(
   databaseUrl = process.env.POSTGRES_DATABASE_URL ?? defaultWorkbenchDatabaseUrl,
 ) {
-  return drizzle(new Pool({ connectionString: databaseUrl }), { schema });
+  return drizzle(new Pool({ connectionString: databaseUrl }), { schema: { ...schema, ...knowledgeSchema } });
 }
 
 export type WorkbenchDb = ReturnType<typeof createWorkbenchDb>;

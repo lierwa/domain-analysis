@@ -35,24 +35,21 @@ export async function loadCapturedSubjectProjection(
   batches: SourceCollectionBatch[],
   runs: SourceCollectionRun[],
 ): Promise<Projection> {
-  const batch = batches[0];
-  if (!batch) return { capturedBrands: [], issues: [] };
-  const batchRuns = runs.filter((run) => run.executionBatchId === batch.id);
-  const runIds = batchRuns.map((run) => run.id);
-  const subjects = await db.select().from(sourceCaptureSubjects)
-    .where(eq(sourceCaptureSubjects.executionBatchId, batch.id));
-  if (subjects.length === 0) return {
-    currentExecution: sourceDatasetCurrentExecutionSchema.parse({
-      batchId: batch.id, status: batch.status, recoveryState: batch.recoveryState,
-      planVersion: batch.sourceCollectionPlanVersion, runCount: batchRuns.length,
-      snapshotCount: sum(batchRuns.map((run) => run.snapshotCount)),
-      assetCount: sum(batchRuns.map((run) => run.assetCount)), brandCount: 0, modelCount: 0,
-      completedModelCount: 0, needsAttentionModelCount: 0, issueCount: 0,
-      cumulativeRunDurationMs: cumulativeRunDuration(batchRuns), startedAt: batch.startedAt,
-      finishedAt: batch.finishedAt,
-    }),
+  const currentBatch = batches[0];
+  if (!currentBatch) return { capturedBrands: [], issues: [] };
+  const currentRuns = runs.filter((run) => run.executionBatchId === currentBatch.id);
+  const allSubjects = await db.select().from(sourceCaptureSubjects)
+    .where(inArray(sourceCaptureSubjects.executionBatchId, batches.map((batch) => batch.id)));
+  // WHY：最新批次可能只补抓标准或技术资料；商品树应继续读取最近一次有商品实体的批次，
+  // 否则一个 5 条资料的增量批次会把已经验收的 19 品牌、247 型号错误投影成空数据。
+  const productBatch = batches.find((batch) => allSubjects.some((subject) => subject.executionBatchId === batch.id));
+  if (!productBatch) return {
+    currentExecution: projectCurrentExecution(currentBatch, currentRuns, [], []),
     capturedBrands: [], issues: [],
   };
+  const subjects = allSubjects.filter((subject) => subject.executionBatchId === productBatch.id);
+  const productRuns = runs.filter((run) => run.executionBatchId === productBatch.id);
+  const runIds = productRuns.map((run) => run.id);
 
   const subjectIds = subjects.map((subject) => subject.id);
   const workItems = await db.select().from(sourceCaptureWorkItems)
@@ -63,7 +60,7 @@ export async function loadCapturedSubjectProjection(
   const assets = snapshotIds.length > 0 ? await db.select({ snapshotId: sourceAssets.snapshotId })
     .from(sourceAssets).where(inArray(sourceAssets.snapshotId, snapshotIds)) : [];
   const plan = await db.query.sourceCollectionPlans.findFirst({
-    where: eq(sourceCollectionPlans.id, batch.sourceCollectionPlanId),
+    where: eq(sourceCollectionPlans.id, productBatch.sourceCollectionPlanId),
   });
   const rawPlanContent: unknown = plan?.content;
   const planContent = isRecord(rawPlanContent) ? rawPlanContent : undefined;
@@ -75,23 +72,34 @@ export async function loadCapturedSubjectProjection(
   const assetCountBySubject = countAssetsBySubject(assets, snapshots, workById);
   const capturedBrands = projectBrands(subjects, workItems, issueProjection.issues, assetCountBySubject,
     brandMetadata);
-  const models = capturedBrands.flatMap((brand) => brand.models);
   return {
     capturedBrands,
     issues: issueProjection.issues,
-    currentExecution: sourceDatasetCurrentExecutionSchema.parse({
-      batchId: batch.id, status: batch.status, recoveryState: batch.recoveryState,
-      planVersion: batch.sourceCollectionPlanVersion, runCount: batchRuns.length,
-      snapshotCount: sum(batchRuns.map((run) => run.snapshotCount)),
-      assetCount: sum(batchRuns.map((run) => run.assetCount)), brandCount: capturedBrands.length,
-      modelCount: models.length,
-      completedModelCount: models.filter((model) => model.status === "completed").length,
-      needsAttentionModelCount: models.filter((model) => model.status === "needs_attention").length,
-      issueCount: issueProjection.issues.length,
-      cumulativeRunDurationMs: cumulativeRunDuration(batchRuns), startedAt: batch.startedAt,
-      finishedAt: batch.finishedAt,
-    }),
+    currentExecution: projectCurrentExecution(currentBatch, currentRuns,
+      currentBatch.id === productBatch.id ? capturedBrands : [],
+      currentBatch.id === productBatch.id ? issueProjection.issues : []),
   };
+}
+
+function projectCurrentExecution(
+  batch: SourceCollectionBatch,
+  runs: SourceCollectionRun[],
+  brands: SourceDatasetBrandSummary[],
+  issues: SourceDatasetIssueSummary[],
+) {
+  const models = brands.flatMap((brand) => brand.models);
+  return sourceDatasetCurrentExecutionSchema.parse({
+    batchId: batch.id, status: batch.status, recoveryState: batch.recoveryState,
+    planVersion: batch.sourceCollectionPlanVersion, runCount: runs.length,
+    snapshotCount: sum(runs.map((run) => run.snapshotCount)),
+    assetCount: sum(runs.map((run) => run.assetCount)), brandCount: brands.length,
+    modelCount: models.length,
+    completedModelCount: models.filter((model) => model.status === "completed").length,
+    needsAttentionModelCount: models.filter((model) => model.status === "needs_attention").length,
+    issueCount: issues.length,
+    cumulativeRunDurationMs: cumulativeRunDuration(runs), startedAt: batch.startedAt,
+    finishedAt: batch.finishedAt,
+  });
 }
 
 function projectBrands(

@@ -1,11 +1,13 @@
 import { AppShell } from "./components/AppShell";
 import { CaptureTaskWorkspacePage } from "./pages/CaptureTaskWorkspacePage";
+import { KnowledgeWorkspace } from "./pages/KnowledgeWorkspace";
+import { useState } from "react";
 
-// WHY：当前主入口只展示标准商品来源采集的数据面，确保导航与领域事实源一致。
 export function App() {
+  const [surface, setSurface] = useState<"capture" | "knowledge">(location.hash === "#knowledge" ? "knowledge" : "capture");
   return (
-    <AppShell>
-      <CaptureTaskWorkspacePage />
+    <AppShell surface={surface} onNavigate={value => { setSurface(value); history.replaceState(null, "", value === "knowledge" ? "#knowledge" : "#capture"); }}>
+      {surface === "capture" ? <CaptureTaskWorkspacePage /> : <KnowledgeWorkspace />}
     </AppShell>
   );
 }

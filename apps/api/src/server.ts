@@ -8,6 +8,7 @@ import {
   CrawlPlanningError,
   SourceExecutionError,
   SourceDatasetError,
+  KnowledgeProcessingError,
   type DataCollectionWorkbench,
 } from "@domain-analysis/workbench";
 import { ZodError } from "zod";
@@ -19,10 +20,12 @@ import { registerHealthRoutes } from "./routes/health";
 import { registerSourceDatasetRoutes } from "./routes/sourceDatasetRoutes";
 import { registerSourceExecutionRoutes } from "./routes/sourceExecutionRoutes";
 import type { SourceExecutionQueue } from "./sourceExecutionQueue";
+import { registerKnowledgeProcessingRoutes } from "./routes/knowledgeProcessingRoutes";
 
 export interface BuildServerOptions extends FastifyServerOptions {
   workbench?: DataCollectionWorkbench;
   sourceExecutionQueue?: SourceExecutionQueue;
+  knowledgeProcessingQueue?: { close(): Promise<void> };
 }
 
 export async function buildServer(options: BuildServerOptions = {}) {
@@ -33,7 +36,7 @@ export async function buildServer(options: BuildServerOptions = {}) {
     reply.status(statusCode).send({
       error: error instanceof CaptureTaskError || error instanceof CategoryInterviewError
         || error instanceof CrawlPlanError || error instanceof CrawlPlanningError || error instanceof SourceExecutionError
-        || error instanceof SourceDatasetError
+        || error instanceof SourceDatasetError || error instanceof KnowledgeProcessingError
         ? error.code
         : statusCode >= 500 ? "internal_server_error" : "bad_request",
       message: statusCode >= 500 ? "Unexpected API error" : error.message,
@@ -44,10 +47,14 @@ export async function buildServer(options: BuildServerOptions = {}) {
   if (options.workbench) {
     app.addHook("onClose", async () => {
       await options.sourceExecutionQueue?.close();
+      await options.knowledgeProcessingQueue?.close();
       await options.workbench!.close();
     });
     await registerCaptureTaskRoutes(app, options.workbench.captureTasks);
     await registerSourceDatasetRoutes(app, options.workbench.sourceDatasets);
+    if (options.workbench.knowledgeProcessing) {
+      await registerKnowledgeProcessingRoutes(app, options.workbench.knowledgeProcessing);
+    }
     if (options.workbench.sourceExecution && options.sourceExecutionQueue) {
       await registerSourceExecutionRoutes(app, options.workbench.sourceExecution, options.sourceExecutionQueue);
     }
@@ -78,5 +85,8 @@ function resolveStatusCode(error: Error & { statusCode?: number }) {
     return 422;
   }
   if (error instanceof SourceDatasetError) return error.code.endsWith("not_found") ? 404 : 422;
+  if (error instanceof KnowledgeProcessingError) {
+    return error.code === "not_found" ? 404 : error.code === "conflict" ? 409 : 422;
+  }
   return error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
 }

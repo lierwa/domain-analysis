@@ -58,6 +58,7 @@ import { acquireSourceBatchLease, recoverInterruptedSourceBatches } from "./sour
 import { acquireSourceRunLease, createSourceRequestAdmission,
   prepareSourceRunForResume, usesProviderWideAccessCircuit } from "./sourceRequestAdmission";
 import type { SourceCoverageModule } from "./sourceCoverageModule";
+import { createProcessingInputReader, type ProcessingInputReader } from "./sourceDatasetProcessingInputs";
 
 type SnapshotWrite = SourceSnapshotCommit & {
   assets?: SourceProviderAsset[];
@@ -65,7 +66,7 @@ type SnapshotWrite = SourceSnapshotCommit & {
 };
 type WorkbenchTransaction = Parameters<Parameters<WorkbenchDb["transaction"]>[0]>[0];
 
-export interface SourceDatasetModule extends SourceRequestAdmissionPort {
+export interface SourceDatasetModule extends SourceRequestAdmissionPort, ProcessingInputReader {
   listTask(taskId: string): Promise<SourceDatasetTaskView>;
   listTaskRecords(input: SourceDatasetRecordPageInput): Promise<SourceDatasetRecordPage>;
   getRun(runId: string): Promise<SourceDatasetRunView | null>;
@@ -114,6 +115,7 @@ export function createSourceDatasetModule(
   const admission = createSourceRequestAdmission(db, options.now);
   return {
     ...admission,
+    ...createProcessingInputReader(db, store),
     listTask: async (taskId) => {
       const [view, coverage] = await Promise.all([
         loadSourceDatasetTaskView(db, taskId),

@@ -289,7 +289,7 @@ function InspectorEmpty({ onClose }: { onClose: () => void }) {
 function MapLegend({ mode, recordCount }: { mode: SourceDataMapMode; recordCount: number }) {
   return <div className="hidden shrink-0 flex-wrap items-center gap-x-5 border-t border-line bg-surface px-4 py-2 text-[11px] text-muted sm:flex">
     <span>{mode === "product" ? "一次只展开当前品牌与型号分支" : "点击 Run 查看请求与恢复审计"}</span>
-    <span className="ml-auto tabular-nums">最新 Batch 原始快照 {recordCount}</span>
+    <span className="ml-auto tabular-nums">{mode === "product" ? "当前可用商品快照" : "最近批次原始快照"} {recordCount}</span>
   </div>;
 }
 

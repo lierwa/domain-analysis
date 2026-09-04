@@ -21,6 +21,8 @@ import { createCrawlPlanningModule, type CrawlPlanningModule,
   type CrawlPlanningRuntime } from "./crawlPlanningModule";
 import { createSourceDatasetModule, type SourceDatasetModule } from "./sourceDatasetModule";
 import { createSourceCoverageModule } from "./sourceCoverageModule";
+import { createKnowledgeProcessingModule, type KnowledgeProcessingModule,
+  type KnowledgeProcessingOptions } from "./knowledgeProcessingModule";
 import { createSourceExecutionModule, type SourceExecutionModule, type SourceProvider } from "./sourceExecutionModule";
 
 export interface DataCollectionWorkbench {
@@ -30,6 +32,7 @@ export interface DataCollectionWorkbench {
   crawlPlanning?: CrawlPlanningModule;
   sourceDatasets: SourceDatasetModule;
   sourceExecution?: SourceExecutionModule;
+  knowledgeProcessing?: KnowledgeProcessingModule;
   close(): Promise<void>;
 }
 
@@ -39,6 +42,7 @@ export interface OpenDataCollectionWorkbenchOptions {
   crawlPlanningRuntime?: CrawlPlanningRuntime;
   categoryInterviewModule?: { now?: () => Date; createId?: (kind: string) => string };
   sourceDatasetModule?: { assetCachePath?: string };
+  knowledgeProcessing?: KnowledgeProcessingOptions;
   sourceProviders?: ReadonlyMap<string, SourceProvider>;
 }
 
@@ -78,9 +82,12 @@ export async function openDataCollectionWorkbench(
       : undefined,
     sourceDatasets,
     sourceExecution,
+    knowledgeProcessing: options.knowledgeProcessing
+      ? createKnowledgeProcessingModule(db, sourceDatasets, options.knowledgeProcessing) : undefined,
     close: async () => {
       await categoryInterviewRuntime?.close?.();
       await crawlPlanningRuntime?.close?.();
+      await options.knowledgeProcessing?.aiReviewer?.close();
       await Promise.all([...new Set(options.sourceProviders?.values() ?? [])]
         .map((provider) => provider.close?.()));
       await db.$client.end();

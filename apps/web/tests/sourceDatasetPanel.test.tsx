@@ -145,16 +145,49 @@ describe("Source Dataset 商品地图", () => {
     expect(trigger).toBe(document.activeElement);
   });
 
-  it("完成态只提供二级重新执行，不再展示启动计划主按钮", () => {
+  it("完成态显示累计资料与最近批次，并提供对应方案的再次执行入口", () => {
     const client = new QueryClient();
     render(<QueryClientProvider client={client}>
       <SourceExecutionControls task={captureTask()} view={dataset()} />
     </QueryClientProvider>);
 
-    expect(screen.getByRole("button", { name: "重新执行计划" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "启动计划 v2" })).toBeNull();
-    expect(screen.getByText("246/247")).toBeTruthy();
-    expect(screen.getByText("3799")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "再次执行方案 v2" })).toBeTruthy();
+    expect(screen.getByText("247")).toBeTruthy();
+    expect(screen.getByText("3792")).toBeTruthy();
+  });
+
+  it("最新方案只有公开资料时仍显示为已执行，不会误报等待确认", () => {
+    const client = new QueryClient();
+    const view = dataset();
+    view.sources = [{ ...view.sources[0]!, planId: "plan-4", planVersion: 4,
+      sourceKey: "public.technical", name: "专业技术资料" }];
+    view.batches = [{ ...view.batches[0]!, id: "batch-4", sourceCollectionPlanId: "plan-4",
+      sourceCollectionPlanVersion: 4, plannedSourceCount: 5 }];
+    view.currentExecution = { ...view.currentExecution!, batchId: "batch-4", planVersion: 4,
+      snapshotCount: 5, assetCount: 1, brandCount: 0, modelCount: 0, completedModelCount: 0 };
+    view.executions = [{ ...view.executions[0]!, batchId: "batch-4", sourceCollectionPlanId: "plan-4",
+      sourceCollectionPlanVersion: 4, plannedSourceCount: 5,
+      counts: { running: 0, completed: 5, failed: 0, stopped: 0, missing: 0 } }];
+    render(<QueryClientProvider client={client}>
+      <SourceExecutionControls task={captureTask()} view={view} />
+    </QueryClientProvider>);
+
+    expect(screen.getByText(/最近执行：采集方案 v4/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "再次执行方案 v4" })).toBeTruthy();
+    expect(screen.queryByText("等待计划确认")).toBeNull();
+  });
+
+  it("商品地图使用跨批次累计覆盖，不被最新增量批次的零品牌覆盖", () => {
+    const view = dataset();
+    view.currentExecution = { ...view.currentExecution!, planVersion: 4, snapshotCount: 5,
+      brandCount: 0, modelCount: 0, completedModelCount: 0, issueCount: 0 };
+
+    const graph = buildSourceDataGraph(view, task(), "product");
+
+    expect(graph.stats.recordCount).toBe(3792);
+    expect(graph.stats.acceptedCount).toBe(247);
+    expect(graph.nodes.find((node) => node.id === "task:task-1")?.meta)
+      .toContain("19 个品牌 · 247 个型号");
   });
 
   it("在 Source Dataset 展示全部资料的最低覆盖结论", () => {
@@ -253,7 +286,8 @@ function dataset() {
       occurrenceCount: 3, runIds: ["run-1", "run-2", "run-3"], latestSnapshotId: "snapshot-1" }],
     coverage: { policyVersion: "source-coverage-v1", status: "satisfied",
       productCatalog: { status: "satisfied", reference: { providerKey: "zol.catalog-gallery",
-        sourceBatchId: "batch-1", reason: "ZOL 已完成" } }, acceptedSources: [], attemptedUrls: [],
+        sourceBatchId: "batch-1", reason: "ZOL 已完成" }, brandCount: 19, modelCount: 247,
+        coveredModelCount: 247, acceptedSnapshotCount: 3792 }, acceptedSources: [], attemptedUrls: [],
       families: [coverageDimension("standards_and_regulation", 9, 6, 3),
         coverageDimension("professional_technical", 5, 5, 3),
         coverageDimension("brand_official", 6, 3, 3)],

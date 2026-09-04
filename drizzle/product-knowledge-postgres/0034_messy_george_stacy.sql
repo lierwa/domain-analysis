@@ -1,0 +1,2 @@
+ALTER TABLE "workbench"."knowledge_versions" ADD COLUMN "pack_revision" integer NOT NULL;--> statement-breakpoint
+ALTER TABLE "workbench"."knowledge_versions" ADD COLUMN "started_at" timestamp with time zone;

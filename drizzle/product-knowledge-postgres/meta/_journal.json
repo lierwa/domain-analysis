@@ -225,6 +225,48 @@
       "when": 1788164957376,
       "tag": "0032_hard_microchip",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1788439050047,
+      "tag": "0033_rare_sentinel",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1788439849642,
+      "tag": "0034_messy_george_stacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1788440982096,
+      "tag": "0035_right_killer_shrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1788493171311,
+      "tag": "0036_freezing_carmella_unuscione",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1788494705422,
+      "tag": "0037_harsh_gamora",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1788500906927,
+      "tag": "0038_illegal_hobgoblin",
+      "breakpoints": true
     }
   ]
 }
